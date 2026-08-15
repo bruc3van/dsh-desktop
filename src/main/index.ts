@@ -2490,6 +2490,15 @@ function scheduleQuitAfterWindowsInstall(): void {
 
 async function installDesktopUpdate(): Promise<{ started: boolean; error?: string }> {
   if (desktopUpdater === undefined) return { started: false, error: 'updater not ready' }
+  // Stop the local dsh web child (the whole PID tree, including a PATH-node.exe
+  // runtime) BEFORE the installer runs. The previous order spawned the
+  // installer first and force-killed the runtime ~400 ms later via
+  // scheduleQuitAfterWindowsInstall; the installer could then kill this app by
+  // name first, orphaning the runtime — which kept writing ~/.dsh while the
+  // updated app started its own harness. Two writers on one session store
+  // corrupts session logs (seq collisions, orphan inbox splices), so the
+  // runtime must be gone before the installer touches the process tree.
+  if (webUi !== undefined) await webUi.stop()
   const result = await desktopUpdater.install()
   if (result.started && process.platform === 'darwin' && !devFlag('DSH_DESKTOP_SKIP_UPDATE_PROMPT')) {
     promptMacReplace()
@@ -2783,9 +2792,68 @@ function connectTo(url: string, force = false): void {
   launchWindow(generation, force)
 }
 
+/** A foreign `dsh web` harness already running on this machine. */
+interface ForeignDshWeb {
+  pid: number
+  /** Its loopback origin when it reports a concrete --port. */
+  url?: string
+}
+
+/**
+ * Scan for another live `dsh web` harness before spawning a local runtime.
+ *
+ * The probe only checks the default origin, so a harness on any other port
+ * would be missed and a SECOND harness would be spawned against the same
+ * DSH_HOME — two writers on one session store corrupts session logs (seq
+ * collisions, orphan inbox splices). Prefer connecting to an existing harness
+ * over spawning a duplicate.
+ */
+function detectForeignDshWeb(): ForeignDshWeb | undefined {
+  if (process.platform !== 'win32') return undefined
+  const script = "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'node.exe' -or $_.Name -eq 'DeepSeek Harness Desktop.exe') -and $_.CommandLine -match '(dsh|runtime-launcher|bin\\.js)' -and $_.CommandLine -match 'web' -and $_.CommandLine -match '--port' } | ForEach-Object { \"$($_.ProcessId)\\t$($_.CommandLine)\" }"
+  let out = ''
+  try {
+    const res = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 8000, windowsHide: true })
+    out = typeof res.stdout === 'string' ? res.stdout : ''
+  } catch (error) {
+    console.warn('[desktop] instance scan failed: ' + (error instanceof Error ? error.message : String(error)))
+    return undefined
+  }
+  const selfPids = new Set<number>([process.pid])
+  const ownChild = webUi?.pid()
+  if (ownChild !== undefined) selfPids.add(ownChild)
+  for (const line of out.split('\n')) {
+    const m = /^(\d+)\t(.+)$/.exec(line.trim())
+    if (m === null) continue
+    const pid = Number(m[1])
+    if (selfPids.has(pid) || m[2].includes('--type=')) continue
+    const portMatch = /--port[=\s]+(\d+)/.exec(m[2])
+    const port = portMatch !== null ? Number(portMatch[1]) : undefined
+    if (port !== undefined && port !== 0 && Number.isSafeInteger(port)) return { pid, url: 'http://127.0.0.1:' + port }
+    return { pid }
+  }
+  return undefined
+}
+
 /** Use the local `dsh web` child (spawned on demand, awaited via readiness). */
 function startLocalRuntime(generation: number, force = false): void {
   if (generation !== connectionGeneration || quitting) return
+  // Never run a second harness against the same DSH_HOME: connect to a foreign
+  // instance when one exists, and refuse to spawn when it cannot be reached.
+  const foreign = detectForeignDshWeb()
+  if (foreign !== undefined) {
+    console.warn('[desktop] another dsh web instance is running (PID ' + foreign.pid + '); not starting a second runtime to prevent session corruption')
+    if (foreign.url !== undefined) {
+      connectTo(foreign.url, force)
+      return
+    }
+    reportConnectionFailureWithoutWindow({
+      kind: 'runtime',
+      headline: '检测到另一个 dsh 实例',
+      detail: '另一个 dsh web 实例（PID ' + foreign.pid + '）正在运行。为避免两个实例并发写入同一会话库导致损坏，已拒绝启动本地运行时。请关闭该实例，或在连接设置中指定其地址后重试。',
+    })
+    return
+  }
   configuredTarget = undefined
   probeConnected = false
   launchWindow(generation, force)
