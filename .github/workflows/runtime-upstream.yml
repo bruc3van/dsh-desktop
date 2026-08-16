@@ -102,7 +102,7 @@ jobs:
           - [ ] **逐条审查 lockfile 里 \`@deepseek-ai/*\` 域的全部变更**（\`minimumReleaseAgeExclude\` 豁免了发布冷却期，这一步没有自动化兜底）
           - [ ] 新依赖如带 lifecycle script，更新 \`allowBuilds\` 名单
           - [ ] 隐式契约：\`dsh web: <url>\` 就绪行、\`POST /api/host.describe\` 响应形状、\`lib/bin.js\` 入口路径、\`--expose-internals\` 是否仍需要
-          - [ ] 全量门禁：\`build → prepare:runtime → check:picker → check:runtime-env → check:runtime-resolution → check:bundled-plugin → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit\`
+          - [ ] 全量门禁：\`build → prepare:runtime → check:picker → check:runtime-env → check:runtime-resolution → check:bundled-plugin → check:runtime-lock → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit\`
 
           — 本 issue 由 \`.github/workflows/runtime-upstream.yml\` 每日检查自动创建。
           EOF

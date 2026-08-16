@@ -24,7 +24,7 @@ pnpm run dev
 
 第 2、3 步都跑在**你自己的 Node** 上，且只使用**已经存在**的包——不联网、不下载、不替你安装 Node.js；缓存里没有就直接跳过。客户端读取缓存包的 `package.json` 校验其确实是 `@deepseek-ai/dsh` 并取用真实版本号，不会误启动同路径下的其他东西。npx 缓存不会自行更新：若缓存版本低于内置运行时，客户端仍优先使用你的缓存，但会在连接设置里提示；重新运行一次 `npx @deepseek-ai/dsh web` 即可把缓存刷新到最新版。
 
-启动的都是纯后台服务进程（`dsh web --port 0`），不会打开浏览器窗口，也不占用 3080；退出桌面端时，客户端启动的服务会被一并关闭。若选中的运行时启动失败，客户端会自动回退到内置运行时。连接设置里会显示当前用的是哪一种（本机安装 / npx 缓存 / 内置）及其版本。
+启动的都是纯后台服务进程（`dsh web --port 0`），不会打开浏览器窗口，也不占用 3080；退出桌面端时，客户端启动的服务会被一并关闭。若选中的运行时启动失败，客户端会自动回退到内置运行时。连接设置里会显示当前用的是哪一种（本机安装 / npx 缓存 / 内置）及其版本。内置安全市场只随内置闭包接入（复用实例、用户自装的 dsh 与固定地址会撤回）；源码运行可用 `DSH_DESKTOP_SKIP_INSTALLED_DSH=1` 固定到内置闭包体验，见下文「开发与验证」与 README 的[「内置安全市场」](../README.md#内置安全市场)。
 
 如果内置运行时无法启动，或希望使用其他实例，请打开**「设置 → 通用设置 → 连接」**修改连接；页面完全加载不出来时，启动界面会直接给出**「Web UI 连接…」**按钮。
 
@@ -35,6 +35,8 @@ pnpm run build          # 构建 Electron 主进程与 preload
 pnpm run prepare:runtime # 准备内置 dsh 运行时闭包
 pnpm run check:picker   # 验证内置 Win32 目录选择器兼容补丁
 pnpm run check:runtime-env # 验证 Agent 执行环境不继承 Electron Node 模式变量
+pnpm run check:bundled-plugin # 验证内置市场接入/撤回契约
+pnpm run check:runtime-lock # 验证运行时锁定与更新安装时序
 pnpm run dist           # 为当前平台生成安装包
 pnpm run typecheck      # TypeScript 类型检查
 pnpm run lint           # 检查源码与脚本
@@ -46,9 +48,16 @@ pnpm run shot:readme    # 更新 README 使用的隐私安全截图
 pnpm run e2e            # 发送真实请求并验证流式回复
 ```
 
-除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:bundled-plugin`（内置插件接入 / 撤回）、`check:auto-fallback`（失联自动回落）与 `check:error-surface`（错误界面）。
+除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:bundled-plugin`（内置市场接入 / 撤回）、`check:runtime-lock`（运行时锁定与更新时序）、`check:auto-fallback`（失联自动回落）与 `check:error-surface`（错误界面）。
 
 `pnpm run e2e` 需要有效的 API Key。生产窗口直接加载官方 Web UI；仓库不维护第二套产品 renderer。`pnpm run check:updater` 用本地更新清单夹具验证检查、下载校验和忽略版本。
+
+### 内置安全市场（开发）
+
+- 市场版本固定在 `dsh-runtime/package.json` 的 `dsh-desktop-safe-market` tarball 依赖上，与官方运行时同处发布闭包、随安装包交付——升级该依赖版本即升级客户端内置的市场。
+- 客户端只在解析到自己的内置闭包（`source: 'bundled'`）时接入市场：往 profile 的 `dsh.profile.bundles` 写一个条目、并建一条指向闭包的软链；复用实例、用户自装的 dsh 与固定地址一律撤回。新增 / 已存在 / 用户自装 / 撤回 / 弃置 / 异族目录 / 缺失插件 / 无 profile 各情形的契约由 `check:bundled-plugin` 回归固定。
+- 源码运行固定体验市场：`DSH_DESKTOP_SKIP_INSTALLED_DSH=1 pnpm run dev`（跳过已安装 dsh 检测，解析到内置闭包）。
+- 市场的目录管线（每日自动采集 + 人工精选）、「先审查、再安装」提示词与安全边界在市场仓库维护；接入实现见 `src/main/bundled-plugin.ts`。
 
 ## 版本发布
 
@@ -71,6 +80,6 @@ Linux 安装包暂不在自动发布范围内；源码中的通用平台兼容�
 
 ## 当前状态
 
-桌面外壳、智能/固定地址模式、共享 `DSH_HOME`、托盘常驻、运行时监护、应用内在线更新、内置官方 `@deepseek-ai/dsh`、macOS/Windows 打包和 tag 自动发布流程均已实现。发布流水线会在空 PATH 下启动打包应用并探测 Web UI，阻止遗漏内置运行时的产物发布。当前自动产物尚未进行代码签名；macOS/Windows 签名与公证仍是面向普通用户无警告安装的发布前置条件。系统通知、OS Keychain 与语音输入也属于后续工作，见 [TODO](../TODO.md)。
+桌面外壳、智能/固定地址模式、共享 `DSH_HOME`、托盘常驻、运行时监护、应用内在线更新、内置官方 `@deepseek-ai/dsh`、内置安全市场（先审查、再安装，随安装包发布）、macOS/Windows 打包和 tag 自动发布流程均已实现；同一 `DSH_HOME` 下有运行时锁定与遗留进程接管，智能模式会一并探测 profile 补丁层配置的端口。发布流水线会在空 PATH 下启动打包应用并探测 Web UI，阻止遗漏内置运行时的产物发布。当前自动产物尚未进行代码签名；macOS/Windows 签名与公证仍是面向普通用户无警告安装的发布前置条件。系统通知、OS Keychain 与语音输入也属于后续工作，见 [TODO](../TODO.md)。
 
 欢迎提交贡献与问题反馈，尤其是 Windows 使用、固定地址连接和打包方面的反馈。
