@@ -55,7 +55,7 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 ### 内置安全市场（开发）
 
 - 市场版本固定在 `dsh-runtime/package.json` 的 `dsh-desktop-safe-market` tarball 依赖上，与官方运行时同处发布闭包、随安装包交付——升级该依赖版本即升级客户端内置的市场。
-- 客户端只在解析到自己的内置闭包（`source: 'bundled'`）时接入市场：往 profile 的 `dsh.profile.bundles` 写一个条目、并建一条指向闭包的软链；复用实例、用户自装的 dsh 与固定地址一律撤回。新增 / 已存在 / 用户自装 / 撤回 / 弃置 / 异族目录 / 缺失插件 / 无 profile 各情形的契约由 `check:bundled-plugin` 回归固定。
+- 客户端只在解析到自己的内置闭包（`source: 'bundled'`）时接入市场：往 profile 的 `dsh.profile.bundles` 写一个条目、并建一条指向闭包的软链；复用实例、用户自装的 dsh 与固定地址一律撤回。新增 / 已存在 / 用户自装 / 旧覆盖抬升 / 撤回 / 弃置 / 异族目录 / 缺失插件 / 无 profile / 升级改指软链各情形的契约由 `check:bundled-plugin` 回归固定。
 - 源码运行固定体验市场：`DSH_DESKTOP_SKIP_INSTALLED_DSH=1 pnpm run dev`（跳过已安装 dsh 检测，解析到内置闭包）。
 - 市场的目录管线（每日自动采集 + 人工精选）、「先审查、再安装」提示词与安全边界在市场仓库维护；接入实现见 `src/main/bundled-plugin.ts`。
 

@@ -3,15 +3,16 @@
  *
  * The seat mutates a user-shared `~/.dsh` profile. These cases pin the
  * contracts the client relies on (add / already-present / user-owned /
- * withdraw / abandon / foreign directory / missing plugin / no profile)
- * against a temporary home, without booting Electron.
+ * stale overlay lifted / withdraw / abandon / foreign directory /
+ * missing plugin / no profile / upgrade retargets a stale link) against a
+ * temporary home, without booting Electron.
  *
  * The module is bundled through esbuild rather than imported directly, so this
  * check does not depend on the host Node's TypeScript stripping.
  * @module desktop/scripts/check-bundled-plugin
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -56,7 +57,14 @@ const readProfile = (home) => JSON.parse(readFileSync(join(home, 'profiles', 'we
 
 const pluginDir = join(outDir, 'plugin')
 mkdirSync(pluginDir)
-writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: BUNDLED_PLUGIN_NAME, version: '0.0.0-test' }) + '\n')
+writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: BUNDLED_PLUGIN_NAME, version: '0.2.1' }) + '\n')
+
+const writeOverlay = (home, version) => {
+  const dir = join(home, 'profiles', 'web', 'node_modules', BUNDLED_PLUGIN_NAME)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: BUNDLED_PLUGIN_NAME, version }) + '\n')
+  return dir
+}
 
 const emptyBundles = {
   name: 'dsh-profile-web',
@@ -101,17 +109,144 @@ console.log('\n# seatBundledPlugin')
 
 {
   const home = await fixtureHome()
+  writeProfile(home, emptyBundles)
+  const oldDir = join(outDir, 'plugin-old')
+  mkdirSync(oldDir)
+  writeFileSync(join(oldDir, 'package.json'), JSON.stringify({ name: BUNDLED_PLUGIN_NAME, version: '0.0.0-old' }) + '\n')
+  const first = seatBundledPlugin(oldDir, home)
+  const upgraded = seatBundledPlugin(pluginDir, home)
+  const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
+  const listed = readProfile(home).dsh.profile.bundles.filter(name => name === BUNDLED_PLUGIN_NAME)
+  check('a first seat against an old closure is seated', first.seated === true && first.added === true)
+  check('upgrading the closure retargets the link without rewriting bundles',
+    upgraded.seated === true && upgraded.added === false
+    && lstatSync(link).isSymbolicLink() && readlinkSync(link) === pluginDir
+    && listed.length === 1)
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  const home = await fixtureHome()
   writeProfile(home, {
     ...emptyBundles,
-    dependencies: { [BUNDLED_PLUGIN_NAME]: '1.0.0' },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', BUNDLED_PLUGIN_NAME] } },
   })
+  const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
+  mkdirSync(dirname(link), { recursive: true })
+  const separator = process.platform === 'win32' ? '\\' : '/'
+  symlinkSync(pluginDir + separator, link, process.platform === 'win32' ? 'junction' : 'dir')
+  const result = seatBundledPlugin(pluginDir, home)
+  check('a link whose target differs only by a trailing separator is already seated',
+    result.seated === true && result.added === false)
+  check('a trailing-separator link is left in place',
+    existsSync(link) && lstatSync(link).isSymbolicLink())
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  const home = await fixtureHome()
+  writeProfile(home, {
+    ...emptyBundles,
+    dependencies: { [BUNDLED_PLUGIN_NAME]: '0.3.0' },
+  })
+  writeOverlay(home, '0.3.0')
   const result = seatBundledPlugin(pluginDir, home)
   const bundles = readProfile(home).dsh?.profile?.bundles ?? []
   const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
-  check('a user-owned copy is reported seated and not added', result.seated === true && result.added === false)
-  check('a user-owned copy is not written into bundles', !bundles.includes(BUNDLED_PLUGIN_NAME),
+  const overlay = join(home, 'profiles', 'web', 'node_modules', BUNDLED_PLUGIN_NAME)
+  check('a newer user overlay is reported seated and not added',
+    result.seated === true && result.added === false && result.lifted !== true)
+  check('a newer user overlay is not written into bundles', !bundles.includes(BUNDLED_PLUGIN_NAME),
     JSON.stringify(bundles))
-  check('a user-owned copy gets no client-owned link', existsSync(link) === false)
+  check('a newer user overlay keeps its dependency',
+    Object.hasOwn(readProfile(home).dependencies ?? {}, BUNDLED_PLUGIN_NAME))
+  check('a newer user overlay gets no client-owned link', existsSync(link) === false)
+  check('a newer user overlay keeps its nearer install', existsSync(join(overlay, 'package.json')))
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  const home = await fixtureHome()
+  writeProfile(home, {
+    ...emptyBundles,
+    dependencies: { [BUNDLED_PLUGIN_NAME]: '0.2.1' },
+  })
+  writeOverlay(home, '0.2.1')
+  const result = seatBundledPlugin(pluginDir, home)
+  check('an equal user overlay is left in place',
+    result.seated === true && result.added === false && result.lifted !== true
+    && Object.hasOwn(readProfile(home).dependencies ?? {}, BUNDLED_PLUGIN_NAME)
+    && !readProfile(home).dsh.profile.bundles.includes(BUNDLED_PLUGIN_NAME))
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  const home = await fixtureHome()
+  writeProfile(home, {
+    ...emptyBundles,
+    dependencies: { [BUNDLED_PLUGIN_NAME]: '0.1.4' },
+  })
+  const overlay = writeOverlay(home, '0.1.4')
+  const result = seatBundledPlugin(pluginDir, home)
+  const profile = readProfile(home)
+  const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
+  check('an older user overlay is lifted onto the closure',
+    result.seated === true && result.added === true && result.lifted === true)
+  check('a lifted overlay is listed in bundles', profile.dsh.profile.bundles.includes(BUNDLED_PLUGIN_NAME))
+  check('a lifted overlay is no longer a profile dependency',
+    Object.hasOwn(profile.dependencies ?? {}, BUNDLED_PLUGIN_NAME) === false)
+  check('a lifted overlay points the fallback link at the closure',
+    existsSync(link) && lstatSync(link).isSymbolicLink() && readlinkSync(link) === pluginDir)
+  check('a lifted overlay removes the nearer older install', existsSync(overlay) === false)
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  const home = await fixtureHome()
+  writeProfile(home, {
+    ...emptyBundles,
+    dependencies: { [BUNDLED_PLUGIN_NAME]: '0.1.4' },
+  })
+  const result = seatBundledPlugin(pluginDir, home)
+  check('a listed overlay with no installed files is lifted',
+    result.seated === true && result.added === true && result.lifted === true
+    && Object.hasOwn(readProfile(home).dependencies ?? {}, BUNDLED_PLUGIN_NAME) === false
+    && readProfile(home).dsh.profile.bundles.includes(BUNDLED_PLUGIN_NAME))
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  const home = await fixtureHome()
+  writeProfile(home, {
+    ...emptyBundles,
+    dependencies: { [BUNDLED_PLUGIN_NAME]: '0.1.4' },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', BUNDLED_PLUGIN_NAME] } },
+  })
+  writeOverlay(home, '0.1.4')
+  const result = seatBundledPlugin(pluginDir, home)
+  check('lifting an already-listed older overlay does not rewrite bundles',
+    result.seated === true && result.added === false && result.lifted === true
+    && readProfile(home).dsh.profile.bundles.filter(name => name === BUNDLED_PLUGIN_NAME).length === 1
+    && Object.hasOwn(readProfile(home).dependencies ?? {}, BUNDLED_PLUGIN_NAME) === false)
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  const home = await fixtureHome()
+  writeProfile(home, {
+    ...emptyBundles,
+    dependencies: { [BUNDLED_PLUGIN_NAME]: '0.1.4' },
+  })
+  const foreign = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
+  mkdirSync(foreign, { recursive: true })
+  writeFileSync(join(foreign, 'package.json'), '{"name":"impostor"}\n')
+  writeOverlay(home, '0.1.4')
+  const result = seatBundledPlugin(pluginDir, home)
+  const profile = readProfile(home)
+  check('a blocked link does not take a stale overlay away',
+    result.seated === false && result.lifted !== true
+    && Object.hasOwn(profile.dependencies ?? {}, BUNDLED_PLUGIN_NAME)
+    && existsSync(join(home, 'profiles', 'web', 'node_modules', BUNDLED_PLUGIN_NAME, 'package.json')))
   rmSync(home, { recursive: true, force: true })
 }
 

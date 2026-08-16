@@ -21,7 +21,10 @@
  * automatically: a plugin that throws while loading fails the WHOLE plugin
  * tree, so the client must be able to give the seat back (see `withdraw`).
  * A missing closure copy drops the entry (and the link) rather than leaving a
- * name official `loadProfile` will throw on.
+ * name official `loadProfile` will throw on. A user-installed overlay that
+ * is older than the closure is lifted: the dependency and the nearer
+ * profile install go away so the in-box seat is what loads; a newer or
+ * equal overlay is left entirely alone.
  *
  * The seat is taken only for the client's OWN bundled runtime. The plugin's
  * live `@deepseek-ai/*` imports resolve upward from wherever it sits — inside
@@ -30,8 +33,9 @@
  * @module dsh-desktop/bundled-plugin
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
 
 /** The plugin this client ships. */
 export const BUNDLED_PLUGIN_NAME = 'dsh-desktop-safe-market'
@@ -49,6 +53,12 @@ export interface SeatResult {
   seated: boolean
   /** This call added the bundle entry, so this boot is the first to load it. */
   added: boolean
+  /**
+   * This call replaced a user-installed overlay that was older than the
+   * closure copy. The dependency and the nearer profile install are gone;
+   * the in-box seat is what loads.
+   */
+  lifted?: boolean
   /** Why the seat could not be taken, when it could not. */
   error?: string
 }
@@ -98,12 +108,134 @@ function writeManifest(dshHome: string, manifest: ProfileManifest): void {
 }
 
 /**
- * Whether the user installed this plugin themselves. Their copy is a profile
- * dependency, resolves nearer than this client's link, and is theirs to
- * upgrade or remove — so the client stays out of the way entirely.
+ * Whether the user installed this plugin themselves. A copy that is newer
+ * than or equal to the closure is theirs to upgrade or remove — the client
+ * stays out. An older overlay is a stale floor and is lifted on seat.
  */
 function userOwned(manifest: ProfileManifest): boolean {
   return Object.hasOwn(manifest.dependencies ?? {}, BUNDLED_PLUGIN_NAME)
+}
+
+function readPackageVersion(dir: string): string | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: unknown } | null
+    return parsed !== null && typeof parsed === 'object' && typeof parsed.version === 'string'
+      ? parsed.version
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Core `x.y.z` plus optional prerelease; build metadata is ignored. */
+function parseVersion(raw: string): { core: [number, number, number]; pre: string } | undefined {
+  const trimmed = raw.trim()
+  if (trimmed === '') return undefined
+  const plus = trimmed.indexOf('+')
+  const withoutBuild = plus === -1 ? trimmed : trimmed.slice(0, plus)
+  const dash = withoutBuild.indexOf('-')
+  const corePart = dash === -1 ? withoutBuild : withoutBuild.slice(0, dash)
+  const pre = dash === -1 ? '' : withoutBuild.slice(dash + 1)
+  const bits = corePart.split('.')
+  if (bits.length < 1 || bits.length > 3) return undefined
+  const core: [number, number, number] = [0, 0, 0]
+  for (let i = 0; i < bits.length; i++) {
+    const bit = bits[i]
+    if (bit === undefined || !/^\d+$/.test(bit)) return undefined
+    core[i] = Number(bit)
+  }
+  return { core, pre }
+}
+
+/**
+ * Semver-ish order: `undefined` when either side is not a version this seat
+ * will compare (so the caller can treat an unreadable overlay as stale).
+ */
+function compareVersions(left: string, right: string): number | undefined {
+  const a = parseVersion(left)
+  const b = parseVersion(right)
+  if (a === undefined || b === undefined) return undefined
+  for (let i = 0; i < 3; i++) {
+    const left = a.core[i]
+    const right = b.core[i]
+    if (left === undefined || right === undefined) return undefined
+    if (left !== right) return left - right
+  }
+  if (a.pre === b.pre) return 0
+  if (a.pre === '') return 1
+  if (b.pre === '') return -1
+  return a.pre < b.pre ? -1 : a.pre > b.pre ? 1 : 0
+}
+
+function sameDirectory(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right)
+  } catch {
+    const a = resolve(left)
+    const b = resolve(right)
+    return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+  }
+}
+
+/** The user's installed copy, resolved the way the profile itself would. */
+function overlayDir(dshHome: string): string | undefined {
+  const anchor = manifestPath(dshHome)
+  try {
+    return dirname(createRequire(anchor).resolve(BUNDLED_PLUGIN_NAME + '/package.json'))
+  } catch {
+    const candidate = join(profileDir(dshHome), 'node_modules', BUNDLED_PLUGIN_NAME)
+    return existsSync(join(candidate, 'package.json')) ? candidate : undefined
+  }
+}
+
+function profileInstallPath(dshHome: string): string {
+  return join(profileDir(dshHome), 'node_modules', BUNDLED_PLUGIN_NAME)
+}
+
+/**
+ * An overlay yields to the closure when it is older, missing, or unreadable.
+ * A newer or equal overlay, or an overlay that *is* the closure, keeps
+ * ownership. The closure's own version must be readable or we do not lift.
+ */
+function overlayOlderThanClosure(dshHome: string, pluginDir: string): boolean {
+  const bundled = readPackageVersion(pluginDir)
+  if (bundled === undefined) return false
+  const overlay = overlayDir(dshHome)
+  if (overlay === undefined) return true
+  if (sameDirectory(overlay, pluginDir)) return false
+  const theirs = readPackageVersion(overlay)
+  if (theirs === undefined) return true
+  const order = compareVersions(theirs, bundled)
+  return order === undefined || order < 0
+}
+
+/** Drop the stale overlay's dependency and its nearer profile install. */
+function liftStaleOverlay(dshHome: string, manifest: ProfileManifest): void {
+  if (manifest.dependencies !== undefined) {
+    manifest.dependencies = Object.fromEntries(
+      Object.entries(manifest.dependencies).filter(([name]) => name !== BUNDLED_PLUGIN_NAME),
+    )
+  }
+  writeManifest(dshHome, manifest)
+  rmSync(profileInstallPath(dshHome), { recursive: true, force: true })
+}
+
+/**
+ * Whether an existing symlink already points at the closure directory.
+ * Junctions and some volume mounts report a trailing separator or a
+ * different drive-letter case than the path this process just joined;
+ * treating those as a miss would unlink and recreate the seat every boot.
+ */
+function sameDirectoryLink(link: string, wanted: string): boolean {
+  let current: string
+  try {
+    current = readlinkSync(link)
+  } catch {
+    return false
+  }
+  const a = resolve(dirname(link), current)
+  const b = resolve(wanted)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
 /** Point the profile's module fallback at the closure copy, repairing a stale link. */
@@ -120,7 +252,7 @@ function ensureLink(dshHome: string, pluginDir: string): void {
     // than deleting a tree this client did not create — and do not pretend
     // the seat is ready, or `loadProfile` will load (or die on) that tree.
     if (!existing.isSymbolicLink()) throw new Error(link + ' exists and is not a symlink')
-    if (readlinkSync(link) === pluginDir) return
+    if (sameDirectoryLink(link, pluginDir)) return
   }
   mkdirSync(dirname(link), { recursive: true })
   rmSync(link, { force: true })
@@ -152,18 +284,28 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string): SeatResul
   // A first-ever run has no profile until the harness creates one during
   // boot. Nothing is broken; the seat is taken on the next start.
   if (manifest === undefined) return { seated: false, added: false, error: 'the web profile does not exist yet' }
-  if (userOwned(manifest)) return { seated: true, added: false }
+  if (userOwned(manifest) && !overlayOlderThanClosure(dshHome, pluginDir)) {
+    return { seated: true, added: false }
+  }
 
   try {
+    // The fallback link must be in place before a stale overlay is taken
+    // away: a foreign real directory at the link path cannot be replaced,
+    // and the user's older copy is then still the one that loads.
     ensureLink(dshHome, pluginDir)
+    let lifted = false
+    if (userOwned(manifest)) {
+      liftStaleOverlay(dshHome, manifest)
+      lifted = true
+    }
     const bundles = manifest.dsh?.profile?.bundles
     if (!Array.isArray(bundles)) {
-      return { seated: false, added: false, error: 'the web profile declares no bundle list' }
+      return { seated: false, added: false, lifted, error: 'the web profile declares no bundle list' }
     }
-    if (bundles.includes(BUNDLED_PLUGIN_NAME)) return { seated: true, added: false }
+    if (bundles.includes(BUNDLED_PLUGIN_NAME)) return { seated: true, added: false, lifted }
     bundles.push(BUNDLED_PLUGIN_NAME)
     writeManifest(dshHome, manifest)
-    return { seated: true, added: true }
+    return { seated: true, added: true, lifted }
   } catch (error) {
     // The name must not stay listed if this client cannot actually offer the
     // package — official `loadProfile` throws on an unresolvable bundle.

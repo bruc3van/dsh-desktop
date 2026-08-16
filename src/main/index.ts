@@ -702,6 +702,10 @@ function offerBundledPluginSeat(): void {
   }
   const result = seatBundledPlugin(pluginDir, home)
   bundledPluginSeatInUse = result.seated
+  if (result.lifted) {
+    console.log('[desktop] bundled plugin overlay was older than the closure; using ' + BUNDLED_PLUGIN_NAME
+      + ' from the runtime closure')
+  }
   if (result.added) console.log('[desktop] bundled plugin seated: ' + BUNDLED_PLUGIN_NAME)
   else if (!result.seated && result.error !== undefined) {
     console.log('[desktop] bundled plugin not seated: ' + result.error)

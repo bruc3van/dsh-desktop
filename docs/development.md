@@ -55,7 +55,7 @@ In addition, `scripts/` contains a family of regression checks for connection an
 ### The bundled safe marketplace (development)
 
 - The market's version is pinned by the `dsh-desktop-safe-market` tarball dependency in `dsh-runtime/package.json`; it shares the release closure with the official runtime and ships in the installer, so bumping that dependency is how the client's bundled market is upgraded.
-- The client seats the market only when it resolves its own bundled closure (`source: 'bundled'`): one `dsh.profile.bundles` entry plus a symlink into the closure. Reusing a running instance, a user-installed dsh, or a pinned address withdraws the seat; the add / already-present / user-owned / withdraw / abandon / foreign-directory / missing-plugin / no-profile contracts are pinned by `check:bundled-plugin`.
+- The client seats the market only when it resolves its own bundled closure (`source: 'bundled'`): one `dsh.profile.bundles` entry plus a symlink into the closure. Reusing a running instance, a user-installed dsh, or a pinned address withdraws the seat; the add / already-present / user-owned / stale-overlay-lifted / withdraw / abandon / foreign-directory / missing-plugin / no-profile / upgrade-retargets-the-link contracts are pinned by `check:bundled-plugin`.
 - To pin a source run to the closure and try the market: `DSH_DESKTOP_SKIP_INSTALLED_DSH=1 pnpm run dev` (skips installed-dsh detection).
 - The market's catalog pipeline (daily collection plus manual curation), the review-before-install prompt, and its security boundaries live in the market's repository; the seat implementation is `src/main/bundled-plugin.ts`.
 
