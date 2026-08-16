@@ -1,17 +1,18 @@
 /**
  * Release notes arrive as Markdown (latest.json `notes`, or a GitHub release
- * body), and both update surfaces show them — the card injected into the Web
- * UI settings dialog and the client's own connection-settings page. Rendering
- * them as plain text prints the source, so the conversion lives here.
+ * body), and every update surface shows them — the card injected into the Web
+ * UI settings dialog, the client's own connection-settings page, and the
+ * update prompt window. Rendering them as plain text prints the source, so
+ * the conversion lives here.
  *
  * The notes come off the network, so this is a closed subset with every piece
  * of text escaped: no raw HTML passes through, and only http(s) links become
- * anchors. Anchors carry target=_blank, and BOTH windows that render this HTML
- * answer that with an external open — the settings window included, which is
- * why its window-open handler is no longer a blanket deny.
+ * anchors. Anchors carry target=_blank, and EVERY window that renders this
+ * HTML answers that with an external open — the settings window included,
+ * which is why its window-open handler is no longer a blanket deny.
  *
- * A native dialog cannot take HTML at all, so `renderReleaseNotesText` renders
- * the same source down to plain text for the update prompt.
+ * `renderReleaseNotesText`, the plain-text rendering the old native update
+ * dialog needed, is kept only for the updater checks (scripts/check-updater.mjs).
  * @module dsh-desktop/release-notes
  */
 

@@ -137,13 +137,18 @@ const nosniff = publicSettingsResponse.headers.get('x-content-type-options')
 check('settings server sends nosniff', nosniff === 'nosniff', String(nosniff))
 await settingsPage.close()
 
-// The official settings dialog remains operable around both append-only
-// enhancements. Verify positive and negative seats across real tab switches.
+// The official settings dialog remains operable around the client's own
+// Desktop tab. Verify its positive seat and that official tabs stay untouched.
 await window.getByRole('button', { name: /设置|Settings/ }).first().click()
 const settingsDialog = window.locator('[role="dialog"]:visible').last()
 const settingsDialogVisible = await settingsDialog.waitFor({ state: 'visible', timeout: 3000 })
   .then(() => true, () => false)
 check('official settings dialog', settingsDialogVisible, '[role="presentation"]')
+const desktopTab = settingsDialog.getByRole('button', { name: /桌面设置|Desktop/ })
+const desktopTabVisible = await desktopTab.waitFor({ state: 'visible', timeout: 3_000 })
+  .then(() => true, () => false)
+check('desktop settings tab', desktopTabVisible, '#dsh-desktop-tab')
+await desktopTab.click()
 const enhancedCardVisible = await settingsDialog.locator('#dsh-desktop-enhance').waitFor({ state: 'visible', timeout: 3000 })
   .then(() => true, () => false)
 check('desktop connection card', enhancedCardVisible, '#dsh-desktop-enhance')
@@ -155,7 +160,9 @@ check('connection shortcut hidden without a saved remote address',
 
 // Exercise the official appearance control, rather than emulating an OS media
 // query: the UI owns its theme state and provides the tokens our card consumes.
+await settingsDialog.getByRole('button', { name: /通用设置|General(?: Settings)?/ }).click()
 await settingsDialog.getByRole('button', { name: /深色|Dark/ }).click()
+await desktopTab.click()
 await window.waitForTimeout(200)
 const darkThemeTokens = await settingsDialog.locator('#dsh-desktop-enhance').evaluate(card => {
   const cardStyle = getComputedStyle(card)
@@ -190,7 +197,10 @@ check('custom provider does not duplicate key link', deepSeekHelpCount === 1, St
 
 await settingsDialog.getByRole('button', { name: /通用设置|General(?: Settings)?/ }).click()
 await window.waitForTimeout(200)
-check('connection card returns to General tab', await settingsDialog.locator('#dsh-desktop-enhance').count() === 1, 'General')
+check('connection card stays out of General tab', await settingsDialog.locator('#dsh-desktop-enhance').count() === 0, 'General')
+await desktopTab.click()
+await window.waitForTimeout(200)
+check('connection card returns to Desktop tab', await settingsDialog.locator('#dsh-desktop-enhance').count() === 1, 'Desktop')
 await settingsDialog.getByRole('button', { name: /插件|Plugins/ }).click()
 await window.waitForTimeout(200)
 check('connection card leaves Plugins tab', await settingsDialog.locator('#dsh-desktop-enhance').count() === 0, 'Plugins')

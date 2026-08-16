@@ -286,6 +286,7 @@ const hangFeed = {
 }
 
 let feedMode = 'available'
+let pageDelayMs = 0
 const fixture = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1')
   if (url.pathname === '/latest.json') {
@@ -313,10 +314,42 @@ const fixture = createServer((req, res) => {
     res.end(JSON.stringify({ result: { ok: true } }))
     return
   }
-  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-  res.end('<!doctype html><html><head><title>Updater Fixture</title></head><body>'
-    + '<div role="dialog"><div class="content"><div class="navList"><button class="active">通用设置</button></div>'
-    + '<div class="options"><div><p>fixture setting</p></div></div></div></div></body></html>')
+  const sendPage = () => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    res.end('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>Updater Fixture</title>'
+      + '<meta name="color-scheme" content="light dark"><style>'
+      + ':root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;'
+      + '--dsw-alias-label-primary:#0f1115;--dsw-alias-label-secondary:#6e7480;--dsw-alias-label-tertiary:#8a9099;'
+      + '--dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-module-platform:#ebeef2;--dsw-alias-border-l2:#d8d8d4;--dsw-alias-interactive-bg-hover:#f5f6f7}'
+      + '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:32px;background:#f3f4f6;color:#0f1115;font-size:14px}'
+      + '.fixtureDialog{width:min(780px,calc(100vw - 64px));height:min(620px,calc(100vh - 64px));min-height:520px;display:flex;flex-direction:column;'
+      + 'overflow:hidden;border:1px solid #e4e5e7;border-radius:16px;background:#fff;box-shadow:0 24px 64px rgba(15,17,21,.16)}'
+      + '.fixtureHeader{height:58px;flex:0 0 auto;display:flex;align-items:center;padding:0 22px;border-bottom:1px solid #ebeef2}'
+      + '.fixtureHeader h1{margin:0;font-size:16px;line-height:24px;font-weight:600;letter-spacing:-.01em}'
+      + '.fixtureHeader span{margin-left:auto;color:#9aa0a6;font-size:12px}.content{display:grid;grid-template-columns:180px minmax(0,1fr);min-height:0;flex:1}'
+      + '.navList{display:flex;flex-direction:column;gap:4px;padding:16px 12px;border-right:1px solid #ebeef2;background:#fafbfc}'
+      + '.navList button{width:100%;height:38px;display:flex;align-items:center;gap:10px;padding:0 12px;border:0;border-radius:8px;background:transparent;'
+      + 'font:inherit;font-size:13px;color:#6e7480;text-align:left;cursor:pointer}.navList button:hover{background:#f1f2f4;color:#0f1115}'
+      + '.navList button.active{background:#ebeef2;color:#0f1115;font-weight:500}.navList svg{width:17px;height:17px;flex:0 0 auto}'
+      + '.options{min-width:0;overflow:auto;background:#fff}.officialPanel{padding:24px}.officialPanel h2{margin:0 0 6px;font-size:14px;font-weight:500}'
+      + '.officialPanel p{margin:0;color:#6e7480;font-size:13px;line-height:20px}'
+      + '@media(prefers-color-scheme:dark){:root{--dsw-alias-label-primary:#f4f5f6;--dsw-alias-label-secondary:#aeb3bb;'
+      + '--dsw-alias-label-tertiary:#818791;--dsw-alias-bg-layer-1:#17181a;--dsw-alias-bg-module-platform:#2c2e33;'
+      + '--dsw-alias-border-l2:#3a3d42;--dsw-alias-interactive-bg-hover:#232529}'
+      + 'body{background:#101113;color:#f4f5f6}.fixtureDialog,.options{background:#17181a;border-color:#2c2e33}'
+      + '.fixtureHeader{border-color:#2c2e33}.navList{background:#1b1c1f;border-color:#2c2e33}.navList button{color:#aeb3bb}'
+      + '.navList button:hover{background:#232529;color:#f4f5f6}.navList button.active{background:#2c2e33;color:#f4f5f6}.officialPanel p{color:#aeb3bb}}'
+      + '</style></head><body><div class="fixtureDialog" role="dialog" aria-label="设置">'
+      + '<div class="fixtureHeader"><h1>设置</h1><span>DeepSeek Harness Desktop</span></div>'
+      + '<div class="content"><div class="navList">'
+      + '<button class="active" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">'
+      + '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.36.72.66 1 .3.28.68.42 1.1.4H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"></path></svg>'
+      + '<span>通用设置</span></button></div><div class="options">'
+      + '<div class="officialPanel"><h2>通用设置</h2><p>测试环境中的官方设置占位内容。</p></div>'
+      + '</div></div></div></body></html>')
+  }
+  if (pageDelayMs > 0) setTimeout(sendPage, pageDelayMs)
+  else sendPage()
 })
 await new Promise((resolve, reject) => {
   fixture.once('error', reject)
@@ -331,7 +364,7 @@ badFeed.platforms[currentKey].url = origin + '/payload'
 noHashFeed.platforms[currentKey].url = origin + '/payload'
 hangFeed.platforms[currentKey].url = origin + '/hang'
 
-const launchApp = async (home, extraEnv = {}) => {
+const launchApp = async (home, extraEnv = {}, options = {}) => {
   const electronEnv = { ...process.env, ...extraEnv }
   Reflect.deleteProperty(electronEnv, 'ELECTRON_RUN_AS_NODE')
   electronEnv.DSH_HOME = join(home, 'dsh')
@@ -340,8 +373,10 @@ const launchApp = async (home, extraEnv = {}) => {
   electronEnv.DSH_DESKTOP_SKIP_INSTALLED_DSH = '1'
   electronEnv.DSH_DESKTOP_UPDATE_FEED = origin + '/latest.json'
   electronEnv.DSH_DESKTOP_UPDATE_GITHUB_API = ''
-  electronEnv.DSH_DESKTOP_SKIP_UPDATE_CHECK = '1'
-  electronEnv.DSH_DESKTOP_SKIP_UPDATE_PROMPT = '1'
+  if (!options.showUpdatePrompt) {
+    electronEnv.DSH_DESKTOP_SKIP_UPDATE_CHECK = '1'
+    electronEnv.DSH_DESKTOP_SKIP_UPDATE_PROMPT = '1'
+  }
   electronEnv.DSH_DESKTOP_UPDATE_DRY_RUN = '1'
   mkdirSync(join(home, 'desktop'), { recursive: true })
   writeFileSync(join(home, 'desktop', 'settings.json'), JSON.stringify({ serverUrl: origin }, null, 2) + '\n')
@@ -354,10 +389,21 @@ const launchApp = async (home, extraEnv = {}) => {
   return { app: launched, window }
 }
 
+const openDesktopSettings = async (window) => {
+  const tab = window.locator('#dsh-desktop-tab')
+  await tab.waitFor({ state: 'visible', timeout: 3_000 })
+  await tab.click()
+  await window.locator('#dsh-desktop-panel').waitFor({ state: 'visible', timeout: 3_000 })
+}
+
 try {
   const availableHome = join(work, 'available')
   const available = await launchApp(availableHome)
+  await openDesktopSettings(available.window)
   await available.window.locator('#dsh-desktop-update').waitFor({ state: 'visible', timeout: 3_000 })
+  if (process.env.DSH_DESKTOP_FIXTURE_SCREENSHOT !== undefined) {
+    await available.window.screenshot({ path: process.env.DSH_DESKTOP_FIXTURE_SCREENSHOT })
+  }
   const before = await available.window.evaluate(() => window.desktop.update.getStatus())
   if (before.currentVersion !== desktopVersion) {
     throw new Error('status currentVersion: ' + JSON.stringify(before))
@@ -398,6 +444,45 @@ try {
   console.log('✓ dry-run download verifies SHA-256')
   console.log('✓ dismissed version is persisted')
 
+  // The post-page-load prompt is a bounded app surface, not a native message box
+  // that expands a long changelog into an unreadable wall of text. Hold the
+  // Web UI response past AUTO_CHECK_DELAY_MS: a process-start timer would fire
+  // too early and this test would miss its already-open window.
+  const promptHome = join(work, 'prompt')
+  pageDelayMs = 6_000
+  const prompted = await launchApp(promptHome, {}, { showUpdatePrompt: true })
+  const prompt = await prompted.app.waitForEvent('window', { timeout: 8_000 })
+  pageDelayMs = 0
+  await prompt.locator('#update-install').waitFor({ state: 'visible', timeout: 3_000 })
+  const promptLayout = await prompt.evaluate(() => {
+    const notes = document.querySelector('.notes')
+    const install = document.getElementById('update-install')
+    return {
+      title: document.title,
+      notesMaxHeight: notes === null ? null : getComputedStyle(notes).maxHeight,
+      installText: install?.textContent,
+      version: document.querySelector('.version')?.textContent,
+      windowHeight: innerHeight,
+      actionBottomGap: Math.round(innerHeight - (document.querySelector('.actions')?.getBoundingClientRect().bottom ?? 0)),
+    }
+  })
+  if (promptLayout.notesMaxHeight !== '238px'
+    || !promptLayout.installText?.trim()
+    || !promptLayout.version?.includes(desktopVersion)
+    || !promptLayout.version.includes('99.0.0')
+    || promptLayout.windowHeight >= 540
+    || promptLayout.actionBottomGap < 20
+    || promptLayout.actionBottomGap > 32) {
+    throw new Error('update prompt layout/copy mismatch: ' + JSON.stringify(promptLayout))
+  }
+  const promptClosed = prompt.waitForEvent('close', { timeout: 3_000 })
+  // The click deliberately destroys its own page; Playwright can observe the
+  // teardown before its click promise settles, so closure is the assertion.
+  await prompt.locator('#update-later').click({ noWaitAfter: true }).catch(() => {})
+  await promptClosed
+  await prompted.app.close()
+  console.log('✓ update check waits for the Web UI, then shows a bounded prompt with clear actions')
+
   feedMode = 'current'
   const currentHome = join(work, 'current')
   const current = await launchApp(currentHome)
@@ -423,6 +508,7 @@ try {
   feedMode = 'nohash'
   const noHashHome = join(work, 'nohash')
   const noHash = await launchApp(noHashHome)
+  await openDesktopSettings(noHash.window)
   const noHashCheck = await noHash.window.evaluate(() => window.desktop.update.check())
   if (!noHashCheck.hasUpdate) throw new Error('no-hash feed should still be available: ' + JSON.stringify(noHashCheck))
   // A refusal that never reaches the person is the same as a dead button:

@@ -37,7 +37,7 @@ import {
   type UpdateState,
 } from './updater.ts'
 import { abandonBundledPlugin, BUNDLED_PLUGIN_NAME, seatBundledPlugin, WEB_PROFILE, withdrawBundledPlugin } from './bundled-plugin.ts'
-import { releaseNotesCss, renderReleaseNotes, renderReleaseNotesText } from './release-notes.ts'
+import { releaseNotesCss, renderReleaseNotes } from './release-notes.ts'
 import { clearRuntimeLock, isProcessAlive, readRuntimeLock, recordRuntimeLockUrl, writeRuntimeLock } from './runtime-lock.ts'
 import { webProbeOrigins } from './web-discovery.ts'
 import {
@@ -1798,6 +1798,7 @@ function installPageContextMenu(contents: Electron.WebContents): void {
 
 /** Create the client window immediately; the official Web UI replaces its loading surface when ready. */
 function createWindow(): void {
+  let targetNavigationSucceeded = false
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -1875,6 +1876,9 @@ function createWindow(): void {
     if (!isMainFrame) return
     guardNavigation(event, targetUrl)
   })
+  mainWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) targetNavigationSucceeded = false
+  })
   // An unreachable Web UI (connect mode) must not strand the user: offer
   // retry or the connection-settings window.
   mainWindow.webContents.on('did-fail-load', (_event, code, description, failedUrl, isMainFrame) => {
@@ -1892,14 +1896,30 @@ function createWindow(): void {
   // (an nginx "400 The plain HTTP request was sent to HTTPS port", say) as if
   // it were the app, with no way back. The status is the failure.
   mainWindow.webContents.on('did-navigate', (_event, url, httpResponseCode, httpStatusText) => {
-    if (quitting || url.startsWith('data:') || httpResponseCode < 400) return
     const target = currentTarget()
+    if (!quitting && !url.startsWith('data:') && httpResponseCode < 400
+      && target !== undefined && appOrigin(url) === appOrigin(target)) {
+      targetNavigationSucceeded = true
+    }
+    if (quitting || url.startsWith('data:') || httpResponseCode < 400) return
     if (target === undefined || appOrigin(url) !== appOrigin(target)) return
     if (probeConnected) {
       fallbackFromProbedInstance('http ' + String(httpResponseCode))
       return
     }
     showConnectionError({ kind: 'http', url, status: httpResponseCode, statusText: httpStatusText })
+  })
+  // Updating is background work, not part of getting the runtime onto the
+  // screen. Wait until the official Web UI has actually loaded: local mode
+  // reaches this only after dsh readiness, and Connect mode only after its
+  // configured page responds. Reloads and reconnects are deduplicated by the
+  // scheduler below.
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (!targetNavigationSucceeded) return
+    const target = currentTarget()
+    if (target === undefined) return
+    const loaded = mainWindow?.webContents.getURL() ?? ''
+    if (appOrigin(loaded) === appOrigin(target)) scheduleAutoUpdateCheck()
   })
   // Chromium may lose its renderer after sleep or resource pressure without a
   // did-fail-load event. Reloading the surviving Web UI origin recreates it.
@@ -2502,39 +2522,140 @@ async function confirmSensitiveAction(message: string, detail: string): Promise<
   return response === 1
 }
 
-let updateDialogOpen = false
+let updatePromptWindow: BrowserWindow | null = null
+
+/**
+ * The update prompt is one of the client's own surfaces, so it uses the same
+ * restrained type, spacing, buttons, and dark-mode palette as connection
+ * settings. Keeping release notes in a bounded reading pane prevents a long
+ * changelog from turning a decision into a full-screen wall of text.
+ */
+function updatePromptPageUrl(info: UpdateInfo): string {
+  const chinese = localeChinese()
+  const copy = updateDialogCopy()
+  const notes = renderReleaseNotes(info.notes ?? '')
+  const notesLabel = chinese ? '本次更新' : "What's new"
+  const notesEmpty = chinese ? '此版本没有提供更新说明。' : 'No release notes were provided for this version.'
+  const versionLabel = chinese ? '版本' : 'Version'
+  const hint = chinese ? '下载完成后将打开安装程序。' : 'The installer will open when the download finishes.'
+  const html = '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
+    + '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">'
+    + '<meta name="color-scheme" content="light dark"><title>' + escapeHtml(copy.found) + '</title><style>'
+    + ':root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}'
+    + '*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#fff;color:#0f1115;font-size:14px;line-height:1.6}'
+    + 'main{min-height:100vh;padding:30px 32px 24px;display:flex;flex-direction:column}.intro{display:flex;align-items:flex-start;gap:14px}'
+    + '.mark{width:40px;height:40px;flex:0 0 auto;border-radius:10px;box-shadow:0 8px 22px rgba(15,17,21,.12)}'
+    + '.heading{min-width:0}h1{margin:0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.01em}'
+    + '.hint{margin:4px 0 0;color:#6e7480;font-size:13px;line-height:20px}'
+    + '.version{display:flex;align-items:center;gap:9px;margin:24px 0 22px;padding:12px 14px;border:1px solid #ebeef2;border-radius:12px;background:#fafbfc}'
+    + '.version-label{margin-right:auto;color:#6e7480;font-size:12px}.version-value{font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}'
+    + '.version-arrow{color:#9aa0a6}.version-value.new{padding:2px 8px;border-radius:999px;background:#ebeef2}'
+    + '.notes-label{margin:0 0 8px;font-size:13px;font-weight:600}'
+    + '.notes-empty{margin:0;color:#6e7480;font-size:13px}'
+    + releaseNotesCss('.notes', { text: '#525862', strong: '#0f1115', border: '#d8d8d4', surface: '#ebeef2' })
+    + '.notes{max-height:238px;margin:0;padding:0 10px 0 0;scrollbar-gutter:stable}'
+    + '.footer{margin-top:auto;padding-top:24px}.divider{border:0;border-top:1px solid #ebeef2;margin:0 -32px 18px}'
+    + '.actions{display:flex;align-items:center;gap:8px}.spacer{flex:1}'
+    + '.button{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;text-decoration:none;font:inherit;font-size:13px;line-height:20px;'
+    + 'border:1px solid #d8d8d4;border-radius:28px;padding:7px 17px;color:#0f1115;background:transparent;outline:none;transition:background .15s ease,opacity .15s ease,box-shadow .15s ease}'
+    + '.button:hover{background:#f5f6f7}.button:focus-visible{box-shadow:0 0 0 3px rgba(15,17,21,.14)}'
+    + '.button.ghost{border-color:transparent;color:#6e7480;padding-left:10px;padding-right:10px}'
+    + '.button.primary{background:#0f1115;border-color:#0f1115;color:#fff}.button.primary:hover{background:#0f1115;opacity:.88}'
+    + '@media(prefers-color-scheme:dark){body{background:#17181a;color:#f4f5f6}.mark{box-shadow:0 8px 22px rgba(0,0,0,.32)}'
+    + '.hint,.version-label,.notes-empty{color:#aeb3bb}.version{border-color:#2c2e33;background:#1e1f22}.version-arrow{color:#818791}.version-value.new{background:#2c2e33}'
+    + releaseNotesCss('.notes', { text: '#aeb3bb', strong: '#f4f5f6', border: '#3a3d42', surface: '#232529' })
+    + '.divider{border-color:#2c2e33}.button{border-color:#3a3d42;color:#f4f5f6}.button:hover{background:#232529}'
+    + '.button:focus-visible{box-shadow:0 0 0 3px rgba(244,245,246,.18)}.button.ghost{border-color:transparent;color:#aeb3bb}'
+    + '.button.primary{background:#f4f5f6;border-color:#f4f5f6;color:#17181a}.button.primary:hover{background:#f4f5f6}}'
+    + '@media(prefers-reduced-motion:reduce){*{transition:none!important}}'
+    + '</style></head><body><main><div class="intro">' + loadingIconTag()
+    + '<div class="heading"><h1>' + escapeHtml(copy.found) + '</h1><p class="hint">' + escapeHtml(hint) + '</p></div></div>'
+    + '<div class="version"><span class="version-label">' + escapeHtml(versionLabel) + '</span>'
+    + '<span class="version-value">v' + escapeHtml(info.currentVersion) + '</span><span class="version-arrow" aria-hidden="true">→</span>'
+    + '<span class="version-value new">v' + escapeHtml(info.availableVersion) + '</span></div>'
+    + '<p class="notes-label">' + escapeHtml(notesLabel) + '</p>'
+    + (notes === '' ? '<p class="notes-empty">' + escapeHtml(notesEmpty) + '</p>' : '<div class="notes">' + notes + '</div>')
+    + '<div class="footer"><hr class="divider"><div class="actions">'
+    + '<a id="update-later" class="button ghost" href="dsh-update-action:later" target="_blank">' + escapeHtml(copy.later) + '</a><span class="spacer"></span>'
+    + '<a id="update-ignore" class="button" href="dsh-update-action:ignore" target="_blank">' + escapeHtml(copy.ignore) + '</a>'
+    + '<a id="update-install" class="button primary" href="dsh-update-action:install" target="_blank">' + escapeHtml(copy.install) + '</a>'
+    + '</div></div></main></body></html>'
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(html)
+}
 
 function showUpdateAvailableDialog(info: UpdateInfo): void {
-  if (devFlag('DSH_DESKTOP_SKIP_UPDATE_PROMPT') || updateDialogOpen) return
-  const copy = updateDialogCopy()
-  // A system dialog takes no markup, so the Markdown is rendered down to text
-  // rather than printed with its '###' and backticks intact.
-  const notes = renderReleaseNotesText(info.notes ?? '')
-  const detail = (notes === '' ? '' : notes.slice(0, 800) + (notes.length > 800 ? '…' : '') + '\n\n')
-    + 'v' + info.currentVersion + ' → v' + info.availableVersion
-  const options: Electron.MessageBoxOptions = {
-    type: 'info',
-    title: 'DeepSeek Harness Desktop',
-    message: copy.found + ' v' + info.availableVersion,
-    detail,
-    buttons: [copy.later, copy.ignore, copy.install],
-    defaultId: 2,
-    cancelId: 0,
+  if (devFlag('DSH_DESKTOP_SKIP_UPDATE_PROMPT')) return
+  if (updatePromptWindow !== null && !updatePromptWindow.isDestroyed()) {
+    updatePromptWindow.focus()
+    return
   }
   const owner = mainWindow
-  const result = owner === null || owner.isDestroyed()
-    ? dialog.showMessageBox(options)
-    : dialog.showMessageBox(owner, options)
-  updateDialogOpen = true
-  void result.then(({ response }) => {
-    if (response === 1) {
+  const prompt = new BrowserWindow({
+    width: 580,
+    height: 590,
+    minWidth: 520,
+    minHeight: 460,
+    maxWidth: 720,
+    title: localeChinese() ? '应用更新' : 'App update',
+    icon: WINDOW_ICON_PNG,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    backgroundColor: windowBackgroundColor(),
+    show: false,
+    ...(owner !== null && !owner.isDestroyed() ? { parent: owner, modal: true } : {}),
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  })
+  updatePromptWindow = prompt
+  // Start with enough room for the longest supported notes, then shrink the
+  // hidden window to its natural content height. The footer remains at the
+  // bottom and a short changelog does not leave a blank half-window below it.
+  prompt.webContents.once('did-finish-load', () => {
+    const measure = '(() => {'
+      + 'const main=document.querySelector("main");if(!(main instanceof HTMLElement))return 560;'
+      + 'document.body.style.minHeight="0";main.style.minHeight="0";'
+      + 'const height=Math.ceil(main.getBoundingClientRect().height);'
+      + 'document.body.style.removeProperty("min-height");main.style.removeProperty("min-height");return height})()'
+    void prompt.webContents.executeJavaScript(measure, true)
+      .then((height: unknown) => {
+        if (prompt.isDestroyed() || typeof height !== 'number') return
+        const width = prompt.getContentSize()[0] ?? 580
+        prompt.setContentSize(width, Math.max(430, Math.min(560, height)))
+      })
+      .catch(() => {})
+      .finally(() => { if (!prompt.isDestroyed()) prompt.show() })
+  })
+  prompt.on('closed', () => { if (updatePromptWindow === prompt) updatePromptWindow = null })
+  prompt.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') prompt.close()
+  })
+  const handleAction = (targetUrl: string): boolean => {
+    if (!targetUrl.startsWith('dsh-update-action:')) return false
+    const action = targetUrl.slice('dsh-update-action:'.length)
+    prompt.close()
+    if (action === 'ignore') {
       desktopUpdater?.dismiss()
-      return
+      return true
     }
-    if (response === 2) void installDesktopUpdate().then((installed) => {
+    if (action === 'install') void installDesktopUpdate().then((installed) => {
       if (installed.started) scheduleQuitAfterWindowsInstall()
     })
-  }).finally(() => { updateDialogOpen = false })
+    return true
+  }
+  prompt.webContents.setWindowOpenHandler(({ url }) => {
+    handleAction(url)
+    if (/^https?:\/\//i.test(url)) openExternal(url)
+    return { action: 'deny' }
+  })
+  prompt.webContents.on('will-navigate', (event, targetUrl) => {
+    event.preventDefault()
+    if (!handleAction(targetUrl) && /^https?:\/\//i.test(targetUrl)) openExternal(targetUrl)
+  })
+  void prompt.loadURL(updatePromptPageUrl(info)).catch(() => { prompt.close() })
 }
 
 async function handleManualUpdateCheck(prompt: boolean): Promise<void> {
@@ -2637,8 +2758,12 @@ function promptMacReplace(): void {
   })
 }
 
+let autoUpdateCheckScheduled = false
+
+/** Queue the one automatic check only after the official Web UI is usable. */
 function scheduleAutoUpdateCheck(): void {
-  if (desktopUpdater === undefined || !desktopUpdater.shouldAutoCheck()) return
+  if (autoUpdateCheckScheduled || desktopUpdater === undefined || !desktopUpdater.shouldAutoCheck()) return
+  autoUpdateCheckScheduled = true
   setTimeout(() => {
     const updater = desktopUpdater
     if (quitting || updater === undefined) return
@@ -3776,7 +3901,6 @@ if (!gotLock) {
     })
     await guiPathReady
     boot()
-    scheduleAutoUpdateCheck()
     app.on('activate', () => {
       if (mainWindow === null) launchWindow()
     })

@@ -1,9 +1,9 @@
 /**
  * Desktop client preload: the minimal fixed surface exposed to the official
- * Web UI page, plus the "enhanced features" seat — a connection-settings card
- * injected into the OFFICIAL settings dialog (marked 增强功能/Enhanced), kept
- * visually separate and optional: if the official dialog cannot be detected
- * the injection silently does nothing and the official UI is untouched.
+ * Web UI page, plus the client's own 桌面设置 tab — a nav item injected into
+ * the OFFICIAL settings dialog below 通用设置, whose panel carries the
+ * connection and app-update cards. Optional: if the official dialog cannot be
+ * detected the injection silently does nothing and the official UI is untouched.
  * Runs sandboxed, so only Electron APIs are available.
  *
  * The bridge below is exposed on every document the window loads, which in
@@ -306,16 +306,21 @@ function watchPageTheme(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Enhanced-features card inside the OFFICIAL settings dialog.
+// The client's own 桌面设置 tab inside the OFFICIAL settings dialog.
 //
-// The official UI is a black box: we never modify its DOM, only APPEND one
-// clearly-marked card when its settings dialog is open. Detection is
-// heuristic (ARIA dialog / modal-like container mentioning 设置); when it
-// fails the card is simply absent — official behavior is never affected.
+// The official UI is a black box. A cloned nav item is inserted below
+// 通用设置; while it is selected the official panels are hidden (inline
+// display only — their DOM is otherwise untouched) and one appended panel
+// carries the connection and app-update cards. Everything is reverted the
+// moment an official tab is clicked. Detection is heuristic (ARIA dialog /
+// modal-like container mentioning 设置); when it fails the tab is simply
+// absent — official behavior is never affected.
 // ---------------------------------------------------------------------------
 
 const ENHANCE_ID = 'dsh-desktop-enhance'
 const UPDATE_ID = 'dsh-desktop-update'
+const DESKTOP_TAB_ID = 'dsh-desktop-tab'
+const DESKTOP_PANEL_ID = 'dsh-desktop-panel'
 const RELEASES_PAGE_URL = 'https://github.com/bruc3van/dsh-desktop/releases'
 
 /**
@@ -357,37 +362,220 @@ function findOptions(dialog: Element): Element | null {
   return [...content.children].find(c => String(c.className ?? '').includes('options')) ?? null
 }
 
-/** Whether the GENERAL tab is active (the enhanced block lives only there). */
-function isGeneralTab(dialog: Element): boolean {
-  const navList = [...dialog.querySelectorAll('[class*="navList"]')][0]
-  const active = navList?.querySelector('[class*="active"]')
-  const label = active?.textContent?.trim() ?? ''
-  return label === '通用设置' || label === 'General' || label === 'General Settings'
+/** The settings dialog's tab list. */
+function findNavList(dialog: Element): Element | null {
+  return dialog.querySelector('[class*="navList"]')
 }
 
-/**
- * The options column's currently visible panel (the general tab's panel when
- * the general tab is active). React replaces panels on tab switch, so the
- * enhanced block must hang off the panel itself — it then disappears with it.
- */
-function findVisiblePanel(options: Element): Element | null {
-  for (const child of options.children) {
-    if (child.id === ENHANCE_ID || child.id === UPDATE_ID) continue
-    if (hasVisibleContent(child)) return child
+/** CSS-module "active" tokens ("active_ab12c", "navItem--active") — not "interactive". */
+function isActiveToken(cls: string): boolean {
+  return /(^|[-_])active/i.test(cls)
+}
+
+/** Monitor glyph for the injected nav item, in place of the cloned tab's icon. */
+const DESKTOP_TAB_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"'
+  + ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+  + '<rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>'
+
+let desktopTabSelected = false
+/** The official active class, learned from whichever tab was active when ours was selected. */
+let officialActiveClass = ''
+/** Exactly which elements lost that class to us, so deselecting restores them. */
+let strippedActive: { el: Element; cls: string; label: string }[] = []
+
+function desktopTabLabel(english: boolean): string {
+  return english ? 'Desktop' : '桌面设置'
+}
+
+/** Retext the cloned item's visible label without disturbing its icon. */
+function setNavLabel(item: Element, label: string): void {
+  const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node !== null) {
+    if ((node.textContent ?? '').trim() !== '') {
+      if (node.textContent !== label) node.textContent = label
+      return
+    }
+    node = walker.nextNode()
+  }
+  item.appendChild(document.createTextNode(label))
+}
+
+/** The label of the nav item (navList child) an active token sits on or inside. */
+function navItemLabel(el: Element, navList: Element): string {
+  let node: Element | null = el
+  while (node !== null && node.parentElement !== navList) node = node.parentElement
+  return (node ?? el).textContent?.trim() ?? ''
+}
+
+function findGeneralNavItem(navList: Element): Element | null {
+  for (const child of navList.children) {
+    if (child.id === DESKTOP_TAB_ID) continue
+    const label = child.textContent?.trim() ?? ''
+    if (label === '通用设置' || label === 'General' || label === 'General Settings') return child
   }
   return null
 }
 
-/** display:contents has no own box; visibility comes from a visible descendant. */
-function hasVisibleContent(element: Element): boolean {
-  const display = getComputedStyle(element).display
-  if (display === 'none') return false
-  if (display === 'contents') return [...element.children].some(hasVisibleContent)
-  const rect = element.getBoundingClientRect()
-  return rect.width > 0 && rect.height > 0
+/**
+ * Keep the 桌面设置 nav item seated below 通用设置. It is a deep clone of the
+ * 通用设置 item so it inherits the official look; the clone is then scrubbed
+ * of anything the official code might key on (active tokens, data-*, ARIA
+ * state) and its clicks never reach the official handlers.
+ */
+function ensureDesktopTab(navList: Element): void {
+  let item = document.getElementById(DESKTOP_TAB_ID)
+  if (item !== null && item.parentElement !== navList) {
+    item.remove()
+    item = null
+  }
+  if (item === null) {
+    const general = findGeneralNavItem(navList)
+    if (general === null) return
+    const clone = general.cloneNode(true) as HTMLElement
+    clone.id = DESKTOP_TAB_ID
+    for (const el of [clone, ...clone.querySelectorAll('[class]')]) {
+      for (const cls of [...el.classList]) if (isActiveToken(cls)) el.classList.remove(cls)
+    }
+    for (const name of clone.getAttributeNames()) {
+      if (name.startsWith('data-') || name === 'aria-current' || name === 'aria-selected') clone.removeAttribute(name)
+    }
+    const icon = clone.querySelector('svg')
+    if (icon !== null) {
+      const template = document.createElement('template')
+      template.innerHTML = DESKTOP_TAB_SVG
+      const monitor = template.content.firstElementChild
+      if (monitor !== null) {
+        for (const name of ['class', 'width', 'height']) {
+          const value = icon.getAttribute(name)
+          if (value !== null) monitor.setAttribute(name, value)
+        }
+        icon.replaceWith(monitor)
+      }
+    }
+    clone.addEventListener('click', (event) => {
+      // The clone may carry official routing hooks (href, delegated handlers);
+      // this tab exists only client-side, so the click must not leave it.
+      event.preventDefault()
+      event.stopPropagation()
+      desktopTabSelected = true
+      applyDesktopSelection()
+    })
+    navList.insertBefore(clone, general.nextElementSibling)
+    item = clone
+  }
+  setNavLabel(item, desktopTabLabel(currentEnglish()))
+  const list = navList as HTMLElement
+  if (list.dataset.dshNavHooked === undefined) {
+    list.dataset.dshNavHooked = '1'
+    navList.addEventListener('click', onOfficialNavClick, true)
+  }
 }
 
-/** Append the enhanced-connection block to the GENERAL form flow, matching the official rows. */
+/** Capture-phase: an official tab was clicked while ours was selected — hand everything back. */
+function onOfficialNavClick(event: Event): void {
+  if (!desktopTabSelected) return
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const item = document.getElementById(DESKTOP_TAB_ID)
+  if (item !== null && (target === item || item.contains(target))) return
+  deselectDesktopTab()
+}
+
+/**
+ * Revert every change selection made. On a direct click this runs BEFORE the
+ * official handler: React bails out when the clicked tab is the one it still
+ * believes active, and would then never repaint the class we removed. When
+ * the official UI has already moved on by itself (restoreActive=false) the
+ * class is NOT put back — React repainted the nav and re-adding it would
+ * highlight two tabs at once.
+ */
+function deselectDesktopTab(restoreActive = true): void {
+  desktopTabSelected = false
+  const item = document.getElementById(DESKTOP_TAB_ID)
+  if (item !== null && officialActiveClass !== '') item.classList.remove(officialActiveClass)
+  document.getElementById(DESKTOP_PANEL_ID)?.remove()
+  if (restoreActive) for (const entry of strippedActive) entry.el.classList.add(entry.cls)
+  strippedActive = []
+  for (const el of document.querySelectorAll('[data-dsh-hidden]')) {
+    const hidden = el as HTMLElement
+    hidden.style.display = hidden.dataset.dshHidden ?? ''
+    delete hidden.dataset.dshHidden
+  }
+}
+
+/** Selection, resolved from the live dialog (the click handler's entry point). */
+function applyDesktopSelection(): void {
+  const dialog = findSettingsDialog()
+  if (dialog === null) return
+  const navList = findNavList(dialog)
+  const options = findOptions(dialog)
+  if (navList === null || options === null) return
+  enforceDesktopSelection(navList, options)
+}
+
+/**
+ * While our tab is selected: strip the official active token (remembering
+ * where it was), wear it ourselves, hide the official panels, and keep our
+ * panel — with the connection and app-update cards — seated in the options
+ * column. Idempotent; the probe re-runs it so official re-renders (which
+ * neither see nor preserve our changes) are re-overridden.
+ */
+function enforceDesktopSelection(navList: Element, options: Element): void {
+  const item = document.getElementById(DESKTOP_TAB_ID)
+  if (item === null) return
+  const activeEls: Element[] = []
+  for (const el of navList.querySelectorAll('[class*="active"]')) {
+    if (el === item || item.contains(el)) continue
+    if ([...el.classList].some(isActiveToken)) activeEls.push(el)
+  }
+  // An active token on a tab we never stripped means the official UI switched
+  // tabs by a path other than a click (keyboard navigation, programmatic):
+  // yield to the tab the user chose instead of suppressing it.
+  if (strippedActive.length > 0) {
+    for (const el of activeEls) {
+      const label = navItemLabel(el, navList)
+      if (!strippedActive.some(entry => entry.label === label)) {
+        deselectDesktopTab(false)
+        return
+      }
+    }
+  }
+  for (const el of activeEls) {
+    const label = navItemLabel(el, navList)
+    for (const cls of [...el.classList]) {
+      if (!isActiveToken(cls)) continue
+      officialActiveClass = cls
+      el.classList.remove(cls)
+      if (!strippedActive.some(entry => entry.el === el && entry.cls === cls)) strippedActive.push({ el, cls, label })
+    }
+  }
+  if (officialActiveClass !== '') item.classList.add(officialActiveClass)
+  for (const child of options.children) {
+    if (child.id === DESKTOP_PANEL_ID) continue
+    const el = child as HTMLElement
+    if (el.dataset.dshHidden === undefined) {
+      el.dataset.dshHidden = el.style.display
+      el.style.display = 'none'
+    }
+  }
+  let panel = document.getElementById(DESKTOP_PANEL_ID)
+  if (panel !== null && panel.parentElement !== options) {
+    panel.remove()
+    panel = null
+  }
+  if (panel === null) {
+    panel = document.createElement('div')
+    panel.id = DESKTOP_PANEL_ID
+    options.appendChild(panel)
+  }
+  injectEnhance(panel)
+  injectUpdate(panel)
+  const card = document.getElementById(UPDATE_ID)
+  if (card !== null) refreshUpdateLanguage(card as HTMLElement, currentEnglish())
+}
+
+/** Append the connection block to the 桌面设置 panel, matching the official rows. */
 function injectEnhance(panel: Element): void {
   if (panel.querySelector('#' + ENHANCE_ID) !== null) return
 
@@ -398,9 +586,11 @@ function injectEnhance(panel: Element): void {
     // 0 24px 24px), rows are flex columns, labels #0F1115 14px, secondary
     // text #6E7480 13px, inputs 13px/8px radius/#D8D8D4, ghost buttons 28px.
     style.textContent = [
+      // Our own panel replicates the official options-column flow (padding
+      // 0 24px 24px), with a hairline between the two cards.
+      '#' + DESKTOP_PANEL_ID + '{padding:0 24px 24px}',
       '#' + ENHANCE_ID + '{margin:0;padding:16px 0}',
       '#' + ENHANCE_ID + ' .dsh-enhance-title{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#0F1115)}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-badge{font-size:12px;font-weight:400;color:var(--dsw-alias-label-primary,#0F1115);background:var(--dsw-alias-bg-module-platform,#EBEEF2);border-radius:999px;padding:2px 8px}',
       '#' + ENHANCE_ID + ' .dsh-enhance-status{margin:0 0 12px;font-size:13px;color:var(--dsw-alias-label-secondary,#6E7480)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-row{display:flex;gap:8px;align-items:center}',
       '#' + ENHANCE_ID + ' .dsh-enhance-input{flex:1;min-width:0;background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l2,#D8D8D4);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--dsw-alias-label-primary,#0F1115);outline:none}',
@@ -417,9 +607,8 @@ function injectEnhance(panel: Element): void {
       '#' + ENHANCE_ID + ' .dsh-enhance-market{display:flex;align-items:center;gap:8px;font-size:13px;'
         + 'color:var(--dsw-alias-label-primary,#0F1115);cursor:pointer}',
       '#' + ENHANCE_ID + ' .dsh-enhance-market input{cursor:pointer}',
-      '#' + UPDATE_ID + '{margin:0;padding:16px 0}',
+      '#' + UPDATE_ID + '{margin:0;padding:16px 0;border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
       '#' + UPDATE_ID + ' .dsh-update-title{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#0F1115)}',
-      '#' + UPDATE_ID + ' .dsh-enhance-badge{font-size:12px;font-weight:400;color:var(--dsw-alias-label-primary,#0F1115);background:var(--dsw-alias-bg-module-platform,#EBEEF2);border-radius:999px;padding:2px 8px}',
       '#' + UPDATE_ID + ' .dsh-update-version{margin:0 0 4px;font-size:12px;color:var(--dsw-alias-label-tertiary,#8A9099)}',
       '#' + UPDATE_ID + ' .dsh-update-status{margin:0 0 8px;font-size:13px;color:var(--dsw-alias-label-secondary,#6E7480)}',
       '#' + UPDATE_ID + ' .dsh-update-status.is-error{color:var(--dsw-alias-status-error,#D93F3F)}',
@@ -452,7 +641,7 @@ function injectEnhance(panel: Element): void {
   const block = document.createElement('div')
   block.id = ENHANCE_ID
   block.innerHTML =
-    '<div class="dsh-enhance-title">连接<span class="dsh-enhance-badge">增强功能</span>'
+    '<div class="dsh-enhance-title">连接'
     + '<div class="dsh-enhance-actions">'
     + '<button class="dsh-enhance-button dsh-enhance-switch" id="dsh-enhance-switch" type="button" hidden>切换连接</button>'
     + '<button class="dsh-enhance-button" id="dsh-enhance-save" type="button">保存并连接</button>'
@@ -550,7 +739,6 @@ function injectEnhance(panel: Element): void {
 
 function updateCopy(english: boolean): {
   title: string
-  badge: string
   check: string
   checking: string
   install: string
@@ -574,7 +762,6 @@ function updateCopy(english: boolean): {
   if (english) {
     return {
       title: 'App updates',
-      badge: 'Enhanced',
       check: 'Check for updates',
       checking: 'Checking…',
       install: 'Download and install',
@@ -598,7 +785,6 @@ function updateCopy(english: boolean): {
   }
   return {
     title: '应用更新',
-    badge: '增强功能',
     check: '检查更新',
     checking: '检查中…',
     install: '下载并安装',
@@ -731,7 +917,6 @@ function applyUpdateStaticCopy(block: HTMLElement, english: boolean): void {
     if (el !== null) el.textContent = text
   }
   setText('#dsh-update-title-text', copy.title)
-  setText('#dsh-update-badge', copy.badge)
   setText('#dsh-update-install', copy.install)
   setText('#dsh-update-dismiss', copy.dismiss)
   const link = block.querySelector('#dsh-update-releases')
@@ -765,7 +950,6 @@ function injectUpdate(panel: Element): void {
   block.dataset.dshLanguage = english ? 'en' : 'zh'
   block.innerHTML =
     '<div class="dsh-update-title"><span id="dsh-update-title-text">' + copy.title + '</span>'
-    + '<span class="dsh-enhance-badge" id="dsh-update-badge">' + copy.badge + '</span>'
     + '<div class="dsh-enhance-actions">'
     + '<a class="dsh-update-link" id="dsh-update-releases" href="' + RELEASES_PAGE_URL + '" target="_blank"'
     + ' rel="noreferrer" title="' + copy.releases + '" aria-label="' + copy.releases + '">' + EXTERNAL_LINK_SVG + '</a>'
@@ -910,30 +1094,21 @@ function watchSettingsDialog(): void {
   watching = true
   const probe = (): void => {
     injectKeyHelp()
-    // The block belongs to the general tab's panel only. React does not always
-    // replace that panel on a tab switch, so an injection that is never
-    // withdrawn leaks the card onto another tab (where it reads as a misplaced
-    // official row). Withdraw it whenever its seat is no longer showing.
-    const panel = generalPanel()
-    const existing = document.getElementById(ENHANCE_ID)
-    const existingUpdate = document.getElementById(UPDATE_ID)
-    if (panel === null || (existing !== null && existing.parentElement !== panel)) existing?.remove()
-    if (panel === null || (existingUpdate !== null && existingUpdate.parentElement !== panel)) existingUpdate?.remove()
-    if (panel !== null) {
-      injectEnhance(panel)
-      injectUpdate(panel)
-      const card = document.getElementById(UPDATE_ID)
-      if (card !== null) refreshUpdateLanguage(card, currentEnglish())
-    }
-  }
-
-  /** The visible general-tab panel of the open settings dialog, when that is what is showing. */
-  const generalPanel = (): Element | null => {
     const dialog = findSettingsDialog()
-    if (dialog === null || !isGeneralTab(dialog)) return null
+    if (dialog === null) {
+      // The dialog unmounted (taking our nav item, panel, and the elements we
+      // stripped with it): drop the selection so the next open starts clean.
+      if (document.getElementById(DESKTOP_TAB_ID) === null) {
+        desktopTabSelected = false
+        strippedActive = []
+      }
+      return
+    }
+    const navList = findNavList(dialog)
     const options = findOptions(dialog)
-    if (options === null) return null
-    return findVisiblePanel(options)
+    if (navList === null || options === null) return
+    ensureDesktopTab(navList)
+    if (desktopTabSelected) enforceDesktopSelection(navList, options)
   }
   // The observer sees every mutation of a streaming chat surface, and a probe
   // measures element boxes. Running one per animation frame both collapses
@@ -955,15 +1130,22 @@ function watchSettingsDialog(): void {
   probe()
 }
 
-/** The card's language, resolved from the official setting at the moment of the call. */
+/**
+ * The cards' language, resolved from the official nav labels at the moment of
+ * the call — the active tab is ours while they are showing, so the language
+ * has to be read off the tab list itself. Chinese when the dialog is away.
+ */
 function currentEnglish(): boolean {
-  return !isChineseGeneralTab()
-}
-
-function isChineseGeneralTab(): boolean {
   const dialog = findSettingsDialog()
-  if (dialog === null) return true
-  return isGeneralTab(dialog) && !/General/i.test(dialog.querySelector('[class*="navList"]')?.querySelector('[class*="active"]')?.textContent ?? '')
+  if (dialog === null) return false
+  const navList = findNavList(dialog)
+  if (navList === null) return false
+  for (const child of navList.children) {
+    const label = child.textContent?.trim() ?? ''
+    if (label === '通用设置') return false
+    if (label === 'General' || label === 'General Settings') return true
+  }
+  return false
 }
 
 if (document.readyState === 'loading') {
