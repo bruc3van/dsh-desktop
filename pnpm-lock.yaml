@@ -46,8 +46,8 @@ importers:
         specifier: 0.1.0-rc.6
         version: 0.1.0-rc.6(747a41d0547926e514b50a187dac12e4)
       dsh-desktop-safe-market:
-        specifier: https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.4.tar.gz
-        version: https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.4.tar.gz(3337eec68ff8cfd4dea3630f846d9254)
+        specifier: https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.7.tar.gz
+        version: https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.7.tar.gz(3337eec68ff8cfd4dea3630f846d9254)
     optionalDependencies:
       '@deepseek-ai/node-addon-landlock-run-linux-x64':
         specifier: 0.1.1
@@ -3495,9 +3495,9 @@ packages:
     resolution: {integrity: sha512-ZmdL2rui+eB2YwhsWzjInR8LldtZHGDoQ1ugH85ppHKwpUHL7j7rN0Ti9NCnGiQbhaZ11FpR+7ao1dNsmduNUg==}
     engines: {node: '>=12'}
 
-  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.4.tar.gz:
-    resolution: {integrity: sha512-vlT4AS0zfgMNDunnEX+q65EqBTFWDL1aNNlR0Ryrcu+63JN1KaoW1NkyGbvJAypt12kA9i857xH/04OEyZtSIw==, tarball: https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.4.tar.gz}
-    version: 0.2.4
+  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.7.tar.gz:
+    resolution: {integrity: sha512-c11EhlBLGp7Y30Hi4FiUR53vOr0tdfhFLuafJKBhJywAJ6N062pzK6fBLfcTVrDOLqFsTMOihUAwZYlExLNEdQ==, tarball: https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.7.tar.gz}
+    version: 0.2.7
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
       '@deepseek-ai/cordis-plugin-loader': '>=1.0.0'
@@ -8843,7 +8843,7 @@ snapshots:
 
   dotenv@16.4.5: {}
 
-  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.4.tar.gz(3337eec68ff8cfd4dea3630f846d9254):
+  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.2.7.tar.gz(3337eec68ff8cfd4dea3630f846d9254):
     dependencies:
       yaml: 2.9.0
       zod: 4.4.3

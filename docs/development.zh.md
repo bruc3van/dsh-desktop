@@ -24,7 +24,7 @@ pnpm run dev
 
 第 2、3 步都跑在**你自己的 Node** 上，且只使用**已经存在**的包——不联网、不下载、不替你安装 Node.js；缓存里没有就直接跳过。客户端读取缓存包的 `package.json` 校验其确实是 `@deepseek-ai/dsh` 并取用真实版本号，不会误启动同路径下的其他东西。npx 缓存不会自行更新：若缓存版本低于内置运行时，客户端仍优先使用你的缓存，但会在连接设置里提示；重新运行一次 `npx @deepseek-ai/dsh web` 即可把缓存刷新到最新版。
 
-启动的都是纯后台服务进程（`dsh web --port 0`），不会打开浏览器窗口，也不占用 3080；退出桌面端时，客户端启动的服务会被一并关闭。若选中的运行时启动失败，客户端会自动回退到内置运行时。连接设置里会显示当前用的是哪一种（本机安装 / npx 缓存 / 内置）及其版本。内置安全市场只随内置闭包接入（复用实例、用户自装的 dsh 与固定地址会撤回）；源码运行可用 `DSH_DESKTOP_SKIP_INSTALLED_DSH=1` 固定到内置闭包体验，见下文「开发与验证」与 README 的[「内置安全市场」](../README.md#内置安全市场)。
+启动的都是纯后台服务进程（`dsh web --port 0`），不会打开浏览器窗口，也不占用 3080；退出桌面端时，客户端启动的服务会被一并关闭。若选中的运行时启动失败，客户端会自动回退到内置运行时。连接设置里会显示当前用的是哪一种（本机安装 / npx 缓存 / 内置）及其版本。内置安全市场会接入客户端启动的任一运行时（复用实例与固定地址除外——那两种不由客户端启动），见下文「开发与验证」与 README 的[「内置安全市场」](../README.md#内置安全市场)。
 
 如果内置运行时无法启动，或希望使用其他实例，请打开**「设置 → 通用设置 → 连接」**修改连接；页面完全加载不出来时，启动界面会直接给出**「Web UI 连接…」**按钮。
 
@@ -35,7 +35,7 @@ pnpm run build          # 构建 Electron 主进程与 preload
 pnpm run prepare:runtime # 准备内置 dsh 运行时闭包
 pnpm run check:picker   # 验证内置 Win32 目录选择器兼容补丁
 pnpm run check:runtime-env # 验证 Agent 执行环境不继承 Electron Node 模式变量
-pnpm run check:bundled-plugin # 验证内置市场接入/撤回契约
+pnpm run check:bundled-plugin # 验证内置市场接入/撤回/版本闸契约
 pnpm run check:runtime-lock # 验证运行时锁定与更新安装时序
 pnpm run dist           # 为当前平台生成安装包
 pnpm run typecheck      # TypeScript 类型检查
@@ -55,8 +55,10 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 ### 内置安全市场（开发）
 
 - 市场版本固定在 `dsh-runtime/package.json` 的 `dsh-desktop-safe-market` tarball 依赖上，与官方运行时同处发布闭包、随安装包交付——升级该依赖版本即升级客户端内置的市场。
-- 客户端只在解析到自己的内置闭包（`source: 'bundled'`）时接入市场：往 profile 的 `dsh.profile.bundles` 写一个条目、并建一条指向闭包的软链；复用实例、用户自装的 dsh 与固定地址一律撤回。新增 / 已存在 / 用户自装 / 旧覆盖抬升 / 撤回 / 弃置 / 异族目录 / 缺失插件 / 无 profile / 升级改指软链各情形的契约由 `check:bundled-plugin` 回归固定。
-- 源码运行固定体验市场：`DSH_DESKTOP_SKIP_INSTALLED_DSH=1 pnpm run dev`（跳过已安装 dsh 检测，解析到内置闭包）。
+- 客户端向它**启动**的每一个运行时接入市场（内置 / PATH 上的 dsh / npx 缓存都算）：把插件**复制**到 `<DSH_HOME>/profiles/node_modules`，并往 profile 的 `dsh.profile.bundles` 写一个条目。复制而非软链是跨运行时的关键——Node 按 realpath 解析，软链会让插件的 `@deepseek-ai/*` 落回客户端闭包，把第二份 Service 类交给正在服务的运行时。副本目录带 `.dsh-desktop-seat.json` 标记归属；老客户端留下的软链会被自动换成副本。
+- 把关的是版本闸（`runtimeRefusal()`）：插件按客户端自带的 dsh 编译，更旧的运行时可能缺它 import 的导出，拒绝；更新的放行；版本读不出来也拒绝，不猜。复用实例与固定地址仍撤回——客户端不掌握它们的启动时机。新增 / 已存在 / 用户自装 / 旧覆盖抬升 / 撤回 / 弃置 / 异族目录 / 缺失插件 / 无 profile / 升级重新复制 / 旧软链替换 / 版本闸各情形的契约由 `check:bundled-plugin` 回归固定。
+- 移除路径有两条，覆盖不同时刻：客户端连接设置里的「接入内置插件市场」开关（关掉即撤条目 + 删副本，选择持久写进 `~/.dsh-desktop/settings.json`——座位每次启动都会重新接入，没有持久记号的移除会自我撤销）；以及市场自己的已安装面板，它会列出带 `.dsh-desktop-seat.json` 标记的座位并允许卸载——那是客户端已被卸载后仅剩的入口。
+- 源码运行想固定用内置闭包（而不是你自己的 dsh）：`DSH_DESKTOP_SKIP_INSTALLED_DSH=1 pnpm run dev`。市场本身不再需要这个开关。
 - 市场的目录管线（每日自动采集 + 人工精选）、「先审查、再安装」提示词与安全边界在市场仓库维护；接入实现见 `src/main/bundled-plugin.ts`。
 
 ## 版本发布

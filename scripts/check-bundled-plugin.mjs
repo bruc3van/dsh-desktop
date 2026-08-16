@@ -4,15 +4,20 @@
  * The seat mutates a user-shared `~/.dsh` profile. These cases pin the
  * contracts the client relies on (add / already-present / user-owned /
  * stale overlay lifted / withdraw / abandon / foreign directory /
- * missing plugin / no profile / upgrade retargets a stale link) against a
- * temporary home, without booting Electron.
+ * missing plugin / no profile / upgrade re-copies / an older client's link
+ * replaced / the version gate) against a temporary home, without booting
+ * Electron.
+ *
+ * The seat is a COPY, and several cases exist only to hold that: a link made
+ * the plugin resolve its `@deepseek-ai/*` imports inside the client's own
+ * closure, which is what once confined the market to the bundled runtime.
  *
  * The module is bundled through esbuild rather than imported directly, so this
  * check does not depend on the host Node's TypeScript stripping.
  * @module desktop/scripts/check-bundled-plugin
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -35,9 +40,32 @@ await esbuild.build({
 const {
   BUNDLED_PLUGIN_NAME,
   abandonBundledPlugin,
+  runtimeRefusal,
   seatBundledPlugin,
   withdrawBundledPlugin,
 } = await import(pathToFileURL(outfile).href)
+
+/**
+ * The runtime the fixtures seat into: same version as the one this client
+ * would ship, which is the ordinary case the gate lets through.
+ */
+const RUNTIME = { version: '0.1.0-rc.6', builtAgainst: '0.1.0-rc.6' }
+
+/** The marker naming a seat directory as the client's own. */
+const SEAT_MARKER = '.dsh-desktop-seat.json'
+
+/** Whether the seat is this client's copy of the plugin at the given version. */
+const seatedCopy = (home, version) => {
+  const seat = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
+  if (!existsSync(seat) || lstatSync(seat).isSymbolicLink()) return false
+  if (!existsSync(join(seat, 'package.json'))) return false
+  try {
+    const marker = JSON.parse(readFileSync(join(seat, SEAT_MARKER), 'utf8'))
+    return marker.owner === 'dsh-desktop' && (version === undefined || marker.version === version)
+  } catch {
+    return false
+  }
+}
 
 const failures = []
 const check = (name, ok, detail) => {
@@ -75,7 +103,7 @@ const emptyBundles = {
 console.log('\n# seatBundledPlugin')
 {
   const home = await fixtureHome()
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   check('no profile yet is not seated', result.seated === false && result.added === false,
     result.error)
 }
@@ -83,7 +111,7 @@ console.log('\n# seatBundledPlugin')
 {
   const home = await fixtureHome()
   writeProfile(home, { name: 'dsh-profile-web', private: true })
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   check('a profile with no bundle list is not seated', result.seated === false && result.added === false,
     result.error)
 }
@@ -91,18 +119,21 @@ console.log('\n# seatBundledPlugin')
 {
   const home = await fixtureHome()
   writeProfile(home, emptyBundles)
-  const first = seatBundledPlugin(pluginDir, home)
+  const first = seatBundledPlugin(pluginDir, home, RUNTIME)
   const bundles = readProfile(home).dsh.profile.bundles
   const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
   check('first seat adds the bundle name', first.seated === true && first.added === true)
   check('the name is in dsh.profile.bundles', bundles.includes(BUNDLED_PLUGIN_NAME),
     JSON.stringify(bundles))
   check('the official bundles stay in place', bundles[0] === '@deepseek-ai/dsh-base')
-  check('a symlink (or junction) points at the closure copy',
-    existsSync(link) && lstatSync(link).isSymbolicLink() && readlinkSync(link) === pluginDir)
+  check('the seat is a real directory carrying the plugin, not a link into the closure',
+    seatedCopy(home, '0.2.1'),
+    'a link would make the plugin resolve its @deepseek-ai imports inside the closure')
+  check('no staging directory is left beside the seat',
+    existsSync(link + '.' + String(process.pid) + '.tmp') === false)
   const leftover = existsSync(join(home, 'profiles', 'web', 'package.json.' + String(process.pid) + '.tmp'))
   check('atomic write leaves no sibling .tmp', leftover === false)
-  const second = seatBundledPlugin(pluginDir, home)
+  const second = seatBundledPlugin(pluginDir, home, RUNTIME)
   check('a second seat reports already present', second.seated === true && second.added === false)
   rmSync(home, { recursive: true, force: true })
 }
@@ -113,15 +144,13 @@ console.log('\n# seatBundledPlugin')
   const oldDir = join(outDir, 'plugin-old')
   mkdirSync(oldDir)
   writeFileSync(join(oldDir, 'package.json'), JSON.stringify({ name: BUNDLED_PLUGIN_NAME, version: '0.0.0-old' }) + '\n')
-  const first = seatBundledPlugin(oldDir, home)
-  const upgraded = seatBundledPlugin(pluginDir, home)
-  const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
+  const first = seatBundledPlugin(oldDir, home, RUNTIME)
+  const upgraded = seatBundledPlugin(pluginDir, home, RUNTIME)
   const listed = readProfile(home).dsh.profile.bundles.filter(name => name === BUNDLED_PLUGIN_NAME)
   check('a first seat against an old closure is seated', first.seated === true && first.added === true)
-  check('upgrading the closure retargets the link without rewriting bundles',
+  check('upgrading the closure re-copies the seat without rewriting bundles',
     upgraded.seated === true && upgraded.added === false
-    && lstatSync(link).isSymbolicLink() && readlinkSync(link) === pluginDir
-    && listed.length === 1)
+    && seatedCopy(home, '0.2.1') && listed.length === 1)
   rmSync(home, { recursive: true, force: true })
 }
 
@@ -133,13 +162,12 @@ console.log('\n# seatBundledPlugin')
   })
   const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
   mkdirSync(dirname(link), { recursive: true })
-  const separator = process.platform === 'win32' ? '\\' : '/'
-  symlinkSync(pluginDir + separator, link, process.platform === 'win32' ? 'junction' : 'dir')
-  const result = seatBundledPlugin(pluginDir, home)
-  check('a link whose target differs only by a trailing separator is already seated',
-    result.seated === true && result.added === false)
-  check('a trailing-separator link is left in place',
-    existsSync(link) && lstatSync(link).isSymbolicLink())
+  // What a client up to 0.2.0 left behind: a link into its own closure.
+  symlinkSync(pluginDir, link, process.platform === 'win32' ? 'junction' : 'dir')
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
+  check('a link left by an older client is replaced by a copy',
+    result.seated === true && seatedCopy(home, '0.2.1'),
+    'the link is what confined the plugin to the client\'s own runtime')
   rmSync(home, { recursive: true, force: true })
 }
 
@@ -150,7 +178,7 @@ console.log('\n# seatBundledPlugin')
     dependencies: { [BUNDLED_PLUGIN_NAME]: '0.3.0' },
   })
   writeOverlay(home, '0.3.0')
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   const bundles = readProfile(home).dsh?.profile?.bundles ?? []
   const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
   const overlay = join(home, 'profiles', 'web', 'node_modules', BUNDLED_PLUGIN_NAME)
@@ -160,7 +188,7 @@ console.log('\n# seatBundledPlugin')
     JSON.stringify(bundles))
   check('a newer user overlay keeps its dependency',
     Object.hasOwn(readProfile(home).dependencies ?? {}, BUNDLED_PLUGIN_NAME))
-  check('a newer user overlay gets no client-owned link', existsSync(link) === false)
+  check('a newer user overlay gets no client-owned copy', existsSync(link) === false)
   check('a newer user overlay keeps its nearer install', existsSync(join(overlay, 'package.json')))
   rmSync(home, { recursive: true, force: true })
 }
@@ -172,7 +200,7 @@ console.log('\n# seatBundledPlugin')
     dependencies: { [BUNDLED_PLUGIN_NAME]: '0.2.1' },
   })
   writeOverlay(home, '0.2.1')
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   check('an equal user overlay is left in place',
     result.seated === true && result.added === false && result.lifted !== true
     && Object.hasOwn(readProfile(home).dependencies ?? {}, BUNDLED_PLUGIN_NAME)
@@ -187,16 +215,15 @@ console.log('\n# seatBundledPlugin')
     dependencies: { [BUNDLED_PLUGIN_NAME]: '0.1.4' },
   })
   const overlay = writeOverlay(home, '0.1.4')
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   const profile = readProfile(home)
-  const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
   check('an older user overlay is lifted onto the closure',
     result.seated === true && result.added === true && result.lifted === true)
   check('a lifted overlay is listed in bundles', profile.dsh.profile.bundles.includes(BUNDLED_PLUGIN_NAME))
   check('a lifted overlay is no longer a profile dependency',
     Object.hasOwn(profile.dependencies ?? {}, BUNDLED_PLUGIN_NAME) === false)
-  check('a lifted overlay points the fallback link at the closure',
-    existsSync(link) && lstatSync(link).isSymbolicLink() && readlinkSync(link) === pluginDir)
+  check('a lifted overlay leaves the client-owned copy in the module fallback',
+    seatedCopy(home, '0.2.1'))
   check('a lifted overlay removes the nearer older install', existsSync(overlay) === false)
   rmSync(home, { recursive: true, force: true })
 }
@@ -207,7 +234,7 @@ console.log('\n# seatBundledPlugin')
     ...emptyBundles,
     dependencies: { [BUNDLED_PLUGIN_NAME]: '0.1.4' },
   })
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   check('a listed overlay with no installed files is lifted',
     result.seated === true && result.added === true && result.lifted === true
     && Object.hasOwn(readProfile(home).dependencies ?? {}, BUNDLED_PLUGIN_NAME) === false
@@ -223,7 +250,7 @@ console.log('\n# seatBundledPlugin')
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', BUNDLED_PLUGIN_NAME] } },
   })
   writeOverlay(home, '0.1.4')
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   check('lifting an already-listed older overlay does not rewrite bundles',
     result.seated === true && result.added === false && result.lifted === true
     && readProfile(home).dsh.profile.bundles.filter(name => name === BUNDLED_PLUGIN_NAME).length === 1
@@ -241,7 +268,7 @@ console.log('\n# seatBundledPlugin')
   mkdirSync(foreign, { recursive: true })
   writeFileSync(join(foreign, 'package.json'), '{"name":"impostor"}\n')
   writeOverlay(home, '0.1.4')
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   const profile = readProfile(home)
   check('a blocked link does not take a stale overlay away',
     result.seated === false && result.lifted !== true
@@ -250,14 +277,14 @@ console.log('\n# seatBundledPlugin')
   rmSync(home, { recursive: true, force: true })
 }
 
-console.log('\n# ensureLink vs bundles')
+console.log('\n# the seat copy vs bundles')
 {
   const home = await fixtureHome()
   writeProfile(home, emptyBundles)
   const foreign = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
   mkdirSync(foreign, { recursive: true })
   writeFileSync(join(foreign, 'package.json'), '{"name":"impostor"}\n')
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   const bundles = readProfile(home).dsh.profile.bundles
   check('a foreign real directory is not treated as seated', result.seated === false && result.added === false,
     result.error)
@@ -275,7 +302,7 @@ console.log('\n# ensureLink vs bundles')
   })
   const foreign = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
   mkdirSync(foreign, { recursive: true })
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, RUNTIME)
   const bundles = readProfile(home).dsh.profile.bundles
   check('a leftover name in front of a foreign directory is withdrawn',
     result.seated === false && !bundles.includes(BUNDLED_PLUGIN_NAME),
@@ -283,17 +310,135 @@ console.log('\n# ensureLink vs bundles')
   rmSync(home, { recursive: true, force: true })
 }
 
+console.log('\n# the version gate')
+{
+  // The gate is what replaces "bundled runtimes only". The copy makes the
+  // plugin resolvable anywhere; this decides where it SHOULD go.
+  check('an equal runtime is accepted', runtimeRefusal(RUNTIME) === undefined)
+  check('a newer runtime is accepted — every future dsh is newer than the one we tested',
+    runtimeRefusal({ version: '0.2.0', builtAgainst: '0.1.0-rc.6' }) === undefined)
+  // dsh ships an `rc` sequence, so this is the ordering that actually decides
+  // whether the gate keeps working past rc.9 — string order puts rc.10 first.
+  check('rc.10 is newer than rc.6, not older',
+    runtimeRefusal({ version: '0.1.0-rc.10', builtAgainst: '0.1.0-rc.6' }) === undefined)
+  check('rc.10 is newer than rc.9',
+    runtimeRefusal({ version: '0.1.0-rc.10', builtAgainst: '0.1.0-rc.9' }) === undefined)
+  check('rc.6 is still older than rc.10',
+    typeof runtimeRefusal({ version: '0.1.0-rc.6', builtAgainst: '0.1.0-rc.10' }) === 'string')
+  check('a numeric identifier sorts below an alphanumeric one (semver §11)',
+    typeof runtimeRefusal({ version: '0.1.0-1', builtAgainst: '0.1.0-alpha' }) === 'string')
+  check('a longer prerelease list outranks its own prefix',
+    runtimeRefusal({ version: '0.1.0-rc.1.1', builtAgainst: '0.1.0-rc.1' }) === undefined)
+  check('an older runtime is refused',
+    typeof runtimeRefusal({ version: '0.1.0-rc.3', builtAgainst: '0.1.0-rc.6' }) === 'string')
+  check('an older release line is refused',
+    typeof runtimeRefusal({ version: '0.0.9', builtAgainst: '0.1.0-rc.6' }) === 'string')
+  check('an unknown runtime version is refused, not guessed',
+    typeof runtimeRefusal({ builtAgainst: '0.1.0-rc.6' }) === 'string')
+  check('an unparseable runtime version is refused',
+    typeof runtimeRefusal({ version: 'nightly', builtAgainst: '0.1.0-rc.6' }) === 'string')
+  check('with nothing to compare against the gate stands down',
+    runtimeRefusal({ version: '0.0.1' }) === undefined)
+}
+
+{
+  const home = await fixtureHome()
+  writeProfile(home, emptyBundles)
+  const result = seatBundledPlugin(pluginDir, home, { version: '0.1.0-rc.3', builtAgainst: '0.1.0-rc.6' })
+  const bundles = readProfile(home).dsh.profile.bundles
+  check('an older runtime is not seated', result.seated === false && result.added === false, result.error)
+  check('an older runtime is not listed in bundles', !bundles.includes(BUNDLED_PLUGIN_NAME))
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  const home = await fixtureHome()
+  writeProfile(home, emptyBundles)
+  seatBundledPlugin(pluginDir, home, RUNTIME)
+  const downgraded = seatBundledPlugin(pluginDir, home, { version: '0.1.0-rc.3', builtAgainst: '0.1.0-rc.6' })
+  const bundles = readProfile(home).dsh.profile.bundles
+  check('booting an older runtime withdraws a seat taken by a newer one',
+    downgraded.seated === false && !bundles.includes(BUNDLED_PLUGIN_NAME),
+    'the entry must not outlive the runtime that could carry it')
+  check('the withdrawn seat keeps its copy, so returning costs no copy', seatedCopy(home, '0.2.1'))
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  // The same comparison decides whether a user's own install is stale, and
+  // there it does not merely skip the seat — it deletes the tree. A version
+  // ordering bug is therefore a data-loss bug, not only a gating one.
+  const home = await fixtureHome()
+  writeProfile(home, {
+    ...emptyBundles,
+    dependencies: { [BUNDLED_PLUGIN_NAME]: '0.2.1-rc.10' },
+  })
+  const overlay = writeOverlay(home, '0.2.1-rc.10')
+  const rcClosure = join(outDir, 'plugin-rc6')
+  mkdirSync(rcClosure, { recursive: true })
+  writeFileSync(join(rcClosure, 'package.json'),
+    JSON.stringify({ name: BUNDLED_PLUGIN_NAME, version: '0.2.1-rc.6' }) + '\n')
+  const result = seatBundledPlugin(rcClosure, home, RUNTIME)
+  check('a user overlay at rc.10 is not mistaken for older than a bundled rc.6',
+    result.seated === true && result.added === false && result.lifted === undefined)
+  check("the user's newer install is still on disk", existsSync(join(overlay, 'package.json')),
+    'string ordering would have deleted it as stale')
+  check('the user keeps their dependency entry',
+    readProfile(home).dependencies?.[BUNDLED_PLUGIN_NAME] === '0.2.1-rc.10')
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  // A user-owned copy plus a runtime the gate would refuse: the client is not
+  // touching the seat either way, so it must not report the market as absent.
+  const home = await fixtureHome()
+  writeProfile(home, {
+    ...emptyBundles,
+    dependencies: { [BUNDLED_PLUGIN_NAME]: '0.3.0' },
+  })
+  writeOverlay(home, '0.3.0')
+  const result = seatBundledPlugin(pluginDir, home, { version: '0.1.0-rc.3', builtAgainst: '0.1.0-rc.6' })
+  check('a user-owned copy is reported seated even on a runtime the gate refuses',
+    result.seated === true && result.error === undefined,
+    'the gate has no say over a seat this client is not taking')
+  rmSync(home, { recursive: true, force: true })
+}
+
+{
+  // Seat replacement must never leave the name empty: `dsh.profile.bundles`
+  // lists it, and a boot landing in that window fails loadProfile for every
+  // consumer of the shared profile.
+  const home = await fixtureHome()
+  writeProfile(home, emptyBundles)
+  seatBundledPlugin(pluginDir, home, RUNTIME)
+  const seat = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
+  const litter = seat + '.99999.tmp'
+  mkdirSync(litter, { recursive: true })
+  writeFileSync(join(litter, 'package.json'), '{}')
+  const newer = join(outDir, 'plugin-newer')
+  mkdirSync(newer, { recursive: true })
+  writeFileSync(join(newer, 'package.json'),
+    JSON.stringify({ name: BUNDLED_PLUGIN_NAME, version: '0.9.9' }) + '\n')
+  seatBundledPlugin(newer, home, RUNTIME)
+  check('re-copying leaves the seat populated at the new version', seatedCopy(home, '0.9.9'))
+  check('a staging tree left by a dead process is swept', existsSync(litter) === false)
+  const siblings = readdirSync(join(home, 'profiles', 'node_modules'))
+    .filter(name => name.startsWith(BUNDLED_PLUGIN_NAME + '.'))
+  check('no staging or retired trees survive the swap', siblings.length === 0, JSON.stringify(siblings))
+  rmSync(home, { recursive: true, force: true })
+}
+
 console.log('\n# withdraw / abandon')
 {
   const home = await fixtureHome()
   writeProfile(home, emptyBundles)
-  seatBundledPlugin(pluginDir, home)
+  seatBundledPlugin(pluginDir, home, RUNTIME)
   const withdrawn = withdrawBundledPlugin(home)
   const bundles = readProfile(home).dsh.profile.bundles
-  const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
   check('withdraw removes the bundle name', withdrawn === true && !bundles.includes(BUNDLED_PLUGIN_NAME))
-  check('withdraw leaves the link for a cheap re-seat',
-    existsSync(link) && lstatSync(link).isSymbolicLink())
+  check('withdraw leaves the copy for a cheap re-seat',
+    seatedCopy(home, '0.2.1'),
+    're-seating is then one array entry again, with nothing to copy')
   check('withdraw is a no-op the second time', withdrawBundledPlugin(home) === false)
   rmSync(home, { recursive: true, force: true })
 }
@@ -314,12 +459,12 @@ console.log('\n# withdraw / abandon')
 {
   const home = await fixtureHome()
   writeProfile(home, emptyBundles)
-  seatBundledPlugin(pluginDir, home)
+  seatBundledPlugin(pluginDir, home, RUNTIME)
   const abandoned = abandonBundledPlugin(home)
   const link = join(home, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
   check('abandon removes the bundle name',
     abandoned === true && !readProfile(home).dsh.profile.bundles.includes(BUNDLED_PLUGIN_NAME))
-  check('abandon removes the client-owned link', existsSync(link) === false)
+  check('abandon removes the client-owned copy', existsSync(link) === false)
   rmSync(home, { recursive: true, force: true })
 }
 
@@ -336,6 +481,29 @@ console.log('\n# withdraw / abandon')
   check('a missing plugin drops a leftover bundle name',
     !readProfile(home).dsh.profile.bundles.includes(BUNDLED_PLUGIN_NAME))
   rmSync(home, { recursive: true, force: true })
+}
+
+console.log('\n# the pinned market carries what the docs promise')
+{
+  // The client's docs promise that the market's own installed panel lists
+  // this seat and can remove it — the ONLY way to remove it once the client
+  // is uninstalled. That promise is kept by the market, not by this repo, so
+  // it is only true if `dsh-runtime/package.json` pins a version that has it.
+  // A release where the two drift ships a manual that lies about the one
+  // escape hatch it documents.
+  const require_ = createRequire(join(APP_DIR, 'dsh-runtime', 'package.json'))
+  let body = ''
+  try {
+    body = readFileSync(join(dirname(require_.resolve(BUNDLED_PLUGIN_NAME + '/package.json')), 'lib', 'plugin.js'), 'utf8')
+  } catch (error) {
+    check('the pinned market is resolvable', false, String(error))
+  }
+  if (body !== '') {
+    check('the pinned market can list and remove its own in-box seat',
+      body.includes('dsh-desktop-seat.json') && body.includes('inBox'),
+      'the pinned dsh-desktop-safe-market does not read the ownership marker — bump the tarball in '
+      + 'dsh-runtime/package.json to a release that does, or the removal path the README documents does not exist')
+  }
 }
 
 console.log('\n# closure resolve (dev layout)')

@@ -46,6 +46,12 @@ const connection = {
     }>,
   switchMode: (): Promise<{ switched: boolean; mode?: 'smart' | 'connect'; error?: string }> =>
     ipcRenderer.invoke('desktop:connection:switch') as Promise<{ switched: boolean; mode?: 'smart' | 'connect'; error?: string }>,
+  /** Whether this client seats the bundled marketplace into the runtime it starts. */
+  getMarket: (): Promise<{ enabled: boolean }> =>
+    ipcRenderer.invoke('desktop:market:status') as Promise<{ enabled: boolean }>,
+  /** Turn the seat on or off; turning it off also removes the copied plugin. */
+  setMarket: (enabled: boolean): Promise<{ enabled: boolean }> =>
+    ipcRenderer.invoke('desktop:market:set', enabled) as Promise<{ enabled: boolean }>,
   /** An official Web UI answering on the default port right now, if any. */
   probeLocal: (): Promise<{ url: string | null }> =>
     ipcRenderer.invoke('desktop:connection:probe') as Promise<{ url: string | null }>,
@@ -407,6 +413,10 @@ function injectEnhance(panel: Element): void {
       '#' + ENHANCE_ID + ' .dsh-enhance-switch{background:var(--dsw-alias-label-primary,#0F1115);border-color:var(--dsw-alias-label-primary,#0F1115);color:var(--dsw-alias-bg-layer-1,#fff)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-switch:hover{opacity:.88;background:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-note{margin:10px 0 0;font-size:13px;color:var(--dsw-alias-label-secondary,#6E7480)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-marketRow{margin-top:12px}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-market{display:flex;align-items:center;gap:8px;font-size:13px;'
+        + 'color:var(--dsw-alias-label-primary,#0F1115);cursor:pointer}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-market input{cursor:pointer}',
       '#' + UPDATE_ID + '{margin:0;padding:16px 0}',
       '#' + UPDATE_ID + ' .dsh-update-title{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + UPDATE_ID + ' .dsh-enhance-badge{font-size:12px;font-weight:400;color:var(--dsw-alias-label-primary,#0F1115);background:var(--dsw-alias-bg-module-platform,#EBEEF2);border-radius:999px;padding:2px 8px}',
@@ -452,6 +462,10 @@ function injectEnhance(panel: Element): void {
     + '<input class="dsh-enhance-input" id="dsh-enhance-url" spellcheck="false" placeholder="Web UI 地址，留空 = 智能（本机官方实例优先，否则本地启动）">'
     + '</div>'
     + '<p class="dsh-enhance-note" id="dsh-enhance-note"></p>'
+    + '<div class="dsh-enhance-row dsh-enhance-marketRow">'
+    + '<label class="dsh-enhance-market"><input type="checkbox" id="dsh-enhance-market"> 接入内置插件市场</label>'
+    + '</div>'
+    + '<p class="dsh-enhance-note" id="dsh-enhance-marketNote"></p>'
   const statusEl = block.querySelector('#dsh-enhance-status') as HTMLElement
   const urlEl = block.querySelector('#dsh-enhance-url') as HTMLInputElement
   const noteEl = block.querySelector('#dsh-enhance-note') as HTMLElement
@@ -464,6 +478,29 @@ function injectEnhance(panel: Element): void {
         : ('保存失败：' + (result.error ?? '未知错误'))
     } catch (error) {
       noteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
+    }
+  })
+  const marketEl = block.querySelector('#dsh-enhance-market') as HTMLInputElement
+  const marketNoteEl = block.querySelector('#dsh-enhance-marketNote') as HTMLElement
+  void connection.getMarket().then((state) => { marketEl.checked = state.enabled }, () => {
+    // The row is an enhancement; a bridge that will not answer just leaves it
+    // out rather than putting a checkbox nobody can trust in front of anyone.
+    ;(block.querySelector('.dsh-enhance-marketRow') as HTMLElement | null)?.remove()
+  })
+  marketEl.addEventListener('change', async () => {
+    const wanted = marketEl.checked
+    marketEl.disabled = true
+    try {
+      const result = await connection.setMarket(wanted)
+      marketEl.checked = result.enabled
+      marketNoteEl.textContent = result.enabled
+        ? '已开启。重启客户端后，插件市场会接入当前运行时。'
+        : '已关闭并从 profile 中移除。当前会话里它仍然加载着，重启后消失。'
+    } catch (error) {
+      marketEl.checked = !wanted
+      marketNoteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
+    } finally {
+      marketEl.disabled = false
     }
   })
   switchEl.addEventListener('click', async () => {

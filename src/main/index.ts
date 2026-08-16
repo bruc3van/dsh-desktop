@@ -78,6 +78,16 @@ interface ClientSettings {
   updateDismissedVersion?: string
   /** Epoch ms of the last completed update check (auto-check throttle). */
   updateLastCheckedAt?: number
+  /**
+   * The user asked this client to stop seating the bundled marketplace.
+   *
+   * Durable, and kept HERE rather than in the profile: opting out is a
+   * statement about this client, and the profile is the user's own file. It
+   * has to be durable at all because the seat is re-offered on every start —
+   * without a record, removing the market would simply undo itself the next
+   * time the app opened, which reads as "it will not go away".
+   */
+  bundledMarketDisabled?: boolean
 }
 
 function loadSettings(): ClientSettings {
@@ -113,6 +123,9 @@ function patchSettings(patch: Partial<ClientSettings> = {}, unset: readonly (key
   const next: ClientSettings = {}
   if (!skip.has('serverUrl') && merged.serverUrl !== undefined) next.serverUrl = merged.serverUrl
   if (!skip.has('connectionMode') && merged.connectionMode !== undefined) next.connectionMode = merged.connectionMode
+  if (!skip.has('bundledMarketDisabled') && merged.bundledMarketDisabled !== undefined) {
+    next.bundledMarketDisabled = merged.bundledMarketDisabled
+  }
   if (!skip.has('updateDismissedVersion') && merged.updateDismissedVersion !== undefined) {
     next.updateDismissedVersion = merged.updateDismissedVersion
   }
@@ -663,24 +676,40 @@ function bundledPluginDir(): string | undefined {
 /**
  * Offer — or stop offering — the bundled plugin to the profile about to boot.
  *
- * Only the client's OWN runtime gets the seat. The plugin's live
- * `@deepseek-ai/*` imports resolve upward from inside this closure, so
- * handing it to a dsh the user installed themselves would give that runtime a
- * second copy of the Service classes it already runs. When another runtime is
- * in play the entry is withdrawn instead, so the profile keeps describing
- * what actually serves it.
+ * Every runtime this client STARTS is a candidate, not just its own. The
+ * plugin is copied into `profiles/node_modules` rather than linked into the
+ * closure, so its `@deepseek-ai/*` imports resolve through the graph the
+ * harness heals there for whichever installation is serving — the same way a
+ * plugin installed with `dsh plugin add` resolves. What used to make the seat
+ * unsafe elsewhere (a second copy of the Service classes, reached through the
+ * link's realpath) is therefore gone.
+ *
+ * What replaces it is a version gate: the plugin is built against the runtime
+ * this client ships, so an older one is refused rather than risked. See
+ * `runtimeRefusal`.
+ *
+ * A runtime this client did not start — a reused instance, a pinned address —
+ * still releases the seat. Not for safety: the client is not the one booting
+ * it, so it cannot know when the change would take effect, and writing into a
+ * profile on someone else's schedule is not its business.
  * @param dsh - the resolved command this spawn is about to run.
  */
 function applyBundledPluginSeat(dsh: DshCommand): void {
-  if (dsh.source !== 'bundled') {
-    releaseBundledPluginSeat('the runtime is ' + dsh.source)
+  if (loadSettings().bundledMarketDisabled === true) {
+    // The user's own answer, and it outranks every other reason to seat. The
+    // copy goes too: withdrawing the entry alone would leave a plugin tree in
+    // their profile that nothing loads and nothing ever cleans up.
+    if (abandonBundledPlugin(childHome())) {
+      console.log('[desktop] bundled plugin removed: turned off in connection settings')
+    }
+    bundledPluginSeatInUse = false
     return
   }
   if (bundledPluginSuppressed) {
     releaseBundledPluginSeat('suppressed after a failed boot this session')
     return
   }
-  offerBundledPluginSeat()
+  offerBundledPluginSeat(dsh)
 }
 
 function releaseBundledPluginSeat(reason: string): void {
@@ -690,7 +719,7 @@ function releaseBundledPluginSeat(reason: string): void {
   bundledPluginSeatInUse = false
 }
 
-function offerBundledPluginSeat(): void {
+function offerBundledPluginSeat(dsh: DshCommand): void {
   const home = childHome()
   const pluginDir = bundledPluginDir()
   if (pluginDir === undefined) {
@@ -700,7 +729,10 @@ function offerBundledPluginSeat(): void {
     bundledPluginSeatInUse = false
     return
   }
-  const result = seatBundledPlugin(pluginDir, home)
+  const result = seatBundledPlugin(pluginDir, home, {
+    version: dsh.source === 'bundled' ? (bundledDshVersion() ?? undefined) : dsh.version,
+    builtAgainst: bundledDshVersion() ?? undefined,
+  })
   bundledPluginSeatInUse = result.seated
   if (result.lifted) {
     console.log('[desktop] bundled plugin overlay was older than the closure; using ' + BUNDLED_PLUGIN_NAME
@@ -728,6 +760,12 @@ interface DshCommand {
   shell?: boolean
   label: string
   source: 'override' | 'installed' | 'npx' | 'bundled' | 'checkout' | 'path'
+  /**
+   * The runtime's own dsh version, when this client could read one. It gates
+   * the bundled-plugin seat: the plugin is built against the runtime we ship,
+   * and an older one may not export what it imports.
+   */
+  version?: string
 }
 
 class BundledRuntimeMissingError extends Error {
@@ -750,6 +788,7 @@ function resolveDshCommand(): DshCommand {
       shell: installed.shell,
       label: installed.path + ' (v' + installed.version + ')',
       source: installed.source,
+      version: installed.version,
     }
   }
   const bundled = resolveBundledDsh()
@@ -817,6 +856,8 @@ class WebUiManager {
   lastError: string | null = null
   /** Which runtime the current generation was spawned from (status + fallback). */
   lastSource: DshCommand['source'] | undefined
+  /** The resolved command of the last spawn, for the post-readiness seat. */
+  lastCommand: DshCommand | undefined
 
   constructor(
     private readonly onLog: (line: string) => void,
@@ -858,6 +899,7 @@ class WebUiManager {
     }
     console.log('[desktop] dsh runtime: ' + dsh.source + ' (' + dsh.label + ')')
     this.lastSource = dsh.source
+    this.lastCommand = dsh
     applyBundledPluginSeat(dsh)
     const child = spawn(dsh.command, [...dsh.args, 'web', '--port', '0'], {
       cwd: childHome(),
@@ -2968,8 +3010,9 @@ function markLocalRuntimeReady(url: string): void {
   // A first-ever DSH_HOME has no web profile until the child creates it
   // during boot, so the pre-spawn offer is a no-op. Take the seat now so
   // the next start actually loads the plugin (this process will not).
-  if (webUi?.lastSource === 'bundled' && !bundledPluginSeatInUse && !bundledPluginSuppressed) {
-    offerBundledPluginSeat()
+  const spawned = webUi?.lastCommand
+  if (spawned !== undefined && !bundledPluginSeatInUse && !bundledPluginSuppressed) {
+    offerBundledPluginSeat(spawned)
   }
   if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
   launchBudgetResetTimer = setTimeout(() => {
@@ -3614,6 +3657,44 @@ if (!gotLock) {
       const caller = bridgeCaller(event)
       if (!caller.trusted) throw bridgeDenied()
       return getStatusJson(!caller.remote)
+    })
+    // The marketplace opt-out. Read and write only: taking the seat back is
+    // the client's own job on the next spawn, and doing it here would fight
+    // whatever the running child already loaded.
+    ipcMain.handle('desktop:market:status', (event) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) throw bridgeDenied()
+      return { enabled: loadSettings().bundledMarketDisabled !== true }
+    })
+    ipcMain.handle('desktop:market:set', async (event, enabled: unknown) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) throw bridgeDenied()
+      if (typeof enabled !== 'boolean') return { enabled: loadSettings().bundledMarketDisabled !== true }
+      // A state change asked for by a REMOTE origin gets the same native
+      // confirmation an address change does. Turning the seat off deletes a
+      // directory inside the user's own `~/.dsh`; a page served from
+      // somewhere else must not be able to do that quietly just because the
+      // window happens to be pointed at it.
+      if (caller.remote) {
+        const confirmed = await confirmSensitiveAction(
+          enabled ? '接入内置插件市场？' : '移除内置插件市场？',
+          enabled
+            ? '当前页面来自远端来源，它请求让本客户端在下次启动时接入内置插件市场。'
+            : '当前页面来自远端来源，它请求移除内置插件市场：本机 profile 中的插件条目与复制的插件目录都会被删除。',
+        )
+        if (!confirmed) return { enabled: loadSettings().bundledMarketDisabled !== true }
+      }
+      patchSettings({ bundledMarketDisabled: !enabled })
+      if (!enabled) {
+        // Do it now rather than at the next spawn: the user just asked for it
+        // to be gone, and a profile that still lists it until the next start
+        // is the same "it will not go away" the durable flag exists to avoid.
+        if (abandonBundledPlugin(childHome())) {
+          console.log('[desktop] bundled plugin removed: turned off in connection settings')
+        }
+        bundledPluginSeatInUse = false
+      }
+      return { enabled }
     })
     ipcMain.handle('desktop:connection:probe', async (event) => {
       const caller = bridgeCaller(event)
