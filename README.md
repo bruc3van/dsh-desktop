@@ -209,6 +209,17 @@ pnpm run dev
 
 构建与门禁脚本、运行时选择细节、版本发布流程与项目当前状态见[开发指南](docs/development.zh.md)；进程模型、信任边界和设计取舍见[桌面客户端架构](docs/desktop-client-architecture.zh.md)。欢迎提交贡献与问题反馈，尤其是 Windows 使用、固定地址连接和打包方面的反馈。
 
+## 相关项目
+
+**作者维护**
+
+- **[awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin)** — 用 30 秒为你的 DeepSeek Harness（DSH）找到合适的插件。这不是又一个仓库清单：GitHub 上所有打着 `dsh-plugin` 标签的仓库由脚本每天自动抓取，再经人工逐个核实——真插件进目录，蹭热度的进黑名单，每条剔除理由公开可查；并告诉你每个插件适合谁、从哪里开始。本客户端内置安全市场的目录数据即来源于它，详见[内置安全市场](#内置安全市场)。
+- **[dsh-desktop-safe-market](https://github.com/bruc3van/dsh-desktop-safe-market)** — 先审查再安装的 DSH 市场（review-before-install DSH marketplace）。本客户端随安装包内置的「插件市场」由它实现：目录每日自动采集 + 人工精选，「安全安装」把审查提示词交给 Agent、确认干净后再用官方命令安装。配置项、目录协议与已知限制见其仓库。
+
+**官方仓库**
+
+- **[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)** — DeepSeek Harness: Everything is a Plugin. 官方 `dsh` 与 Web UI 的上游项目：本客户端窗口里加载的正是官方 Web UI，随安装包分发的运行时即官方 `@deepseek-ai/dsh`——本项目是它的非官方第三方桌面客户端。
+
 ## 许可证
 
 [MIT](LICENSE)

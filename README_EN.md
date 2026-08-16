@@ -219,6 +219,17 @@ pnpm run dev
 
 Build commands and gate scripts, runtime-resolution details, the release process, and current project status are documented in the [development guide](docs/development.md); for the process model, trust boundary, and design decisions see [Desktop client architecture](docs/desktop-client-architecture.md). Contributions and issue reports are welcome, especially around Windows behavior, Pinned address connections, and packaging.
 
+## Related projects
+
+**Maintained by the author**
+
+- **[awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin)** — find the right plugin for your DeepSeek Harness (DSH) in 30 seconds. Not another repo list: every repository on GitHub tagged `dsh-plugin` is crawled daily by script and then verified one by one by a human — genuine plugins enter the catalog, topic riders land on the blacklist, and every exclusion reason is public to check. It also tells you who each plugin is for and where to start. The bundled safe marketplace's catalog data comes from it; see [The bundled safe marketplace](#the-bundled-safe-marketplace).
+- **[dsh-desktop-safe-market](https://github.com/bruc3van/dsh-desktop-safe-market)** — the review-before-install DSH marketplace. It powers the **Plugins marketplace** bundled with this client: the catalog is collected daily and curated by hand, and Safe install hands a security-review prompt to the Agent, installing with the official command only after a clean reading. Configuration, the catalog protocol, and known limitations live in its repository.
+
+**Official repositories**
+
+- **[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)** — DeepSeek Harness: Everything is a Plugin. The upstream project behind the official `dsh` and Web UI: this client's window loads the official Web UI itself, and the bundled runtime is the official `@deepseek-ai/dsh` — this project is an unofficial third-party desktop client for it.
+
 ## License
 
 [MIT](LICENSE)
