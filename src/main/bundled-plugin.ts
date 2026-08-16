@@ -36,7 +36,9 @@
  * one. A real directory resolves upward instead, through the graph the
  * harness heals for the installation that is actually serving. Every runtime
  * this client STARTS is therefore a candidate, gated on version alone (see
- * `runtimeRefusal`); runtimes it did not start are released by the caller.
+ * `runtimeRefusal`). A runtime it did not start is released by the caller
+ * when it is a pinned address, and re-seated conservatively — name only,
+ * never a tree swap — when it is a local instance already serving (`serving`).
  * @module dsh-desktop/bundled-plugin
  */
 
@@ -70,6 +72,17 @@ export interface SeatRuntime {
    * a build carrying no runtime of its own to compare with.
    */
   readonly builtAgainst?: string
+  /**
+   * A local instance the client did not start is answering on this machine's
+   * conventional origin, and is ASSUMED — not proven — to be serving this
+   * home's profile (the probe reads host.describe, which carries neither the
+   * dsh version nor the home). An instance that boots a dsh profile and
+   * answers is the compatibility evidence the gate exists to establish, so
+   * the gate is skipped; the seat is then restored conservatively (name
+   * only, see `seatBundledPlugin`) so a wrong assumption costs one manifest
+   * entry, never a tree swap under a live process.
+   */
+  readonly serving?: boolean
 }
 
 /**
@@ -92,8 +105,17 @@ export interface SeatRuntime {
  * Newer runtimes are allowed. Refusing them would freeze the market out of
  * every future dsh, and "newer than what we tested" is the ordinary condition
  * of a plugin, not a fault.
+ *
+ * A runtime already SERVING this profile is allowed without a version to
+ * compare: it demonstrably boots the profile, the plugin's entry guards its
+ * own import for the case the evidence misleads (the guard covers the module
+ * import, not the loader's resolution of the entry's inject names — a
+ * pre-guard failure needs a dsh old enough to miss one of those services),
+ * and the entry only takes effect at the next boot of whatever consumes the
+ * profile — the client's own spawns re-run this gate with a real version then.
  */
 export function runtimeRefusal(runtime: SeatRuntime): string | undefined {
+  if (runtime.serving === true) return undefined
   if (runtime.builtAgainst === undefined) return undefined
   if (runtime.version === undefined) return 'the version of the runtime about to serve is unknown'
   const order = compareVersions(runtime.version, runtime.builtAgainst)
@@ -158,6 +180,17 @@ interface SeatMarker {
 
 /** The marker's owner tag; anything else in that file is not ours. */
 const SEAT_OWNER = 'dsh-desktop'
+
+/** An intact copy this client owns at the seat path — any version. */
+function ownedSeatIntact(dshHome: string): boolean {
+  const seat = seatPath(dshHome)
+  try {
+    if (lstatSync(seat).isSymbolicLink()) return false
+  } catch {
+    return false
+  }
+  return readSeatMarker(seat) !== undefined && existsSync(join(seat, 'package.json'))
+}
 
 function readSeatMarker(dir: string): SeatMarker | undefined {
   try {
@@ -516,6 +549,12 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
   if (userOwned(manifest) && !overlayOlderThanClosure(dshHome, pluginDir)) {
     return { seated: true, added: false }
   }
+  // A stale user overlay is normally lifted, but never under a runtime that
+  // is already serving: the lift deletes a tree that live process may still
+  // read from. Their copy keeps loading; the next spawn lifts it.
+  if (runtime.serving === true && userOwned(manifest)) {
+    return { seated: true, added: false }
+  }
   const refusal = runtimeRefusal(runtime)
   if (refusal !== undefined) {
     // Not a failure and not an error: this runtime is simply outside what
@@ -526,14 +565,22 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
   }
 
   try {
-    // The copy must be in place before a stale overlay is taken away: a
-    // foreign directory at the seat path cannot be replaced, and the user's
-    // older copy is then still the one that loads.
-    ensureSeatCopy(dshHome, pluginDir, version)
     let lifted = false
-    if (userOwned(manifest)) {
-      liftStaleOverlay(dshHome, manifest)
-      lifted = true
+    // Under a serving runtime, an owned copy already in place — any version —
+    // is restored by NAME alone. Replacing the tree retires a directory the
+    // live process may hold open; on Windows that rename can fail EBUSY, the
+    // catch below would withdraw the entry, and the upgrade path would re-dig
+    // the exact hole this seat exists to close. An out-of-date copy is
+    // upgraded by the client's next spawn, behind the real version gate.
+    if (runtime.serving !== true || !ownedSeatIntact(dshHome)) {
+      // The copy must be in place before a stale overlay is taken away: a
+      // foreign directory at the seat path cannot be replaced, and the user's
+      // older copy is then still the one that loads.
+      ensureSeatCopy(dshHome, pluginDir, version)
+      if (userOwned(manifest)) {
+        liftStaleOverlay(dshHome, manifest)
+        lifted = true
+      }
     }
     const bundles = manifest.dsh?.profile?.bundles
     if (!Array.isArray(bundles)) {

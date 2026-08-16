@@ -688,10 +688,12 @@ function bundledPluginDir(): string | undefined {
  * this client ships, so an older one is refused rather than risked. See
  * `runtimeRefusal`.
  *
- * A runtime this client did not start — a reused instance, a pinned address —
- * still releases the seat. Not for safety: the client is not the one booting
- * it, so it cannot know when the change would take effect, and writing into a
- * profile on someone else's schedule is not its business.
+ * A pinned address still releases the seat: it may not even be this machine,
+ * and the client cannot know when a change to a profile it is not booting
+ * would take effect. A LOCAL instance the client adopts (probe, survivor) is
+ * different — it serves this very profile, and releasing the seat under it
+ * left the market unable to see itself in the profile it manages; that path
+ * re-seats instead (see `reseatForAdoptedRuntime`).
  * @param dsh - the resolved command this spawn is about to run.
  */
 function applyBundledPluginSeat(dsh: DshCommand): void {
@@ -717,6 +719,31 @@ function releaseBundledPluginSeat(reason: string): void {
     console.log('[desktop] bundled plugin seat withdrawn: ' + reason)
   }
   bundledPluginSeatInUse = false
+}
+
+/**
+ * Put the seat back when adopting a runtime that is already serving this
+ * profile (a probed instance the user started, a surviving child).
+ * `resolveRuntime` released the seat before it knew who would serve; leaving
+ * it released here strands the running market outside the manifest its
+ * installed panel reads — it cannot see, disable, or uninstall itself. The
+ * version gate cannot run against an adopted instance (host.describe does not
+ * carry the dsh version), so the seat rides on `serving`: the instance
+ * demonstrably boots this profile, and the client's own spawns re-gate.
+ */
+function reseatForAdoptedRuntime(): void {
+  if (loadSettings().bundledMarketDisabled === true || bundledPluginSuppressed) return
+  const pluginDir = bundledPluginDir()
+  if (pluginDir === undefined) return
+  const result = seatBundledPlugin(pluginDir, childHome(), {
+    serving: true,
+    builtAgainst: bundledDshVersion() ?? undefined,
+  })
+  bundledPluginSeatInUse = result.seated
+  if (result.added) console.log('[desktop] bundled plugin re-seated under the adopted runtime: ' + BUNDLED_PLUGIN_NAME)
+  else if (!result.seated && result.error !== undefined) {
+    console.log('[desktop] bundled plugin not seated: ' + result.error)
+  }
 }
 
 function offerBundledPluginSeat(dsh: DshCommand): void {
@@ -3030,6 +3057,7 @@ async function startLocalRuntime(generation: number, force = false): Promise<voi
     configuredTarget = survivor.url
     probeConnected = true
     childTarget = undefined
+    reseatForAdoptedRuntime()
     launchWindow(generation, force)
     return
   }
@@ -3180,9 +3208,10 @@ function fallbackFromProbedInstance(reason: string): boolean {
 function resolveRuntime(force = false): void {
   const generation = ++connectionGeneration
   resetRuntimeRecoveryBudget()
-  // Drop the seat until this process knows it is about to boot its own
-  // closure. The probe below may reuse someone else's instance, and a
-  // leftover name is loaded by every consumer of the shared profile.
+  // Drop the seat until this process knows who will serve. A spawn re-seats
+  // behind the version gate; adopting a running local instance re-seats on
+  // the strength of it already serving this profile (`reseatForAdoptedRuntime`);
+  // only a pinned address leaves the seat released.
   releaseBundledPluginSeat('resolving which runtime will serve')
   const startLocal = async (): Promise<void> => {
     if (installedDshDetection === undefined) {
@@ -3202,6 +3231,7 @@ function resolveRuntime(force = false): void {
       configuredTarget = probed
       probeConnected = true
       childTarget = undefined
+      reseatForAdoptedRuntime()
       if (webUi !== undefined) void webUi.stop()
       launchWindow(generation, force)
       return

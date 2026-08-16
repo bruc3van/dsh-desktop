@@ -335,6 +335,55 @@ console.log('\n# the version gate')
     typeof runtimeRefusal({ version: '0.0.9', builtAgainst: '0.1.0-rc.6' }) === 'string')
   check('an unknown runtime version is refused, not guessed',
     typeof runtimeRefusal({ builtAgainst: '0.1.0-rc.6' }) === 'string')
+  // A reused instance's dsh version is unreadable, but it is up and serving
+  // this very profile — that standing fact substitutes for the comparison.
+  check('a runtime already serving the profile is accepted without a version',
+    runtimeRefusal({ serving: true, builtAgainst: '0.1.0-rc.6' }) === undefined)
+  check('serving outranks an older version reading',
+    runtimeRefusal({ serving: true, version: '0.0.9', builtAgainst: '0.1.0-rc.6' }) === undefined)
+}
+
+console.log('\n# re-seating under a serving runtime (adopt path)')
+{
+  // The reported bug's exact shape: released before the probe, adopted after.
+  const home = await fixtureHome()
+  writeProfile(home, emptyBundles)
+  seatBundledPlugin(pluginDir, home, RUNTIME)
+  withdrawBundledPlugin(home)
+  const result = seatBundledPlugin(pluginDir, home, { serving: true, builtAgainst: RUNTIME.builtAgainst })
+  const bundles = readProfile(home).dsh.profile.bundles
+  check('a withdrawn seat is restored by name under a serving runtime',
+    result.seated === true && bundles.includes(BUNDLED_PLUGIN_NAME), result.error)
+}
+
+{
+  // Client upgraded, then adopted a still-running instance: the copy that
+  // live process may hold open is NOT swapped — a failed retire-rename
+  // (EBUSY on Windows) would withdraw the entry and re-open the bug. The
+  // next spawn upgrades the copy behind the real version gate.
+  const home = await fixtureHome()
+  writeProfile(home, emptyBundles)
+  seatBundledPlugin(pluginDir, home, RUNTIME)
+  withdrawBundledPlugin(home)
+  const newerPlugin = join(outDir, 'plugin-newer')
+  mkdirSync(newerPlugin, { recursive: true })
+  writeFileSync(join(newerPlugin, 'package.json'), JSON.stringify({ name: BUNDLED_PLUGIN_NAME, version: '0.3.0' }) + '\n')
+  const result = seatBundledPlugin(newerPlugin, home, { serving: true, builtAgainst: RUNTIME.builtAgainst })
+  check('a serving re-seat leaves the existing copy alone (the next spawn upgrades)',
+    result.seated === true && seatedCopy(home, '0.2.1'), result.error)
+  const spawned = seatBundledPlugin(newerPlugin, home, { version: '0.1.0-rc.6', builtAgainst: '0.1.0-rc.6' })
+  check('the next gated spawn does upgrade that copy',
+    spawned.seated === true && seatedCopy(home, '0.3.0'), spawned.error)
+}
+
+{
+  // No copy in place at all (fresh home): nothing a live process can be
+  // holding, so the full copy runs — a name alone would fail loadProfile.
+  const home = await fixtureHome()
+  writeProfile(home, emptyBundles)
+  const result = seatBundledPlugin(pluginDir, home, { serving: true, builtAgainst: RUNTIME.builtAgainst })
+  check('a serving seat with no copy in place still copies',
+    result.seated === true && seatedCopy(home, '0.2.1'), result.error)
   check('an unparseable runtime version is refused',
     typeof runtimeRefusal({ version: 'nightly', builtAgainst: '0.1.0-rc.6' }) === 'string')
   check('with nothing to compare against the gate stands down',

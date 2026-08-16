@@ -21,8 +21,10 @@ mkdirSync(desktopHome, { recursive: true })
  * A stand-in for the official settings dialog. The STRUCTURE is what the
  * preload's heuristics read (a visible [role="dialog"] mentioning 设置, a
  * navList whose active item is 通用设置, and a content > options > panel
- * column); the styling below only makes the window legible when a run is
- * watched, so a bare fixture is not mistaken for a broken product surface.
+ * column — the preload clones the 通用设置 item into its own 桌面设置 tab,
+ * which is where the connection card lives); the styling below only makes
+ * the window legible when a run is watched, so a bare fixture is not
+ * mistaken for a broken product surface.
  * The official theme variables are declared for the same reason: the injected
  * card resolves its colors from them, exactly as it does in the real UI.
  */
@@ -143,6 +145,10 @@ try {
     throw new Error('the top frame left the configured origin: ' + window.url())
   }
 
+  // The connection card lives on the injected 桌面设置 tab now, not the
+  // general panel — select it the way a user would.
+  await window.locator('#dsh-desktop-tab').waitFor({ state: 'visible', timeout: 3_000 })
+  await window.click('#dsh-desktop-tab')
   await window.locator('#dsh-desktop-enhance').waitFor({ state: 'visible', timeout: 3_000 })
   if (await window.locator('#dsh-enhance-switch').textContent() !== '切换到智能模式'
     || await window.locator('#dsh-enhance-url').inputValue() !== remoteOrigin) {
