@@ -45,7 +45,7 @@ dsh plugin --profile <profile> add <该仓库 tarball>
 
 ## 已核实的前提
 
-以下事实来自对内置运行时 `@deepseek-ai/dsh@0.1.0-rc.6` 与本仓库源码的核对，是下面设计的依据：
+以下事实来自对内置运行时 `@deepseek-ai/dsh@0.1.0-rc.7` 与本仓库源码的核对，是下面设计的依据（rc.6 → rc.7 升级时复核过：`lib/bin.js` 两版逐字节相同，下列命令行前提全部原样成立）：
 
 - `--profile <name>` 是根命令的**必填项**，裸 `dsh` 直接报错——不存在「默认 profile 被误启动」的情况。
 - `web` 是子命令别名（等价 `--profile web`）；`plugin` 是子命令，带 `requiredOption('--profile')` 与 `rejectParentOptions`，因此 `plugin` 永远是用户参数的第 0 位。

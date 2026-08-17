@@ -37,4 +37,4 @@ allowBuilds:
 # path through koffi.view(). Keep this exact-version patch aligned with
 # `pnpm run check:picker` and reconcile or remove it whenever dsh is upgraded.
 patchedDependencies:
-  '@deepseek-ai/dsh-host-directory-picker-native@0.1.0-rc.6': patches/@deepseek-ai__dsh-host-directory-picker-native@0.1.0-rc.6.patch
+  '@deepseek-ai/dsh-host-directory-picker-native@0.1.0-rc.7': patches/@deepseek-ai__dsh-host-directory-picker-native@0.1.0-rc.7.patch

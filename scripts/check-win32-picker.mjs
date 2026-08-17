@@ -28,7 +28,7 @@ const RUNTIME_DIR = join(APP_DIR, '.runtime', 'node_modules')
 const PICKER_DIR = join(RUNTIME_DIR, '@deepseek-ai', 'dsh-host-directory-picker-native')
 const PICKER_PACKAGE_FILE = join(PICKER_DIR, 'package.json')
 const WORKER_FILE = join(PICKER_DIR, 'lib', 'worker.cjs')
-const EXPECTED_VERSION = '0.1.0-rc.6'
+const EXPECTED_VERSION = '0.1.0-rc.7'
 
 if (!existsSync(PICKER_PACKAGE_FILE) || !existsSync(WORKER_FILE)) {
   throw new Error('deployed dsh runtime is missing; run `pnpm run prepare:runtime` before `pnpm run check:picker`')
