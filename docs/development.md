@@ -39,6 +39,7 @@ pnpm run check:picker   # verify the bundled Win32 picker compatibility patch
 pnpm run check:runtime-env # verify the Agent environment does not inherit Electron's Node-mode variable
 pnpm run check:bundled-plugin # verify the market seat / withdraw / version-gate contract
 pnpm run check:runtime-lock # verify the runtime lock and update-install ordering
+pnpm run check:restart  # verify who the tray Restart may stop
 pnpm run dist           # build packages for the current platform
 pnpm run typecheck      # TypeScript validation
 pnpm run lint           # source and script linting
@@ -50,7 +51,7 @@ pnpm run shot:readme    # refresh the privacy-safe README screenshots
 pnpm run e2e            # send a real prompt and verify the streamed response
 ```
 
-In addition, `scripts/` contains a family of regression checks for connection and runtime behavior: `check:connection` (mode switching), `check:installed-runtime` (installed runtime), `check:runtime-resolution` (runtime resolution), `check:smart-runtimes` (Smart-mode source toggles), `check:bundled-plugin` (in-box market seat / withdraw), `check:runtime-lock` (runtime lock and update ordering), `check:auto-fallback` (occupancy refusal when reuse is turned off, then loss-of-instance fallback), and `check:error-surface` (error UI).
+In addition, `scripts/` contains a family of regression checks for connection and runtime behavior: `check:connection` (mode switching), `check:installed-runtime` (installed runtime), `check:runtime-resolution` (runtime resolution), `check:smart-runtimes` (Smart-mode source toggles), `check:bundled-plugin` (in-box market seat / withdraw), `check:runtime-lock` (runtime lock and update ordering), `check:restart` (who the tray Restart may stop), `check:auto-fallback` (occupancy refusal when reuse is turned off, then loss-of-instance fallback), and `check:error-surface` (error UI).
 
 `pnpm run e2e` needs a valid API key (export `DEEPSEEK_API_KEY=…`, or add one once via 设置 → 凭据). Without one it exits with code 2 on purpose: a skipped live round trip must not look green. It also runs against a throwaway `DSH_HOME`, so it never touches your real sessions. The production window loads the official Web UI; this repository does not maintain a second product renderer. `pnpm run check:updater` drives a local update-feed fixture through check, hash verification, and dismiss.
 
@@ -68,8 +69,8 @@ In addition, `scripts/` contains a family of regression checks for connection an
 To release a version, push its tag directly. GitHub Actions treats the tag as the single version source and writes it to `package.json` during the build:
 
 ```sh
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 GitHub Actions validates the tag format, uses the tag as the release version, then builds:

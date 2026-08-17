@@ -214,15 +214,36 @@ try {
   if (process.platform === 'darwin' && !output.includes('[desktop] restored PATH from the macOS login shell')) {
     throw new Error('packaged macOS app did not restore its login-shell PATH')
   }
-  // This run has no system PATH at all, so the shim is the only `node` the
-  // Agent could find — exactly the position an end user who never installed
-  // Node is in. Assert it exists and actually runs.
-  const shimMatch = /\[desktop\] node shim ready:\s+(.+)/.exec(output)
-  if (shimMatch === null) throw new Error('packaged app did not publish a node shim')
-  const shim = join(shimMatch[1].trim(), process.platform === 'win32' ? 'node.cmd' : 'node')
-  const shimRun = spawnSync(shim, ['--version'], { encoding: 'utf8', shell: process.platform === 'win32' })
+  // This run has no system PATH at all, so the shims are the only `node` /
+  // `dsh` / `pnpm` the Agent could find — exactly the position an end user
+  // who never installed those tools is in. Assert they exist and actually run.
+  const shimMatch = /\[desktop\] runtime shims ready:\s+(.+)/.exec(output)
+  if (shimMatch === null) throw new Error('packaged app did not publish runtime shims')
+  const shimDir = shimMatch[1].trim()
+  const shimName = (name) => process.platform === 'win32' ? name + '.cmd' : name
+  const runShim = (name, args) => spawnSync(join(shimDir, shimName(name)), args, {
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+    timeout: 30_000,
+  })
+  const nodeShim = join(shimDir, shimName('node'))
+  const shimRun = runShim('node', ['--version'])
   if (!/^v\d+\./.test((shimRun.stdout ?? '').trim())) {
     throw new Error('bundled node shim did not report a version: ' + JSON.stringify(shimRun.stdout ?? shimRun.error?.message))
+  }
+  const dshShim = join(shimDir, shimName('dsh'))
+  if (!existsSync(dshShim)) throw new Error('packaged app did not publish a dsh shim: ' + dshShim)
+  const dshRun = runShim('dsh', ['--version'])
+  if (dshRun.status !== 0 || !/\d+\.\d+/.test((dshRun.stdout ?? '') + (dshRun.stderr ?? ''))) {
+    throw new Error('bundled dsh shim did not report a version: '
+      + JSON.stringify({ status: dshRun.status, stdout: dshRun.stdout, stderr: dshRun.stderr, error: dshRun.error?.message }))
+  }
+  const pnpmShim = join(shimDir, shimName('pnpm'))
+  if (!existsSync(pnpmShim)) throw new Error('packaged app did not publish a pnpm shim: ' + pnpmShim)
+  const pnpmRun = runShim('pnpm', ['--version'])
+  if (pnpmRun.status !== 0 || !/\d+\.\d+/.test((pnpmRun.stdout ?? '').trim())) {
+    throw new Error('bundled pnpm shim did not report a version: '
+      + JSON.stringify({ status: pnpmRun.status, stdout: pnpmRun.stdout, stderr: pnpmRun.stderr, error: pnpmRun.error?.message }))
   }
   // Same contract as `pnpm run check:runtime-env`, but on the Electron Node a
   // release actually runs: only there is "spawn my own executable and get
@@ -243,7 +264,9 @@ try {
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
   console.log('✓ packaged resources include dsh-cli.mjs')
   console.log('✓ packaged pnpm.mjs is present and artifacts/ was pruned')
-  console.log('✓ bundled node shim runs with no system PATH: ' + shim)
+  console.log('✓ bundled node shim runs with no system PATH: ' + nodeShim)
+  console.log('✓ bundled dsh shim reports a version')
+  console.log('✓ bundled pnpm shim reports a version')
   console.log('✓ packaged runtime keeps ELECTRON_RUN_AS_NODE out of the Agent environment')
   console.log('✓ packaged Web UI answered host.describe at ' + url)
 } catch (error) {

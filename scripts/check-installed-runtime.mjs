@@ -18,9 +18,9 @@
  */
 
 import { createServer } from 'node:http'
-import { chmodSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { _electron as electron } from 'playwright-core'
@@ -55,6 +55,45 @@ function fixtureBinDir() {
 }
 
 const binDir = fixtureBinDir()
+
+/**
+ * A PATH prefix that publishes `node` but not `dsh`.
+ *
+ * npx detection spawns the found `node` without a shell, so Windows must
+ * offer a real `node.exe` — a `.cmd` wrapper is found, then fails to start.
+ * Prefer the directory this process is running from when it is dsh-free;
+ * otherwise plant a node-only entry (hardlink, copy, or POSIX shim).
+ */
+function nodeOnlyPrefix() {
+  const dir = dirname(process.execPath)
+  const names = process.platform === 'win32' ? ['dsh.exe', 'dsh.cmd', 'dsh.bat'] : ['dsh']
+  if (!names.some((name) => existsSync(join(dir, name)))) return dir
+  const only = join(checkHome, 'node-only')
+  mkdirSync(only, { recursive: true })
+  if (process.platform === 'win32') {
+    const target = join(only, 'node.exe')
+    try { linkSync(process.execPath, target) }
+    catch { copyFileSync(process.execPath, target) }
+    return only
+  }
+  const shim = join(only, 'node')
+  writeFileSync(shim, ['#!/bin/sh', 'exec "' + process.execPath + '" "$@"', ''].join('\n'))
+  chmodSync(shim, 0o755)
+  return only
+}
+
+const nodeOnlyDir = nodeOnlyPrefix()
+
+/** Drop directories that themselves publish a `dsh`, so pathDsh:false cannot
+ *  pick up the developer's real install. `node` is re-supplied by nodeOnlyDir. */
+function pathWithoutDsh(pathValue) {
+  const names = process.platform === 'win32' ? ['dsh.exe', 'dsh.cmd', 'dsh.bat'] : ['dsh']
+  return pathValue.split(delimiter).filter((entry) => {
+    const dir = entry.trim().replace(/^"(.*)"$/, '$1')
+    if (dir === '') return false
+    return !names.some((name) => existsSync(join(dir, name)))
+  }).join(delimiter)
+}
 
 /**
  * A stand-in for what `npx @deepseek-ai/dsh web` leaves behind — the runtime
@@ -111,6 +150,12 @@ async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
       inheritedPath = value ?? ''
       continue
     }
+    // Same Windows casing trap as PATH: the host may already spell this
+    // `NPM_CONFIG_CACHE`, so a literal `npm_config_cache` override would
+    // leave both in the object and libuv's case-insensitive dedup could
+    // keep the inherited one. Strip every casing; callers that need a
+    // cache set it once below.
+    if (upper === 'NPM_CONFIG_CACHE') continue
     // A leftover diagnostic from a previous packaged run must not skip PATH
     // detection or pin a command this check did not ask for.
     if (upper === 'DSH_DESKTOP_SKIP_INSTALLED_DSH') continue
@@ -124,7 +169,15 @@ async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
   env.DSH_DESKTOP_HOME = join(home, 'desktop')
   // Without the fixture dir the run has no `dsh` on PATH at all — the state
   // every user who followed `npx @deepseek-ai/dsh web` is actually in.
-  env.PATH = pathDsh ? binDir + delimiter + inheritedPath : inheritedPath
+  env.PATH = pathDsh
+    ? binDir + delimiter + inheritedPath
+    : nodeOnlyDir + delimiter + pathWithoutDsh(inheritedPath)
+  if (!Object.keys(env).some((key) => key.toUpperCase() === 'NPM_CONFIG_CACHE')) {
+    // Isolate every launch from the default `%LOCALAPPDATA%\npm-cache`. A
+    // machine that has run `npx @deepseek-ai/dsh` would otherwise offer that
+    // cache as the npx rung, including the "failed PATH → bundled" case.
+    env.npm_config_cache = join(home, 'empty-npm-cache')
+  }
   return electron.launch({
     args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(home, 'chromium')],
     env,

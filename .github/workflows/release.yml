@@ -108,6 +108,9 @@ jobs:
       - name: 验证运行时锁契约 / Verify runtime lock contract
         run: pnpm run check:runtime-lock
 
+      - name: 验证托盘重启杀进程表 / Verify tray-restart stop table
+        run: pnpm run check:restart
+
       - name: 验证运行时解析契约 / Verify runtime resolution contract
         run: pnpm run check:runtime-resolution
 

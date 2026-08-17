@@ -323,11 +323,11 @@ function ensureShims(): string | undefined {
     writeDshShim(binDir)
     writePnpmShim(binDir)
     shimDirMemo = binDir
-    console.log('[desktop] node shim ready: ' + binDir)
+    console.log('[desktop] runtime shims ready: ' + binDir)
     return binDir
   } catch (error) {
     // A missing shim costs the Agent one convenience, never the session.
-    console.warn('[desktop] node shim unavailable: ' + (error instanceof Error ? error.message : String(error)))
+    console.warn('[desktop] runtime shims unavailable: ' + (error instanceof Error ? error.message : String(error)))
     return undefined
   }
 }
@@ -1131,6 +1131,8 @@ class WebUiManager {
       // through the same fatal-error surface as a damaged installation.
       this.fatalError = error instanceof Error ? error : new Error(String(error))
       this.lastError = this.fatalError.message
+      this.lastSource = undefined
+      this.lastCommand = undefined
       queueMicrotask(() => {
         this.onExit({ wasReady: false, code: null, signal: null, retryable: false })
       })
@@ -1142,6 +1144,10 @@ class WebUiManager {
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error))
       this.lastError = failure.message
+      // This generation never started: do not let onExit attribute the miss
+      // to the previous source (which would reject PATH/npx and respawn).
+      this.lastSource = undefined
+      this.lastCommand = undefined
       // "Nothing enabled" is a settings choice, not a damaged install: the
       // user can tick a source and retry. A missing bundled runtime cannot.
       if (!(failure instanceof NoEnabledSmartRuntimeError)) this.fatalError = failure

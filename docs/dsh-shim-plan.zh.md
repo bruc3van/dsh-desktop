@@ -1,6 +1,6 @@
 # dsh shim 与 pnpm 打包实施计划
 
-> 状态：**待实施**。本文是落地前的设计与验收清单，不是已完成功能的说明。
+> 状态：**已落地**（随客户端主干一并发布）。下文是落地前的设计与验收清单，保留当时的问题陈述；实现以代码与[架构文档](desktop-client-architecture.zh.md)为准。
 > 相关：[桌面客户端架构](desktop-client-architecture.zh.md)、[TODO](../TODO.md)。
 
 ## 背景
@@ -15,7 +15,7 @@ dsh plugin --profile <profile> add <该仓库 tarball>
 
 市场 0.2.9 起，提示词不再假定 `dsh` 就在 PATH 上，而是让 Agent 自己按四步定位：① PATH；② dsh 默认安装目录；③ npm / pnpm 全局 bin；④ 正在监听 1466 端口的 dsh 进程，取其可执行文件路径。**这改善了失败的形态，但没有关闭这个洞**——内置运行时下四步全部落空：
 
-- ①②③ 对纯桌面用户本就为空。客户端只往子进程 PATH 追加 `~/.dsh-desktop/bin`，那里只有 `ensureNodeShim()` 写出的 `node`；闭包里的 `dsh-runtime/node_modules/.bin/dsh` 不在 PATH 上。
+- ①②③ 对纯桌面用户本就为空。当时客户端只往子进程 PATH 追加 `~/.dsh-desktop/bin`，那里只有 `ensureNodeShim()` 写出的 `node`；闭包里的 `dsh-runtime/node_modules/.bin/dsh` 不在 PATH 上。
 - ④ 也匹配不上：客户端以 `web --port 0` 启动运行时（`src/main/index.ts`），端口是随机的，不是 1466。
 
 所以 Agent 拿到的从「命令不存在」变成了「四处都找不到」——更像一条诊断，但仍不是能转述给用户的准确结论。
@@ -24,7 +24,7 @@ dsh plugin --profile <profile> add <该仓库 tarball>
 
 注意本计划的网关**挡不住这一条**：`dsh-cli.mjs` 只在 shim 这条链路上生效，Agent 直接执行客户端 exe 时它根本不在调用栈里。真正的缓解是 shim 让第 ① 步先命中，Agent 压根走不到第 ④ 步——见第一阶段末尾的收益清单。
 
-更深一层：`dsh plugin` 只是 pnpm 的转发器（`spawnSync("pnpm", ...)`，找不到即打印 `pnpm not found on PATH` 并返回 127），而客户端也不打包 pnpm。所以要让市场真正闭环，缺的是**两样东西**。
+更深一层：`dsh plugin` 只是 pnpm 的转发器（`spawnSync("pnpm", ...)`，找不到即打印 `pnpm not found on PATH` 并返回 127），而当时客户端也不打包 pnpm。所以要让市场真正闭环，缺的是**两样东西**。
 
 客户端已经为「从没装过 Node 的用户也该有 `node`」写了 `ensureNodeShim()`。同样的逻辑对 `dsh` 更成立：**Agent 就运行在 dsh 里面，却唯独调用不了 dsh 自己。**
 

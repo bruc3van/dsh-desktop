@@ -39,6 +39,7 @@ pnpm run check:picker   # 验证内置 Win32 目录选择器兼容补丁
 pnpm run check:runtime-env # 验证 Agent 执行环境不继承 Electron Node 模式变量
 pnpm run check:bundled-plugin # 验证内置市场接入/撤回/版本闸契约
 pnpm run check:runtime-lock # 验证运行时锁定与更新安装时序
+pnpm run check:restart  # 验证托盘「重启」允许杀掉谁
 pnpm run dist           # 为当前平台生成安装包
 pnpm run typecheck      # TypeScript 类型检查
 pnpm run lint           # 检查源码与脚本
@@ -50,7 +51,7 @@ pnpm run shot:readme    # 更新 README 使用的隐私安全截图
 pnpm run e2e            # 发送真实请求并验证流式回复
 ```
 
-除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:smart-runtimes`（智能连接来源开关）、`check:bundled-plugin`（内置市场接入 / 撤回）、`check:runtime-lock`（运行时锁定与更新时序）、`check:auto-fallback`（关掉复用时的占用拒绝，以及失联自动回落）与 `check:error-surface`（错误界面）。
+除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:smart-runtimes`（智能连接来源开关）、`check:bundled-plugin`（内置市场接入 / 撤回）、`check:runtime-lock`（运行时锁定与更新时序）、`check:restart`（托盘「重启」允许杀掉谁）、`check:auto-fallback`（关掉复用时的占用拒绝，以及失联自动回落）与 `check:error-surface`（错误界面）。
 
 `pnpm run e2e` 需要有效的 API Key（`export DEEPSEEK_API_KEY=…`，或在「设置 → 凭据」添加一次）。没有 Key 时它有意以退出码 2 失败：被跳过的真实往返不能显示为绿色。它还会在一次性临时 `DSH_HOME` 上运行，绝不会碰到你的真实会话。生产窗口直接加载官方 Web UI；仓库不维护第二套产品 renderer。`pnpm run check:updater` 用本地更新清单夹具验证检查、下载校验和忽略版本。
 
@@ -68,8 +69,8 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 发布版本时直接推送版本 tag；GitHub Actions 会以 tag 为唯一版本来源，并在构建时写入 `package.json`：
 
 ```sh
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 GitHub Actions 会校验 tag 格式，并以 tag 作为发布版本分别构建：
