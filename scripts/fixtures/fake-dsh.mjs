@@ -33,7 +33,7 @@ if (process.env.DSH_FIXTURE_FAIL === '1') {
 const server = createServer((req, res) => {
   if (req.url === '/api/host.describe' && req.method === 'POST') {
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ result: { ok: true } }))
+    res.end(JSON.stringify({ result: { ok: true, value: { version: '0.1.0-rc.6', cwd: '/', attachedSessions: 0, canOpenPath: false } } }))
     return
   }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })

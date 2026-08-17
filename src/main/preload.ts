@@ -440,6 +440,14 @@ function ensureDesktopTab(navList: Element): void {
     for (const name of clone.getAttributeNames()) {
       if (name.startsWith('data-') || name === 'aria-current' || name === 'aria-selected') clone.removeAttribute(name)
     }
+    // Inline on* handlers never belong on this tab: its clicks are routed by
+    // this preload alone, and a template change upstream must not smuggle a
+    // live handler into the clone.
+    for (const el of [clone, ...clone.querySelectorAll('*')]) {
+      for (const name of el.getAttributeNames()) {
+        if (name.startsWith('on')) el.removeAttribute(name)
+      }
+    }
     const icon = clone.querySelector('svg')
     if (icon !== null) {
       const template = document.createElement('template')

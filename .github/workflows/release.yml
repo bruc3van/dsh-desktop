@@ -94,6 +94,17 @@ jobs:
       - name: 验证内置插件接入 / Verify bundled plugin seat
         run: pnpm run check:bundled-plugin
 
+      # The pure-Node contract checks are offline, fast, and assert exactly the
+      # invariants a release must not break (single-writer lock, platform
+      # resolution). They used to run nowhere. The updater contract check also
+      # drives a real Electron window, so it lives in the build matrix below
+      # where a desktop session exists.
+      - name: 验证运行时锁契约 / Verify runtime lock contract
+        run: pnpm run check:runtime-lock
+
+      - name: 验证运行时解析契约 / Verify runtime resolution contract
+        run: pnpm run check:runtime-resolution
+
   prepare-release:
     name: 创建草稿 Release / Create draft release
     needs: validate
@@ -237,6 +248,17 @@ jobs:
         run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # Electron-driven integration checks, run where a real desktop session
+      # exists (the same reason smoke runs here rather than in validate).
+      - name: 验证更新器契约 / Verify updater contract
+        run: pnpm run check:updater
+
+      - name: 验证智能模式回落恢复 / Verify smart-mode fallback recovery
+        run: pnpm run check:auto-fallback
+
+      - name: 验证连接失败界面 / Verify connection failure surface
+        run: pnpm run check:error-surface
 
       - name: 验证安装包内置运行时 / Smoke packaged runtime
         run: ${{ matrix.smoke }}

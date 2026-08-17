@@ -41,6 +41,8 @@ const {
   normalizePathEntry,
   spawnTargetFor,
   parseVersionOutput,
+  parsePsElapsedSeconds,
+  spawnAgeVerdict,
   npxCacheRoot,
 } = await import(pathToFileURL(outfile).href)
 
@@ -127,6 +129,33 @@ equal('leading blank lines are skipped', parseVersionOutput('\n\n  1.0.0\n'), '1
 equal('the first version-shaped line wins', parseVersionOutput('banner\n2.0.0\n3.0.0\n'), '2.0.0')
 equal('output with no version is rejected', parseVersionOutput('command not found\n'), undefined)
 equal('empty output is rejected', parseVersionOutput(''), undefined)
+equal('a leading v on a bare line is still a version', parseVersionOutput('v9.9.9\n'), '9.9.9')
+equal('a build stamp is not a version', parseVersionOutput('Built 2025.08.16\n'), undefined)
+equal('a Node banner is not the dsh version', parseVersionOutput('Node.js v22.19.0\n'), undefined)
+equal('an error line is not a version', parseVersionOutput('Error: version 0.0.1 required\n'), undefined)
+equal('the real version after a banner still wins', parseVersionOutput('Built 2025.08.16\n0.1.0-rc.6\n'), '0.1.0-rc.6')
+equal('a scoped package line still parses', parseVersionOutput('@deepseek-ai/dsh/0.1.0-rc.6 darwin-arm64\n'), '0.1.0-rc.6')
+equal('a scoped package with a space still parses', parseVersionOutput('@deepseek-ai/dsh 0.3.1\n'), '0.3.1')
+equal('a lowercase node banner is still noise', parseVersionOutput('node v22.19.0\n'), undefined)
+equal('a lowercase version word is still noise', parseVersionOutput('version 0.0.1\n'), undefined)
+equal('another lowercase CLI name is still noise', parseVersionOutput('built 2025.08.16\n'), undefined)
+
+console.log('\n# parsePsElapsedSeconds')
+equal('hh:mm:ss', parsePsElapsedSeconds('01:23:45'), 1 * 3600 + 23 * 60 + 45)
+equal('d-hh:mm:ss', parsePsElapsedSeconds('1-02:03:04'), 86_400 + 2 * 3600 + 3 * 60 + 4)
+equal('mm:ss', parsePsElapsedSeconds('12:34'), 12 * 60 + 34)
+equal('ps column padding is trimmed', parsePsElapsedSeconds('   2-03:04:05 '), 2 * 86_400 + 3 * 3600 + 4 * 60 + 5)
+equal('empty output is rejected', parsePsElapsedSeconds(''), undefined)
+equal('nonsense is rejected', parsePsElapsedSeconds('running'), undefined)
+
+console.log('\n# spawnAgeVerdict')
+// now = 200s, spawned at 100s → recorded age 100s.
+equal('an age tracking the record is ours', spawnAgeVerdict(100, 100_000, 200_000, 60_000), 'ours')
+equal('an age within tolerance of the record is ours', spawnAgeVerdict(120, 100_000, 200_000, 60_000), 'ours')
+equal('an age much younger is a recycled pid', spawnAgeVerdict(10, 100_000, 200_000, 60_000), 'recycled')
+equal('an age much older is still ours (backward clock adjustment)', spawnAgeVerdict(1_000, 100_000, 200_000, 60_000), 'ours')
+equal('a missing startedAt is unknown', spawnAgeVerdict(100, 0, 200_000, 60_000), 'unknown')
+equal('an unreadable age is unknown', spawnAgeVerdict(Number.NaN, 100_000, 200_000, 60_000), 'unknown')
 
 console.log('\n# npxCacheRoot')
 // The official instruction is `npx @deepseek-ai/dsh web` on BOTH platforms, so

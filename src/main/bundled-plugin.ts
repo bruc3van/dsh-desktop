@@ -75,8 +75,9 @@ export interface SeatRuntime {
   /**
    * A local instance the client did not start is answering on this machine's
    * conventional origin, and is ASSUMED — not proven — to be serving this
-   * home's profile (the probe reads host.describe, which carries neither the
-   * dsh version nor the home). An instance that boots a dsh profile and
+   * home's profile (the probe reads host.describe but keeps only the origin:
+   * the describe value's version is validated, not carried here, and the
+   * home is not in it at all). An instance that boots a dsh profile and
    * answers is the compatibility evidence the gate exists to establish, so
    * the gate is skipped; the seat is then restored conservatively (name
    * only, see `seatBundledPlugin`) so a wrong assumption costs one manifest
@@ -220,7 +221,7 @@ function writeManifest(dshHome: string, manifest: ProfileManifest): void {
   // The profile is shared with the user's own `dsh` CLI. A same-directory
   // rename keeps a torn JSON off the next `loadProfile` if we crash mid-write.
   const tmp = dest + '.' + String(process.pid) + '.tmp'
-  writeFileSync(tmp, JSON.stringify(manifest, undefined, 2) + '\n')
+  writeFileSync(tmp, JSON.stringify(manifest, undefined, 2) + '\n', { mode: 0o600 })
   try {
     renameSync(tmp, dest)
   } catch {
@@ -241,6 +242,24 @@ function writeManifest(dshHome: string, manifest: ProfileManifest): void {
  */
 function userOwned(manifest: ProfileManifest): boolean {
   return Object.hasOwn(manifest.dependencies ?? {}, BUNDLED_PLUGIN_NAME)
+}
+
+/**
+ * Apply one mutation to the profile manifest, against a FRESH read.
+ *
+ * The profile is shared with the user's own `dsh` CLI — `dsh plugin add`
+ * writes the same file — while this client's seat work reads the document,
+ * spends real time (a whole-tree copy), and only then writes it back. A
+ * concurrent add landing in that gap must survive: the write re-reads the
+ * document and applies only this mutation to the fresh copy, so whatever the
+ * CLI added in the meantime is preserved.
+ * @returns whether the document changed.
+ */
+function commitProfileManifest(dshHome: string, mutate: (fresh: ProfileManifest) => boolean): boolean {
+  const fresh = readManifest(dshHome) ?? {}
+  if (!mutate(fresh)) return false
+  writeManifest(dshHome, fresh)
+  return true
 }
 
 function readPackageVersion(dir: string): string | undefined {
@@ -276,7 +295,8 @@ function parseVersion(raw: string): { core: [number, number, number]; pre: strin
 
 /**
  * Semver-ish order: `undefined` when either side is not a version this seat
- * will compare (so the caller can treat an unreadable overlay as stale).
+ * can compare. Uncomparable is NOT stale — the caller keeps such overlays
+ * rather than lifting a user's tree on a parse failure.
  */
 function compareVersions(left: string, right: string): number | undefined {
   const a = parseVersion(left)
@@ -355,9 +375,12 @@ function profileInstallPath(dshHome: string): string {
 }
 
 /**
- * An overlay yields to the closure when it is older, missing, or unreadable.
- * A newer or equal overlay, or an overlay that *is* the closure, keeps
- * ownership. The closure's own version must be readable or we do not lift.
+ * An overlay yields to the closure only when it is provably older, or when
+ * its directory is missing entirely. An overlay whose VERSION cannot be
+ * parsed is the user's own tree under a spelling this seat cannot compare —
+ * it is kept, never lifted on a parse failure. A newer or equal overlay, or
+ * an overlay that *is* the closure, keeps ownership. The closure's own
+ * version must be readable or we do not lift.
  */
 function overlayOlderThanClosure(dshHome: string, pluginDir: string): boolean {
   const bundled = readPackageVersion(pluginDir)
@@ -366,19 +389,26 @@ function overlayOlderThanClosure(dshHome: string, pluginDir: string): boolean {
   if (overlay === undefined) return true
   if (sameDirectory(overlay, pluginDir)) return false
   const theirs = readPackageVersion(overlay)
-  if (theirs === undefined) return true
+  // Only a version that is provably older is lifted. Unparseable is NOT
+  // stale: it is the user's own tree under a spelling this seat cannot
+  // compare (a git tarball's `1.2.3.4`, a hand-edited `v9.9.9`), and
+  // deleting user data on a parse failure is the one wrong answer here.
+  if (theirs === undefined) return false
   const order = compareVersions(theirs, bundled)
-  return order === undefined || order < 0
+  return order !== undefined && order < 0
 }
 
 /** Drop the stale overlay's dependency and its nearer profile install. */
-function liftStaleOverlay(dshHome: string, manifest: ProfileManifest): void {
-  if (manifest.dependencies !== undefined) {
-    manifest.dependencies = Object.fromEntries(
-      Object.entries(manifest.dependencies).filter(([name]) => name !== BUNDLED_PLUGIN_NAME),
+function liftStaleOverlay(dshHome: string): void {
+  commitProfileManifest(dshHome, (fresh) => {
+    if (fresh.dependencies === undefined) return false
+    const kept = Object.fromEntries(
+      Object.entries(fresh.dependencies).filter(([name]) => name !== BUNDLED_PLUGIN_NAME),
     )
-  }
-  writeManifest(dshHome, manifest)
+    if (Object.keys(kept).length === Object.keys(fresh.dependencies).length) return false
+    fresh.dependencies = kept
+    return true
+  })
   rmSync(profileInstallPath(dshHome), { recursive: true, force: true })
 }
 
@@ -564,6 +594,13 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
     return { seated: false, added: false, error: refusal }
   }
 
+  // The bundles array is checked before anything is copied or lifted: a
+  // profile that declares no bundle list gets an error, not a deleted user
+  // overlay or a tree copy nobody will load.
+  const bundles = manifest.dsh?.profile?.bundles
+  if (!Array.isArray(bundles)) {
+    return { seated: false, added: false, error: 'the web profile declares no bundle list' }
+  }
   try {
     let lifted = false
     // Under a serving runtime, an owned copy already in place — any version —
@@ -578,18 +615,30 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
       // older copy is then still the one that loads.
       ensureSeatCopy(dshHome, pluginDir, version)
       if (userOwned(manifest)) {
-        liftStaleOverlay(dshHome, manifest)
+        liftStaleOverlay(dshHome)
         lifted = true
       }
     }
-    const bundles = manifest.dsh?.profile?.bundles
-    if (!Array.isArray(bundles)) {
-      return { seated: false, added: false, lifted, error: 'the web profile declares no bundle list' }
-    }
     if (bundles.includes(BUNDLED_PLUGIN_NAME)) return { seated: true, added: false, lifted }
-    bundles.push(BUNDLED_PLUGIN_NAME)
-    writeManifest(dshHome, manifest)
-    return { seated: true, added: true, lifted }
+    // Committed against a fresh read (see commitProfileManifest): whatever
+    // the user's CLI wrote while the copy ran is preserved beside our entry.
+    const added = commitProfileManifest(dshHome, (fresh) => {
+      const list = fresh.dsh?.profile?.bundles
+      if (!Array.isArray(list) || list.includes(BUNDLED_PLUGIN_NAME)) return false
+      list.push(BUNDLED_PLUGIN_NAME)
+      return true
+    })
+    if (added) return { seated: true, added: true, lifted }
+    // The commit no-oped because the fresh document changed under us: either
+    // a concurrent writer already seated the name, or the bundle list went
+    // away. "Seated" must mean the entry is actually listed — check the fresh
+    // document rather than reporting the stale in-hand one.
+    const fresh = readManifest(dshHome)
+    const freshBundles = fresh?.dsh?.profile?.bundles
+    if (Array.isArray(freshBundles) && freshBundles.includes(BUNDLED_PLUGIN_NAME)) {
+      return { seated: true, added: false, lifted }
+    }
+    return { seated: false, added: false, lifted, error: 'the web profile declares no bundle list' }
   } catch (error) {
     // The name must not stay listed if this client cannot actually offer the
     // package — official `loadProfile` throws on an unresolvable bundle.
@@ -610,14 +659,21 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
 export function withdrawBundledPlugin(dshHome: string): boolean {
   const manifest = readManifest(dshHome)
   if (manifest === undefined || userOwned(manifest)) return false
-  const bundles = manifest.dsh?.profile?.bundles
-  if (!Array.isArray(bundles)) return false
-  const next = bundles.filter(entry => entry !== BUNDLED_PLUGIN_NAME)
-  if (next.length === bundles.length) return false
-  if (manifest.dsh?.profile !== undefined) manifest.dsh.profile.bundles = next
+  if (!Array.isArray(manifest.dsh?.profile?.bundles)) return false
   try {
-    writeManifest(dshHome, manifest)
-    return true
+    return commitProfileManifest(dshHome, (fresh) => {
+      // Re-checked on the fresh read: the user may have installed their own
+      // copy between the two reads, and that copy is never withdrawn.
+      if (userOwned(fresh)) return false
+      const bundles = fresh.dsh?.profile?.bundles
+      if (!Array.isArray(bundles)) return false
+      const next = bundles.filter(entry => entry !== BUNDLED_PLUGIN_NAME)
+      if (next.length === bundles.length) return false
+      const profile = fresh.dsh?.profile
+      if (profile === undefined) return false
+      profile.bundles = next
+      return true
+    })
   } catch {
     return false
   }

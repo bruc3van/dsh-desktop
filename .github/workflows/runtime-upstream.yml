@@ -89,21 +89,26 @@ jobs:
             echo "已有同版本的 open issue，跳过。"
             exit 0
           fi
-          gh issue create --title "$TITLE" --body "$(cat <<EOF
-          npm 上的 \`@deepseek-ai/dsh\` latest 已是 **v$LATEST**，内置运行时仍为 **v$PINNED**。
+          # 完全引用的 heredoc（<<'EOF'）：正文零展开，行内代码反引号原样保留；
+          # 两个版本号在事后通过占位符替换进去。
+          BODY="$(cat <<'EOF'
+          npm 上的 `@deepseek-ai/dsh` latest 已是 **v__LATEST__**，内置运行时仍为 **v__PINNED__**。
 
           https://www.npmjs.com/package/@deepseek-ai/dsh
 
-          升级时按仓库自己的约束逐项过（出处见 \`pnpm-workspace.yaml\` 与 \`dsh-runtime/package.json\` 注释）：
+          升级时按仓库自己的约束逐项过（出处见 `pnpm-workspace.yaml` 与 `dsh-runtime/package.json` 注释）：
 
-          - [ ] \`dsh-runtime/package.json\` 升 \`@deepseek-ai/dsh\`（精确版本），并确认 \`@deepseek-ai/cordis-plugin-group\` 是否需要同步
-          - [ ] **picker 补丁对账**：\`patchedDependencies\` 钉在旧版本号上，上游修了就删补丁，没修就重新生成到新版本；\`pnpm run check:picker\` 验证
-          - [ ] **平台二进制对齐**：按新 lockfile 核对 \`optionalDependencies\` 里 sharp / koffi / ripgrep / node-addon-require-builtin 的版本
-          - [ ] **逐条审查 lockfile 里 \`@deepseek-ai/*\` 域的全部变更**（\`minimumReleaseAgeExclude\` 豁免了发布冷却期，这一步没有自动化兜底）
-          - [ ] 新依赖如带 lifecycle script，更新 \`allowBuilds\` 名单
-          - [ ] 隐式契约：\`dsh web: <url>\` 就绪行、\`POST /api/host.describe\` 响应形状、\`lib/bin.js\` 入口路径、\`--expose-internals\` 是否仍需要
-          - [ ] 全量门禁：\`build → prepare:runtime → check:picker → check:runtime-env → check:runtime-resolution → check:bundled-plugin → check:runtime-lock → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit\`
+          - [ ] `dsh-runtime/package.json` 升 `@deepseek-ai/dsh`（精确版本），并确认 `@deepseek-ai/cordis-plugin-group` 是否需要同步
+          - [ ] **picker 补丁对账**：`patchedDependencies` 钉在旧版本号上，上游修了就删补丁，没修就重新生成到新版本；`pnpm run check:picker` 验证
+          - [ ] **平台二进制对齐**：按新 lockfile 核对 `optionalDependencies` 里 sharp / koffi / ripgrep / node-addon-require-builtin 的版本
+          - [ ] **逐条审查 lockfile 里 `@deepseek-ai/*` 域的全部变更**（`minimumReleaseAgeExclude` 豁免了发布冷却期，这一步没有自动化兜底）
+          - [ ] 新依赖如带 lifecycle script，更新 `allowBuilds` 名单
+          - [ ] 隐式契约：`dsh web: <url>` 就绪行、`POST /api/host.describe` 响应形状、`lib/bin.js` 入口路径、`--expose-internals` 是否仍需要
+          - [ ] 全量门禁：`build → prepare:runtime → check:picker → check:runtime-env → check:runtime-resolution → check:bundled-plugin → check:runtime-lock → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit`
 
-          — 本 issue 由 \`.github/workflows/runtime-upstream.yml\` 每日检查自动创建。
+          — 本 issue 由 `.github/workflows/runtime-upstream.yml` 每日检查自动创建。
           EOF
           )"
+          BODY="${BODY//__LATEST__/$LATEST}"
+          BODY="${BODY//__PINNED__/$PINNED}"
+          gh issue create --title "$TITLE" --body "$BODY"

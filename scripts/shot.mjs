@@ -5,7 +5,8 @@
  * @module desktop/scripts/shot
  */
 
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
@@ -17,6 +18,12 @@ const electronEnv = { ...process.env }
 Reflect.deleteProperty(electronEnv, 'ELECTRON_RUN_AS_NODE')
 // Screenshots document the shipped runtime, not a developer's installed dsh.
 electronEnv.DSH_DESKTOP_SKIP_INSTALLED_DSH = '1'
+// A clean DSH_HOME opens the official first-run onboarding, and keeps the
+// developer's real sessions and titles out of every capture.
+const shotHome = mkdtempSync(join(tmpdir(), 'dsh-desktop-shot-'))
+process.on('exit', () => { rmSync(shotHome, { recursive: true, force: true }) })
+electronEnv.DSH_HOME = shotHome
+electronEnv.DSH_DESKTOP_HOME = join(shotHome, 'desktop')
 mkdirSync(outDir, { recursive: true })
 
 const shot = async (page, name) => {

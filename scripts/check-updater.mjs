@@ -106,7 +106,7 @@ await esbuild.build({
   outfile: updaterBundle,
   logLevel: 'silent',
 })
-const { compareVersions, describeFetchError, safeDownloadFileName } =
+const { compareVersions, describeFetchError, safeDownloadFileName, DesktopUpdater } =
   await import(pathToFileURL(updaterBundle).href)
 const orderings = [
   // Numeric prerelease identifiers rank by value: the string comparison this
@@ -251,6 +251,83 @@ if (currentKey === undefined) {
   throw new Error('check:updater does not cover ' + process.platform + '/' + process.arch)
 }
 
+// A redirected download is re-checked against the host allow-list on the
+// transport that reports the final url (Node's fetch does; Chromium's
+// net.fetch does not, and there the pinned SHA-256 is the whole check).
+// Same-origin hops pass; a hop that lands off the allow-list is refused.
+const redirectAllowlistHome = join(work, 'redirect-allowlist')
+const redirectTarget = await (async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream' })
+    res.end(payload)
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (typeof address !== 'object' || address === null) throw new Error('redirect target did not bind')
+  return 'http://127.0.0.1:' + String(address.port) + '/payload'
+})()
+const redirectAllowlistUpdater = async (startPath, targetUrl) => {
+  const server = createServer((req, res) => {
+    if (req.url === '/feed.json') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      const feed = { version: '99.0.5', platforms: { [currentKey]: { url: '', sha256: payloadHash } } }
+      feed.platforms[currentKey].url = startPath.startsWith('http') ? startPath : baseOriginFor(startPath)
+      res.end(JSON.stringify(feed))
+      return
+    }
+    if (req.url === startPath) {
+      res.writeHead(302, { location: targetUrl })
+      res.end()
+      return
+    }
+    if (req.url === '/payload') {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      res.end(payload)
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (typeof address !== 'object' || address === null) throw new Error('redirect server did not bind')
+  const base = 'http://127.0.0.1:' + String(address.port)
+  const baseOriginFor = (path) => base + path
+  const updater = new DesktopUpdater({
+    fetchImpl: (input, init) => fetch(input, init),
+    currentVersion: desktopVersion,
+    feedUrl: base + '/feed.json',
+    platform: process.platform,
+    arch: process.arch,
+    packaged: true,
+    downloadDir: redirectAllowlistHome,
+    loadPersistence: () => ({}),
+    savePersistence: () => {},
+    dryRun: true,
+  })
+  const checked = await updater.check()
+  if (!checked.hasUpdate) throw new Error('redirect allow-list feed should offer an update: ' + JSON.stringify(checked))
+  return updater
+}
+
+const sameOriginUpdater = await redirectAllowlistUpdater('/start', '/payload')
+const sameOriginInstall = await sameOriginUpdater.install()
+if (!sameOriginInstall.started) {
+  throw new Error('same-origin redirected install should succeed: ' + JSON.stringify(sameOriginInstall))
+}
+const offListUpdater = await redirectAllowlistUpdater('/start-off', redirectTarget)
+const offListInstall = await offListUpdater.install()
+if (offListInstall.started || !String(offListInstall.error ?? '').includes('拒绝')) {
+  throw new Error('a redirect off the allow-list must be refused: ' + JSON.stringify(offListInstall))
+}
+console.log('✓ a same-origin redirect downloads, and a redirect off the allow-list is refused')
+
 const availableFeed = {
   version: '99.0.0',
   // Release notes are Markdown; the card must render them, not print them.
@@ -284,6 +361,12 @@ const hangFeed = {
     [currentKey]: { url: '', sha256: payloadHash },
   },
 }
+const redirectFeed = {
+  version: '99.0.4',
+  platforms: {
+    [currentKey]: { url: '', sha256: payloadHash },
+  },
+}
 
 let feedMode = 'available'
 let pageDelayMs = 0
@@ -296,7 +379,8 @@ const fixture = createServer((req, res) => {
       ? badFeed
       : feedMode === 'nohash'
         ? noHashFeed
-        : feedMode === 'hang' ? hangFeed : availableFeed
+        : feedMode === 'hang' ? hangFeed
+        : feedMode === 'redirect' ? redirectFeed : availableFeed
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify(feed))
     return
@@ -306,12 +390,19 @@ const fixture = createServer((req, res) => {
     res.end(payload)
     return
   }
+  // A real GitHub release asset is served behind a 302; the download must
+  // follow it on the Chromium transport without falling back to Node fetch.
+  if (url.pathname === '/redirect-payload') {
+    res.writeHead(302, { location: '/payload' })
+    res.end()
+    return
+  }
   if (url.pathname === '/hang') {
     return
   }
   if (req.url === '/api/host.describe' && req.method === 'POST') {
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ result: { ok: true } }))
+    res.end(JSON.stringify({ result: { ok: true, value: { version: '0.1.0-rc.6', cwd: '/', attachedSessions: 0, canOpenPath: false } } }))
     return
   }
   const sendPage = () => {
@@ -363,6 +454,7 @@ currentFeed.platforms[currentKey].url = origin + '/payload'
 badFeed.platforms[currentKey].url = origin + '/payload'
 noHashFeed.platforms[currentKey].url = origin + '/payload'
 hangFeed.platforms[currentKey].url = origin + '/hang'
+redirectFeed.platforms[currentKey].url = origin + '/redirect-payload'
 
 const launchApp = async (home, extraEnv = {}, options = {}) => {
   const electronEnv = { ...process.env, ...extraEnv }
@@ -443,6 +535,28 @@ try {
   console.log('✓ check reports an available version from latest.json')
   console.log('✓ dry-run download verifies SHA-256')
   console.log('✓ dismissed version is persisted')
+
+  // GitHub release assets sit behind a 302. The download must follow it on the
+  // Chromium transport (net.fetch) itself — a manual-redirect request throws
+  // there and would silently push every real download onto the Node fallback,
+  // losing the proxy/trust-store support the wrapper exists for.
+  feedMode = 'redirect'
+  const redirectHome = join(work, 'redirect')
+  const redirected = await launchApp(redirectHome)
+  const redirectLog = []
+  redirected.app.process().stdout?.on('data', (chunk) => { redirectLog.push(chunk.toString()) })
+  const redirectCheck = await redirected.window.evaluate(() => window.desktop.update.check())
+  if (!redirectCheck.hasUpdate || redirectCheck.info?.availableVersion !== '99.0.4') {
+    throw new Error('redirect feed should offer an update: ' + JSON.stringify(redirectCheck))
+  }
+  const redirectInstalled = await redirected.window.evaluate(() => window.desktop.update.install())
+  if (!redirectInstalled.started) throw new Error('redirected dry-run install failed: ' + JSON.stringify(redirectInstalled))
+  await redirected.app.close()
+  if (redirectLog.join('').includes('update transport fell back to node fetch')) {
+    throw new Error('the redirected download fell back to Node fetch: net.fetch must follow the redirect itself')
+  }
+  console.log('✓ a 302 download completes on the Chromium transport without the Node-fetch fallback')
+  feedMode = 'available'
 
   // The post-page-load prompt is a bounded app surface, not a native message box
   // that expands a long changelog into an unreadable wall of text. Hold the

@@ -24,7 +24,7 @@ writeFileSync(join(desktopHome, 'settings.json'), JSON.stringify({ connectionMod
 const probeServer = createServer((req, res) => {
   if (req.url === '/api/host.describe' && req.method === 'POST') {
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ result: { ok: true } }))
+    res.end(JSON.stringify({ result: { ok: true, value: { version: '0.1.0-rc.6', cwd: '/', attachedSessions: 0, canOpenPath: false } } }))
     return
   }
   // Plain by design (nothing is injected here), but legible enough that a

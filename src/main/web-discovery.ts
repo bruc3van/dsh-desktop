@@ -13,16 +13,33 @@
  * may carry `!!js` expressions, and no reading of it needs to be exact: what
  * confirms an origin is `host.describe` replying on it, not this file. A wrong
  * number costs one probe that goes unanswered.
+ *
+ * Deliberately loose, but never unbounded: every port listed becomes one
+ * sequential startup probe, so a pathological patch file must not turn Smart
+ * mode's "is anything running" into minutes of waiting. The list is therefore
+ * capped, in document order.
  * @module dsh-desktop/web-discovery
  */
 
-/** Ports named anywhere in a profile patch layer, in the order they appear. */
+/** The most ports one patch layer may contribute to the probe list. */
+export const MAX_CONFIGURED_PORTS = 16
+
+/**
+ * Ports named anywhere in a profile patch layer, in the order they appear.
+ *
+ * The shape accepted is a `port:` key with an integer value — quoted or
+ * bare, with a trailing comment, one-digit ports included. A miss here means
+ * an instance on that port is not discovered and a second harness could be
+ * started beside it, so the pattern errs toward matching; a wrong number only
+ * costs one unanswered probe (and the cap bounds even that).
+ */
 export function configuredWebPorts(patchSource: string): number[] {
   const ports: number[] = []
-  for (const match of patchSource.matchAll(/^\s*(?:-\s*)?port:\s*['"]?(\d{2,5})['"]?\s*$/gm)) {
+  for (const match of patchSource.matchAll(/^\s*(?:-\s*)?port\s*:\s*['"]?(\d{1,5})['"]?\s*(?:#.*)?$/gm)) {
     const port = Number(match[1])
     if (port <= 0 || port > 65535 || ports.includes(port)) continue
     ports.push(port)
+    if (ports.length >= MAX_CONFIGURED_PORTS) break
   }
   return ports
 }

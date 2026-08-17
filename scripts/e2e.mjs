@@ -7,8 +7,8 @@
  * @module desktop/scripts/e2e
  */
 
-import { readFileSync, existsSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
@@ -17,6 +17,14 @@ const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const outDir = join(APP_DIR, 'shots')
 const electronEnv = { ...process.env }
 Reflect.deleteProperty(electronEnv, 'ELECTRON_RUN_AS_NODE')
+// The prompt goes through the user's real key, so it must never touch their
+// real session store or connection settings: both homes are per-run
+// temporaries, seeded with the key and nothing else.
+const e2eHome = mkdtempSync(join(tmpdir(), 'dsh-desktop-e2e-'))
+process.on('exit', () => { rmSync(e2eHome, { recursive: true, force: true }) })
+electronEnv.DSH_HOME = e2eHome
+electronEnv.DSH_DESKTOP_HOME = join(e2eHome, 'desktop')
+electronEnv.DSH_DESKTOP_SKIP_INSTALLED_DSH = '1'
 const shot = async (page, name) => {
   const path = join(outDir, name + '.png')
   await page.screenshot({ path })
@@ -35,15 +43,43 @@ if (apiKey === '') {
   }
 }
 if (apiKey === '') {
-  console.log('no API key available; skipping live prompt (open 设置 → 凭据 to add one)')
-  process.exit(0)
+  // A skip must not look green: this check verifies a LIVE round trip, and
+  // without a key it verified nothing. Provide the key (export
+  // DEEPSEEK_API_KEY=…, or add it once via 设置 → 凭据) to run it.
+  console.log('e2e needs an API key: export DEEPSEEK_API_KEY=… (or add one in 设置 → 凭据)')
+  process.exit(2)
 }
+mkdirSync(e2eHome, { recursive: true })
+writeFileSync(join(e2eHome, '.env'), 'DEEPSEEK_API_KEY=' + apiKey + '\n', { mode: 0o600 })
 
 const app = await electron.launch({ args: [join(APP_DIR, '.build', 'main.mjs')], env: electronEnv })
 const window = await app.firstWindow()
 window.on('console', msg => console.log('[renderer:' + msg.type() + '] ' + msg.text().slice(0, 300)))
 window.on('pageerror', err => console.log('[pageerror] ' + err.message.slice(0, 500)))
 await window.waitForFunction(() => document.querySelector('#root')?.children.length > 0, null, { timeout: 60000 })
+// The isolated DSH_HOME is pristine, so the official first-run onboarding
+// opens before the composer exists; advance through it (and any notice/model
+// modal) the same way shot.mjs does.
+for (let step = 0; step < 8; step += 1) {
+  const onboarding = window.locator('[class*="onboardingOverlay"]').last()
+  if (!await onboarding.isVisible().catch(() => false)) break
+  const buttons = onboarding.getByRole('button')
+  const count = await buttons.count()
+  if (count === 0) break
+  await buttons.nth(count - 1).click()
+  await window.waitForTimeout(500)
+}
+await window.waitForFunction(() => document.querySelector('[class*="onboardingOverlay"]') === null, null, { timeout: 30000 })
+for (let step = 0; step < 8; step += 1) {
+  const mask = window.locator('div[aria-hidden="true"][class*="_mask_"]').last()
+  if (!await mask.isVisible().catch(() => false)) break
+  const modal = window.locator('[role="presentation"]').filter({ visible: true }).last()
+  const buttons = modal.locator('button:not([disabled])').filter({ visible: true })
+  const count = await buttons.count()
+  if (count > 0) await buttons.nth(count - 1).click()
+  else await window.keyboard.press('Escape')
+  await window.waitForTimeout(500)
+}
 await window.waitForTimeout(3000)
 await shot(window, '10-booted')
 

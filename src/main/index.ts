@@ -18,7 +18,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { homedir, userInfo } from 'node:os'
@@ -38,14 +38,16 @@ import {
 } from './updater.ts'
 import { abandonBundledPlugin, BUNDLED_PLUGIN_NAME, seatBundledPlugin, WEB_PROFILE, withdrawBundledPlugin } from './bundled-plugin.ts'
 import { releaseNotesCss, renderReleaseNotes } from './release-notes.ts'
-import { clearRuntimeLock, isProcessAlive, readRuntimeLock, recordRuntimeLockUrl, writeRuntimeLock } from './runtime-lock.ts'
+import { clearRuntimeLock, isProcessAlive, readRuntimeLock, recordRuntimeLockUrl, runtimeLockFile, writeRuntimeLock, type RuntimeLock } from './runtime-lock.ts'
 import { webProbeOrigins } from './web-discovery.ts'
 import {
   executableCandidates,
   isSameDirectory,
   normalizePathEntry,
   npxCacheRoot,
+  parsePsElapsedSeconds,
   parseVersionOutput,
+  spawnAgeVerdict,
   spawnTargetFor,
 } from './runtime-resolution.ts'
 
@@ -103,7 +105,33 @@ function saveSettings(settings: ClientSettings): void {
   // session connects to. On a shared POSIX machine the default umask would
   // leave that world-readable (and, worse, group-writable under a lax umask).
   mkdirSync(clientHome(), { recursive: true, mode: 0o700 })
-  writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 })
+  // Written through a temporary file and renamed, for the same reason the
+  // runtime lock is: a torn read parses as "no settings", silently dropping
+  // the connection mode, the pinned address, and the ignored-update record.
+  const temporary = SETTINGS_FILE + '.' + String(process.pid) + '.tmp'
+  const backup = SETTINGS_FILE + '.' + String(process.pid) + '.bak'
+  writeFileSync(temporary, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 })
+  try {
+    renameSync(temporary, SETTINGS_FILE)
+  } catch {
+    // Windows: a rename onto a live file can fail transiently (a scanner
+    // holding it open). Move the current document ASIDE first, put the new
+    // one in place, then drop the backup — so a failed swap can never leave
+    // NEITHER version in place, and the user's configured address cannot be
+    // lost to a transient lock.
+    try { rmSync(backup, { force: true }) } catch { /* nothing to clean up */ }
+    try {
+      try { renameSync(SETTINGS_FILE, backup) } catch { /* nothing there yet */ }
+      renameSync(temporary, SETTINGS_FILE)
+    } catch (error) {
+      if (!existsSync(SETTINGS_FILE)) {
+        try { renameSync(backup, SETTINGS_FILE) } catch { /* best effort */ }
+      }
+      try { rmSync(temporary, { force: true }) } catch { /* nothing to clean up */ }
+      throw error
+    }
+    try { rmSync(backup, { force: true }) } catch { /* litter, not failure */ }
+  }
   // The mode above applies only when the file is created, so an install that
   // predates it would keep its old permissions forever. chmod every save
   // instead; on Windows it is a no-op, and a read-only path is not worth
@@ -139,7 +167,10 @@ function patchSettings(patch: Partial<ClientSettings> = {}, unset: readonly (key
 function normalizeServerUrl(value: string | undefined): string | undefined {
   if (value === undefined || value.trim() === '') return undefined
   let candidate = value.trim()
-  if (!/^https?:\/\//.test(candidate)) candidate = 'http://' + candidate
+  // Case-insensitive: `HTTPS://host` is a scheme, not a hostname, and a
+  // case-sensitive test would misread it as `http://https//host` — an origin
+  // that can never connect, followed by a misleading plaintext warning.
+  if (!/^https?:\/\//i.test(candidate)) candidate = 'http://' + candidate
   try {
     const url = new URL(candidate)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
@@ -151,13 +182,14 @@ function normalizeServerUrl(value: string | undefined): string | undefined {
 
 /**
  * Loopback origins are the client's own surfaces; anything else is a
- * user-configured remote. IPv6 hostnames arrive bracketed from `URL`, which is
- * the only spelling that can appear here.
+ * user-configured remote.
  */
 function originIsLoopback(value: string): boolean {
   try {
     const host = new URL(value).hostname
-    return host === '127.0.0.1' || host === 'localhost' || host === '[::1]'
+    // WHATWG `URL.hostname` is `::1`. `[::1]` is only seen when a caller
+    // passes a still-bracketed host.
+    return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' || host === '::1'
   } catch {
     return false
   }
@@ -450,7 +482,17 @@ async function detectDshOnPath(): Promise<InstalledDsh | undefined> {
  * Nothing is downloaded: an absent cache simply yields undefined.
  */
 function detectDshInNpxCache(): InstalledDsh | undefined {
-  const root = npxCacheRoot(process.platform, process.env, homedir())
+  // `npm_config_cache` is read by every npm tool on the machine, so it is
+  // NOT a DSH_* variable the devOverride gate covers — but it redirects this
+  // lookup the same way: a planted cache directory could answer with a
+  // fake `@deepseek-ai/dsh` that then runs as the local runtime. A packaged
+  // client therefore ignores the override (the user's own npm still honours
+  // it; the desktop client simply looks in the default location) unless the
+  // documented debugging escape hatch is on.
+  const env = app.isPackaged && process.env.DSH_DESKTOP_ALLOW_UNSAFE !== '1'
+    ? { ...process.env, npm_config_cache: undefined, NPM_CONFIG_CACHE: undefined }
+    : process.env
+  const root = npxCacheRoot(process.platform, env, homedir())
   if (root === undefined || !existsSync(root)) return undefined
   // The cached package is plain JavaScript, so it needs a real Node. The
   // client's own shim is excluded by findOnPath: running this on Electron's
@@ -727,9 +769,10 @@ function releaseBundledPluginSeat(reason: string): void {
  * `resolveRuntime` released the seat before it knew who would serve; leaving
  * it released here strands the running market outside the manifest its
  * installed panel reads — it cannot see, disable, or uninstall itself. The
- * version gate cannot run against an adopted instance (host.describe does not
- * carry the dsh version), so the seat rides on `serving`: the instance
- * demonstrably boots this profile, and the client's own spawns re-gate.
+ * version gate does not run against an adopted instance — host.describe
+ * carries a version, but this adoption path keeps only the origin — so the
+ * seat rides on `serving`: the instance demonstrably boots this profile,
+ * and the client's own spawns re-gate with the real version.
  */
 function reseatForAdoptedRuntime(): void {
   if (loadSettings().bundledMarketDisabled === true || bundledPluginSuppressed) return
@@ -910,8 +953,26 @@ class WebUiManager {
   }
 
   spawn(): void {
-    if (this.fatalError !== undefined) return
-    mkdirSync(childHome(), { recursive: true })
+    // A generation already owns the manager. Respawns race through here from
+    // both the exit ladder and `ready()` — the ladder's timer and a waiter
+    // released by `stopping` both believe they are the one to respawn — and
+    // spawning over a live child is a second writer on one DSH_HOME, which is
+    // the one thing this manager exists to prevent. Whoever lost the race
+    // finds the winner through `ready()` instead.
+    if (this.fatalError !== undefined || this.generation !== undefined) return
+    try {
+      mkdirSync(childHome(), { recursive: true })
+    } catch (error) {
+      // The spawn callers above are timers and callbacks: a synchronous throw
+      // here would be an uncaught exception in the main process. Route it
+      // through the same fatal-error surface as a damaged installation.
+      this.fatalError = error instanceof Error ? error : new Error(String(error))
+      this.lastError = this.fatalError.message
+      queueMicrotask(() => {
+        this.onExit({ wasReady: false, code: null, signal: null, retryable: false })
+      })
+      return
+    }
     let dsh: DshCommand
     try {
       dsh = resolveDshCommand()
@@ -965,11 +1026,16 @@ class WebUiManager {
     const reportExit = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (exitReported) return
       exitReported = true
-      if (this.generation === gen) this.generation = undefined
-      // Every way this child ends passes through here, so the record never
-      // outlives it — except the one case it exists for, where this process is
-      // gone and nothing runs at all.
-      clearRuntimeLock(childHome())
+      if (this.generation === gen) {
+        this.generation = undefined
+        // Every way this child ends passes through here, so the record never
+        // outlives it — except the one case it exists for, where this process
+        // is gone and nothing runs at all. The clear is generation-guarded: a
+        // late exit from a superseded child (a Windows stop that resolves
+        // before the exit event) must not erase the lock its successor has
+        // already written.
+        clearRuntimeLock(childHome())
+      }
       this.onExit({ wasReady: gen.readyReported, code, signal, retryable: true })
     }
 
@@ -980,7 +1046,10 @@ class WebUiManager {
       stdoutBuffer += chunk.toString()
       const lines = stdoutBuffer.split('\n')
       stdoutBuffer = lines.pop() ?? ''
-      for (const line of lines) {
+      for (const raw of lines) {
+        // A \r\n child stdout would otherwise carry the \r into every log
+        // line; readiness parsing is unaffected (it trims), this is cosmetic.
+        const line = raw.replace(/\r$/, '')
         if (line.trim() === '') continue
         this.onLog(line)
         const url = parseReadiness(line)
@@ -995,7 +1064,11 @@ class WebUiManager {
             if (exitReported) return
             this.lastError = error instanceof Error ? error.message : String(error)
             rejectReady(error instanceof Error ? error : new Error(String(error)))
-            child.kill()
+            // Tree-kill, not child.kill(): on Windows the direct child may be
+            // the cmd.exe wrapper around a .cmd shim, and killing it alone
+            // would leave the real server booting (and writing DSH_HOME)
+            // while the retry budget spawns a second one beside it.
+            killProcessTree(child)
           })
         }
       }
@@ -1009,7 +1082,12 @@ class WebUiManager {
     child.on('error', (error) => {
       this.lastError = error.message
       rejectReady(error)
-      reportExit(null, null)
+      // An 'error' after a successful spawn (a failed kill, say) leaves the
+      // child running; only a process that never existed or already left
+      // counts as an exit. A real exit always fires 'exit' below.
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+        reportExit(null, null)
+      }
     })
     child.on('exit', (code, signal) => {
       rejectReady(new Error('dsh web exited before ready (code=' + String(code) + ')'))
@@ -1136,8 +1214,21 @@ function smartProbeUrls(): string[] {
 
 /** The first origin a real harness answers on, or undefined when none does. */
 async function probeSmartTargets(): Promise<string | undefined> {
-  for (const url of smartProbeUrls()) {
+  const urls = smartProbeUrls()
+  for (const url of urls) {
     const answered = await probeWebUi(url)
+    if (answered !== undefined) return answered
+  }
+  // A busy instance answers slowly (its event loop is mid-request, a GC
+  // pause, a plugin reload). One unanswered probe must not declare "nothing
+  // running" and spawn a second harness beside a live one, so the WHOLE list
+  // gets one short second pass before the fallback — a busy instance on the
+  // fifth patch port deserves the same patience as one on the default. The
+  // list is bounded by MAX_CONFIGURED_PORTS, and a non-listening loopback
+  // port refuses instantly rather than spending the probe timeout.
+  await new Promise(resolve => setTimeout(resolve, 300))
+  for (const url of urls) {
+    const answered = await probeWebUi(url, 1_000)
     if (answered !== undefined) return answered
   }
   return undefined
@@ -1192,17 +1283,46 @@ async function probeWebUi(base: string, timeoutMs = 1_500): Promise<string | und
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) return undefined
-    const body = await response.json() as { result?: { ok?: boolean } }
+    const body = await response.json() as {
+      result?: {
+        ok?: boolean
+        value?: { version?: unknown; cwd?: unknown }
+      }
+    }
     if (body.result?.ok !== true) return undefined
+    // `ok` alone is what ANY local HTTP server could say; the official
+    // harness also describes itself. Requiring the describe core — the
+    // version and working directory every describe implementation has
+    // carried — keeps an unrelated process squatting on the port from being
+    // adopted as the official instance (and handed loopback trust, with
+    // every local detail and no confirmation dialogs) just by answering one
+    // request. The check stays to these two fields on purpose: extra fields
+    // have come and gone across upstream releases, and a shape drift must
+    // degrade loudly (below), never silently stop adopting the user's own
+    // running instance — which would start a second writer beside it.
+    const value = body.result.value
+    if (value === null || typeof value !== 'object') {
+      console.warn('[desktop] host.describe answered ok without a describe value on ' + base + '; not adopting it')
+      return undefined
+    }
+    if (typeof value.version !== 'string' || value.version === '' || typeof value.cwd !== 'string' || value.cwd === '') {
+      console.warn('[desktop] host.describe on ' + base + ' lacks version/cwd; not adopting it as the official harness')
+      return undefined
+    }
     return new URL(base).origin
   } catch {
     return undefined
   }
 }
 
-/** Allow binding and API initialization up to 10 seconds after the log line. */
+/**
+ * Allow binding and API initialization after the log line. The loading
+ * surface tells the user a first launch can exceed 20 seconds (an antivirus
+ * doing a full scan, a cold model cache), so the deadline matches that
+ * promise rather than killing a child that is simply still booting.
+ */
 async function waitForWebUiReady(base: string): Promise<void> {
-  const deadline = Date.now() + 10_000
+  const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
     if (await probeWebUi(base, 300) !== undefined) return
     await new Promise(resolve => setTimeout(resolve, 100))
@@ -1250,6 +1370,70 @@ async function hasVisiblePageContent(window: BrowserWindow): Promise<boolean> {
   }
 }
 
+/** Re-probe attempts before a probed instance is declared gone. */
+const PROBED_FALLBACK_GRACE_ATTEMPTS = 3
+const PROBED_FALLBACK_GRACE_INTERVAL_MS = 1_000
+/** One recovery task at a time: overlapping grace windows double the probes. */
+let probedFallbackInFlight = false
+/** Automatic reloads against a probed instance, to cap a reload→fail loop. */
+let probedRecoveryReloads = 0
+const PROBED_RECOVERY_RELOAD_CAP = 2
+
+/**
+ * Whether a probed origin answers at least once across a short grace window.
+ * "One probe that goes unanswered" is how a wrong port is dismissed; a live
+ * instance is owed more patience than that.
+ */
+async function probeWithGrace(base: string): Promise<boolean> {
+  for (let attempt = 0; attempt < PROBED_FALLBACK_GRACE_ATTEMPTS; attempt++) {
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, PROBED_FALLBACK_GRACE_INTERVAL_MS))
+    if (await probeWebUi(base) !== undefined) return true
+  }
+  return false
+}
+
+/**
+ * A probed instance misbehaved: a load failed, a health probe came back
+ * empty. "Not answering" is not "not running" — the harness can be briefly
+ * busy (a GC pause, a heavy request, a plugin reload) while fully alive, and
+ * spawning a second writer beside a live one is exactly the corruption the
+ * runtime lock exists to prevent. Re-probe across the grace window first;
+ * only an origin that keeps failing gets the local-runtime fallback. When it
+ * does answer, the window is rebuilt instead — bounded, so a server that
+ * answers the API but cannot serve the page ends at the failure surface
+ * rather than in a reload loop.
+ */
+async function handleProbedInstanceFailure(reason: string): Promise<void> {
+  if (!probeConnected || quitting || probedFallbackInFlight) return
+  probedFallbackInFlight = true
+  try {
+    const failedTarget = configuredTarget
+    if (failedTarget === undefined) return
+    const generation = connectionGeneration
+    if (await probeWithGrace(failedTarget)) {
+      if (generation !== connectionGeneration || !probeConnected || currentTarget() !== failedTarget) return
+      if (probedRecoveryReloads >= PROBED_RECOVERY_RELOAD_CAP) {
+        probedRecoveryReloads = 0
+        console.warn('[desktop] probed Web UI keeps failing after recovery reloads (' + reason + ')')
+        showConnectionError({ kind: 'load', url: failedTarget, code: 0, description: reason })
+        return
+      }
+      probedRecoveryReloads += 1
+      console.warn('[desktop] probed Web UI recovered (' + reason + '); reloading it')
+      loadMainWindow(failedTarget, true)
+      return
+    }
+    // The grace window is seconds long; the user may have switched to another
+    // instance in the meantime. A stale failure must not tear down a target it
+    // does not describe — the same generation guard the recovery path above
+    // already carries.
+    if (generation !== connectionGeneration || !probeConnected || currentTarget() !== failedTarget) return
+    fallbackFromProbedInstance(reason)
+  } finally {
+    probedFallbackInFlight = false
+  }
+}
+
 /**
  * Recover a renderer that went blank after a long idle or system resume.
  * Two DOM samples avoid reloading a page during a normal React transition;
@@ -1265,16 +1449,29 @@ async function recoverBlankWindow(reason: string, force = false): Promise<void> 
   windowRecoveryInFlight = true
   try {
     // A reused local instance is an optimization, not a durable dependency.
-    // Probe it even while the renderer still contains stale visible content.
+    // Probe it even while the renderer still contains stale visible content,
+    // but with a grace window: a busy instance must not be replaced by a
+    // second writer (see handleProbedInstanceFailure).
     if (probeConnected) {
       const generation = connectionGeneration
-      if (await probeWebUi(target) === undefined) {
-        await new Promise(resolve => setTimeout(resolve, 500))
-        if (generation === connectionGeneration && probeConnected && currentTarget() === target
-          && await probeWebUi(target, 500) === undefined) {
+      if (!await probeWithGrace(target)) {
+        if (generation === connectionGeneration && probeConnected && currentTarget() === target) {
           fallbackFromProbedInstance(reason)
         }
+        return
       }
+      // The instance is alive. A renderer that died or went blank is rebuilt
+      // against the surviving origin — the same recovery the local branch
+      // gets, so a probed instance is not stuck with a dead window.
+      if (!force && await hasVisiblePageContent(window)) return
+      if (!force) {
+        await new Promise(resolve => setTimeout(resolve, 2_000))
+        if (window !== mainWindow || await hasVisiblePageContent(window)) return
+      }
+      if (window !== mainWindow || window.isDestroyed()) return
+      lastAutomaticReloadAt = Date.now()
+      console.warn('[desktop] reloading blank Web UI (' + reason + ')')
+      window.webContents.reload()
       return
     }
     if (!force && await hasVisiblePageContent(window)) return
@@ -1425,7 +1622,7 @@ type ConnectionFailure =
   /** A document arrived, but it is the server's error page, not the Web UI. */
   | { kind: 'http'; url: string; status: number; statusText: string }
   /** The local runtime itself could not run. */
-  | { kind: 'runtime'; headline: string; detail: string }
+  | { kind: 'runtime'; headline: string; detail: string; recordPath?: string }
 
 /**
  * Plain-language cause for a Chromium net error. The numbers are stable
@@ -1519,11 +1716,16 @@ function errorPageUrl(copy: {
   quit: string
   /** Offered only when a pinned address failed: leave it for Smart mode. */
   useSmart?: string
+  /** Lock / record path. Shown in full — a long DSH_HOME must not be sliced off. */
+  recordLabel?: string
+  recordPath?: string
 }): string {
   const chinese = localeChinese()
-  const fact = (label: string, value: string): string => value === ''
-    ? ''
-    : '<div class="fact"><dt>' + escapeHtml(label) + '</dt><dd>' + escapeHtml(value.slice(0, 300)) + '</dd></div>'
+  const fact = (label: string, value: string, limit?: number): string => {
+    if (value === '') return ''
+    const shown = limit === undefined ? value : value.slice(0, limit)
+    return '<div class="fact"><dt>' + escapeHtml(label) + '</dt><dd>' + escapeHtml(shown) + '</dd></div>'
+  }
   const html = '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
     + '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">'
     + '<meta name="color-scheme" content="light dark"><title>' + escapeHtml(copy.title) + '</title><style>'
@@ -1553,7 +1755,11 @@ function errorPageUrl(copy: {
     + '</style></head><body><main>' + loadingIconTag()
     + '<h1>' + escapeHtml(copy.title) + '</h1>'
     + '<p class="hint">' + escapeHtml(copy.hint) + '</p>'
-    + '<dl class="facts">' + fact(copy.addressLabel, copy.address) + fact(copy.reasonLabel, copy.reason) + '</dl>'
+    + '<dl class="facts">'
+    + fact(copy.addressLabel, copy.address, 300)
+    + fact(copy.reasonLabel, copy.reason, 300)
+    + fact(copy.recordLabel ?? '', copy.recordPath ?? '')
+    + '</dl>'
     + '<div class="actions">'
     + '<button id="error-retry" class="primary" type="button">' + escapeHtml(copy.retry) + '</button>'
     + (copy.useSmart === undefined
@@ -1628,6 +1834,10 @@ function showConnectionError(failure: ConnectionFailure): void {
     ...usesConfiguredServer(loadSettings()) && {
       useSmart: chinese ? '切换到智能模式' : 'Switch to Smart mode',
     },
+    ...failure.kind === 'runtime' && failure.recordPath !== undefined && {
+      recordLabel: chinese ? '记录文件' : 'Record',
+      recordPath: failure.recordPath,
+    },
   })).then(() => {
     if (window !== mainWindow || window.isDestroyed() || window.webContents.isDestroyed()) return
     // The page's own CSP forbids inline script, so the seats are bound from
@@ -1658,7 +1868,9 @@ function reportConnectionFailureWithoutWindow(failure: ConnectionFailure): void 
   pendingConnectionFailure = { failure, generation: connectionGeneration }
   const chinese = localeChinese()
   const detail = failure.kind === 'runtime'
-    ? failure.detail
+    ? failure.detail + (failure.recordPath === undefined
+      ? ''
+      : '\n\n' + (chinese ? '记录文件：' : 'Record: ') + failure.recordPath)
     : failure.url + '\n' + (failure.kind === 'http'
       ? 'HTTP ' + String(failure.status) + (failure.statusText === '' ? '' : ' ' + failure.statusText)
       : failure.description + ' (' + String(failure.code) + ')')
@@ -1911,7 +2123,9 @@ function createWindow(): void {
   mainWindow.webContents.on('did-fail-load', (_event, code, description, failedUrl, isMainFrame) => {
     if (!isMainFrame || quitting || code === -3 || failedUrl.startsWith('data:')) return // -3 = ERR_ABORTED
     if (probeConnected && appOrigin(failedUrl) === appOrigin(currentTarget() ?? '')) {
-      fallbackFromProbedInstance('load failed: ' + description)
+      // Re-probe before falling back: a live-but-briefly-busy instance must
+      // not get a second writer spawned beside it.
+      void handleProbedInstanceFailure('load failed: ' + description)
       return
     }
     // A mode change can leave one late failure event from the old origin.
@@ -1927,11 +2141,16 @@ function createWindow(): void {
     if (!quitting && !url.startsWith('data:') && httpResponseCode < 400
       && target !== undefined && appOrigin(url) === appOrigin(target)) {
       targetNavigationSucceeded = true
+      probedRecoveryReloads = 0
     }
     if (quitting || url.startsWith('data:') || httpResponseCode < 400) return
     if (target === undefined || appOrigin(url) !== appOrigin(target)) return
     if (probeConnected) {
-      fallbackFromProbedInstance('http ' + String(httpResponseCode))
+      // A 4xx/5xx response PROVES the instance is alive: it just answered.
+      // Falling back would spawn a second writer beside a live harness, so
+      // the failure surface with a retry is the honest surface instead; the
+      // health probe still falls back when the instance actually dies.
+      showConnectionError({ kind: 'http', url, status: httpResponseCode, statusText: httpStatusText })
       return
     }
     showConnectionError({ kind: 'http', url, status: httpResponseCode, statusText: httpStatusText })
@@ -1946,7 +2165,10 @@ function createWindow(): void {
     const target = currentTarget()
     if (target === undefined) return
     const loaded = mainWindow?.webContents.getURL() ?? ''
-    if (appOrigin(loaded) === appOrigin(target)) scheduleAutoUpdateCheck()
+    if (appOrigin(loaded) === appOrigin(target)) {
+      webUiEverLoaded = true
+      scheduleAutoUpdateCheck()
+    }
   })
   // Chromium may lose its renderer after sleep or resource pressure without a
   // did-fail-load event. Reloading the surviving Web UI origin recreates it.
@@ -2110,6 +2332,11 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     targetUrl: currentTarget() ?? '',
     desktopVersion: desktopClientVersion(),
     dshVersion: bundledDshVersion(),
+    // NOT gated by includeLocalDetail: in Connect mode the saved address IS
+    // the caller's own origin (targetUrl is not redacted either), so hiding
+    // it yields no privacy — while the connection card treats this field as
+    // the editable address and probes to fill it when empty, so an empty
+    // value breaks the card and can be overwritten by a probe offer.
     savedServerUrl: savedServerUrl ?? '',
     selectedMode: usesConfiguredServer(settings) ? 'connect' : 'smart',
     canSwitch: savedServerUrl !== undefined,
@@ -2351,6 +2578,32 @@ function mainWindowShowsRemote(): boolean {
   return origin !== '' && origin !== 'null' && !originIsLoopback(origin)
 }
 
+/** Whether `contents` is the main window showing the client's current target. */
+function permissionTrustedSurface(contents: Electron.WebContents | null): boolean {
+  if (contents === null || mainWindow === null || mainWindow.isDestroyed() || contents !== mainWindow.webContents) return false
+  const url = contents.getURL()
+  // The client's own data: surfaces (loading, failure) are trusted by
+  // definition; everything else must be the origin the client currently
+  // targets — the same test the bridge applies to IPC callers.
+  if (url === '' || url.startsWith('data:')) return loadingDocumentActive || errorDocumentActive
+  const target = currentTarget()
+  return target !== undefined && appOrigin(url) === appOrigin(target)
+}
+
+/**
+ * Permission decisions follow the bridge's trust model. Clipboard writes are
+ * granted on the active target whether it is loopback or not — in Connect
+ * mode the page is still the official UI the user chose, and its copy button
+ * must keep working. Fullscreen is loopback-only: the only thing a remote
+ * page gains from it is a screen the client's own chrome no longer frames.
+ */
+function permissionGranted(contents: Electron.WebContents | null, permission: string): boolean {
+  if (permission !== 'clipboard-sanitized-write' && permission !== 'fullscreen') return false
+  if (contents === null || !permissionTrustedSurface(contents)) return false
+  if (permission === 'fullscreen') return originIsLoopback(appOrigin(contents.getURL()))
+  return true
+}
+
 function broadcastUpdateState(state: UpdateState): void {
   if (mainWindow !== null && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send('desktop:update:changed', updateStateForCaller(state, mainWindowShowsRemote()))
@@ -2560,7 +2813,11 @@ let updatePromptWindow: BrowserWindow | null = null
 function updatePromptPageUrl(info: UpdateInfo): string {
   const chinese = localeChinese()
   const copy = updateDialogCopy()
-  const notes = renderReleaseNotes(info.notes ?? '')
+  // The whole page travels as a data: URL, and Chromium caps how large such a
+  // URL may be: an oversized changelog must not make the prompt fail to load
+  // and close silently, with the user never learning an update exists. The
+  // cap is far beyond any readable changelog.
+  const notes = renderReleaseNotes((info.notes ?? '').slice(0, 32_000))
   const notesLabel = chinese ? '本次更新' : "What's new"
   const notesEmpty = chinese ? '此版本没有提供更新说明。' : 'No release notes were provided for this version.'
   const versionLabel = chinese ? '版本' : 'Version'
@@ -2732,9 +2989,34 @@ async function handleManualUpdateCheck(prompt: boolean): Promise<void> {
   void dialog.showMessageBox(owner, options)
 }
 
+/**
+ * Hand this process tree over to the Windows installer. Quitting waits
+ * briefly on one thing first: an installer that starts and then dies
+ * immediately (a SmartScreen refusal, another installer holding its mutex)
+ * leaves the runtime stopped and, without this watch, an app that has
+ * already quit — no error, no way back. A quick non-zero exit is caught and
+ * recovered; an installer still running past the watch owns the machine from
+ * here, and the client quits as before. The ShellExecute fallback (a spawn
+ * that needed elevation) has no handle to watch: it reports a clean handoff
+ * and this quits immediately.
+ */
 function scheduleQuitAfterWindowsInstall(): void {
   if (process.platform !== 'win32' || devFlag('DSH_DESKTOP_UPDATE_DRY_RUN')) return
-  setTimeout(() => { app.quit() }, 400).unref()
+  const timer = setTimeout(() => { app.quit() }, 5_000)
+  timer.unref()
+  const outcome = desktopUpdater?.installerOutcome()
+  if (outcome === undefined) return
+  void outcome.then(({ code }) => {
+    clearTimeout(timer)
+    if (code !== null && code !== 0) {
+      console.warn('[desktop] the Windows installer exited early with code ' + String(code) + '; restoring the local runtime')
+      installerHandoff = false
+      launchWindow()
+      return
+    }
+    // The installer finished (or left cleanly) on its own; quit regardless.
+    app.quit()
+  })
 }
 
 async function installDesktopUpdate(): Promise<{ started: boolean; error?: string }> {
@@ -2786,12 +3068,20 @@ function promptMacReplace(): void {
 }
 
 let autoUpdateCheckScheduled = false
+/** Whether the official Web UI has loaded at least once (re-arms the auto check). */
+let webUiEverLoaded = false
 
-/** Queue the one automatic check only after the official Web UI is usable. */
+/**
+ * Queue the one automatic check only after the official Web UI is usable.
+ * A tray-resident session can run for days without a single reload, and the
+ * 12-hour throttle would then never be asked again — the hourly re-ask below
+ * gives the throttle the chance to say yes without checking on its own.
+ */
 function scheduleAutoUpdateCheck(): void {
   if (autoUpdateCheckScheduled || desktopUpdater === undefined || !desktopUpdater.shouldAutoCheck()) return
   autoUpdateCheckScheduled = true
   setTimeout(() => {
+    autoUpdateCheckScheduled = false
     const updater = desktopUpdater
     if (quitting || updater === undefined) return
     void updater.check().then((result) => {
@@ -2799,6 +3089,14 @@ function scheduleAutoUpdateCheck(): void {
       showUpdateAvailableDialog(result.info)
     })
   }, AUTO_CHECK_DELAY_MS).unref()
+}
+
+/** The throttle (persisted last-checked time) decides; this interval re-asks. */
+function schedulePeriodicAutoUpdateChecks(): void {
+  const timer = setInterval(() => {
+    if (webUiEverLoaded) scheduleAutoUpdateCheck()
+  }, 60 * 60 * 1000)
+  timer.unref()
 }
 
 /**
@@ -3062,12 +3360,15 @@ async function startLocalRuntime(generation: number, force = false): Promise<voi
     return
   }
   if (survivor.kind === 'blocked') {
+    const chinese = localeChinese()
+    const pid = String(survivor.pid)
     showConnectionError({
       kind: 'runtime',
-      headline: '已有 dsh 运行时占用会话数据',
-      detail: '上一次运行留下的 dsh 运行时（PID ' + String(survivor.pid) + '）仍在运行，且既无法连接也无法结束。'
-        + '\n两个运行时同时写入同一份会话数据会造成永久损坏，因此这次没有启动新的运行时。'
-        + '\n请手动结束该进程后重试，或在连接设置中填写它的地址。',
+      headline: chinese ? '已有 dsh 运行时占用会话数据' : 'A dsh runtime is already using this session data',
+      detail: chinese
+        ? '上一次运行留下的 dsh 运行时（PID ' + pid + '）仍在运行，且既无法连接也无法结束。两个运行时同时写入同一份会话数据会造成永久损坏，因此这次没有启动新的运行时。确认该进程结束后可删除记录文件并重试。'
+        : 'A leftover dsh runtime (PID ' + pid + ') is still running and could not be reached or stopped. Starting another writer on the same session data would corrupt it, so this launch was refused. After that process exits, delete the record file and retry.',
+      recordPath: runtimeLockFile(childHome()),
     })
     return
   }
@@ -3101,6 +3402,72 @@ async function terminateProcessTree(pid: number): Promise<boolean> {
     await new Promise(resolve => setTimeout(resolve, 100))
   }
   return !isProcessAlive(pid)
+}
+
+/** A recycled pid can only be this far off the recorded age. */
+const PROCESS_IDENTITY_TOLERANCE_MS = 60_000
+
+/**
+ * Whether the pid in a runtime lock still names the child the lock recorded
+ * (see spawnAgeVerdict). Liveness alone is not identity: the client may
+ * crash, the child die, and the OS hand the pid to any later process —
+ * signalling a recycled pid would terminate (on Windows, with its whole
+ * tree) an innocent bystander. A record with no usable `startedAt` is
+ * unverifiable and reported as such: the caller then refuses both
+ * directions instead of guessing.
+ */
+async function pidVerdictForLockedChild(lock: RuntimeLock): Promise<'recycled' | 'ours' | 'unknown'> {
+  if (!Number.isSafeInteger(lock.startedAt) || lock.startedAt <= 0) return 'unknown'
+  // One retry: a transient ps/powershell failure must not wedge the start
+  // behind a refusal it could have resolved.
+  let age = await readProcessAgeSeconds(lock.childPid)
+  if (age === undefined) {
+    await new Promise(resolve => setTimeout(resolve, 300))
+    age = await readProcessAgeSeconds(lock.childPid)
+  }
+  if (age === undefined) return 'unknown'
+  return spawnAgeVerdict(age, lock.startedAt, Date.now(), PROCESS_IDENTITY_TOLERANCE_MS)
+}
+
+/** Capture one short command's stdout, bounded, or reject. */
+function runCommandCapture(command: string, args: string[], timeoutMs = 5_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = ''
+    let settled = false
+    const settle = (error: Error | undefined): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error !== undefined) reject(error)
+      else resolve(stdout)
+    }
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+    const timer = setTimeout(() => { killProcessTree(child); settle(new Error('timed out')) }, timeoutMs)
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+      if (stdout.length > 4_096) stdout = stdout.slice(0, 4_096)
+    })
+    child.once('error', () => { settle(new Error('command failed')) })
+    child.once('exit', (code) => { settle(code === 0 ? undefined : new Error('exit ' + String(code))) })
+  })
+}
+
+/** The age of a process in seconds, or undefined when the platform cannot say. */
+async function readProcessAgeSeconds(pid: number): Promise<number | undefined> {
+  try {
+    if (process.platform === 'win32') {
+      const output = await runCommandCapture('powershell', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        '[math]::Round(((Get-Date) - (Get-Process -Id ' + String(pid) + ' -ErrorAction Stop).StartTime).TotalSeconds)',
+      ])
+      const parsed = Number(output.trim())
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+    }
+    const output = await runCommandCapture('ps', ['-p', String(pid), '-o', 'etime='])
+    return parsePsElapsedSeconds(output)
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -3137,11 +3504,28 @@ async function adoptOrClearSurvivingRuntime(): Promise<SurvivingRuntime> {
     }
   }
   if (isProcessAlive(lock.childPid)) {
-    console.warn('[desktop] a runtime from a previous run (PID ' + String(lock.childPid)
-      + ') is alive but not serving; stopping it rather than writing ' + home + ' beside it')
-    // The record stays on a failed kill. Clearing it would let the next start
-    // spawn beside a writer this one already knows it could not stop.
-    if (!await terminateProcessTree(lock.childPid)) return { kind: 'blocked', pid: lock.childPid }
+    const verdict = await pidVerdictForLockedChild(lock)
+    if (verdict === 'unknown') {
+      // A live pid we cannot identify is signalled by nobody. Refuse both
+      // directions — killing it may hit an unrelated process, spawning beside
+      // it may be a second writer.
+      console.warn('[desktop] cannot verify the process holding PID ' + String(lock.childPid)
+        + '; refusing to signal it or to write ' + home + ' beside it')
+      return { kind: 'blocked', pid: lock.childPid }
+    }
+    if (verdict === 'ours') {
+      console.warn('[desktop] a runtime from a previous run (PID ' + String(lock.childPid)
+        + ') is alive but not serving; stopping it rather than writing ' + home + ' beside it')
+      // The record stays on a failed kill. Clearing it would let the next start
+      // spawn beside a writer this one already knows it could not stop.
+      if (!await terminateProcessTree(lock.childPid)) return { kind: 'blocked', pid: lock.childPid }
+    } else {
+      // The recorded child is gone and its pid has been recycled by an
+      // unrelated process: the record is stale, and that process must not be
+      // signalled (Windows would take its whole tree down).
+      console.warn('[desktop] the recorded runtime (PID ' + String(lock.childPid)
+        + ') is gone and its pid now names an unrelated process; leaving it alone')
+    }
   }
   clearRuntimeLock(home)
   return { kind: 'spawn' }
@@ -3183,6 +3567,7 @@ function fallbackFromProbedInstance(reason: string): boolean {
   configuredTarget = undefined
   probeConnected = false
   childTarget = undefined
+  probedRecoveryReloads = 0
   resetRuntimeRecoveryBudget()
   console.warn('[desktop] probed Web UI unavailable; starting local runtime (' + reason + '): ' + (failedTarget ?? 'unknown'))
   showLoadingDocument()
@@ -3231,6 +3616,7 @@ function resolveRuntime(force = false): void {
       configuredTarget = probed
       probeConnected = true
       childTarget = undefined
+      probedRecoveryReloads = 0
       reseatForAdoptedRuntime()
       if (webUi !== undefined) void webUi.stop()
       launchWindow(generation, force)
@@ -3249,6 +3635,26 @@ function applyConnectionSettings(settings: ClientSettings, force = false): void 
   const explicit = normalizeServerUrl(settings.serverUrl)
   if (explicit !== undefined && usesConfiguredServer(settings)) connectTo(explicit, force)
   else resolveRuntime(force)
+}
+
+/**
+ * Whether an origin is the address Smart mode itself would probe: the default
+ * probe port on any loopback spelling (`localhost` included). Pinning that
+ * one origin is strictly worse than Smart — identical while it is up, and on
+ * the wrong side of the only difference that matters: when the instance goes
+ * away, Connect mode holds the dead address and stops at the failure surface,
+ * while Smart falls through to a local runtime. The address is still
+ * recorded, so the switch button can pin it as a deliberate act.
+ */
+function isSmartProbeEquivalent(origin: string): boolean {
+  const probe = normalizeServerUrl(defaultWebProbeUrl())
+  if (probe === undefined) return false
+  if (!originIsLoopback(origin)) return origin === probe
+  try {
+    return new URL(origin).port === new URL(probe).port
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -3271,7 +3677,7 @@ function saveServerUrlAndReconnect(serverUrl: unknown): { saved: boolean; mode?:
     }
     const explicit = normalizeServerUrl(raw)
     if (explicit === undefined) return { saved: false, error: '请输入有效的 HTTP 或 HTTPS 地址' }
-    const mode = explicit === normalizeServerUrl(defaultWebProbeUrl()) ? 'smart' : 'connect'
+    const mode = isSmartProbeEquivalent(explicit) ? 'smart' : 'connect'
     patchSettings({ serverUrl: explicit, connectionMode: mode })
     applyConnectionSettings(loadSettings(), true)
     return { saved: true, mode }
@@ -3442,7 +3848,13 @@ function installMenu(): void {
       submenu: [
         { role: 'reload', label: chinese ? '重新载入' : 'Reload' },
         { role: 'forceReload', label: chinese ? '强制重新载入' : 'Force Reload' },
-        { role: 'toggleDevTools', label: chinese ? '切换开发者工具' : 'Toggle Developer Tools' },
+        // The shipped app keeps Reload (a Web UI client still benefits from
+        // rebuilding its renderer) but not DevTools: a packaged install has
+        // no debugging surface to expose, and the window may be showing a
+        // remote page whose runtime internals are none of the user's concern.
+        ...(!app.isPackaged
+          ? [{ role: 'toggleDevTools' as const, label: chinese ? '切换开发者工具' : 'Toggle Developer Tools' }]
+          : []),
         { type: 'separator' },
         { role: 'resetZoom', label: chinese ? '实际大小' : 'Actual Size' },
         { role: 'zoomIn', label: chinese ? '放大' : 'Zoom In' },
@@ -3769,14 +4181,23 @@ if (!gotLock) {
     // Electron grants most permission requests when an app installs no
     // handler. The official Web UI asks for none of them (its only clipboard
     // use is writeText), and in Connect mode the page doing the asking is a
-    // remote origin — so: deny by default, with the one grant a copy button
-    // legitimately needs.
-    const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen'])
-    session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => {
-      callback(ALLOWED_PERMISSIONS.has(permission))
+    // remote origin — so: deny by default, grant only to the client's current
+    // target, and keep fullscreen loopback-only so a remote page cannot
+    // redraw the whole screen as a surface the client did not paint.
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => {
+      callback(permissionGranted(contents, permission))
     })
-    session.defaultSession.setPermissionCheckHandler((_contents, permission) => ALLOWED_PERMISSIONS.has(permission))
+    session.defaultSession.setPermissionCheckHandler((contents, permission) => permissionGranted(contents, permission))
     session.defaultSession.setDevicePermissionHandler(() => false)
+    // Downloads otherwise land in ~/Downloads silently. Only the client's own
+    // active target may trigger one; anything else — a stray frame, an
+    // adopted impostor — is denied rather than allowed to fill the disk or
+    // drop files for the user to click.
+    session.defaultSession.on('will-download', (event, item, webContents) => {
+      if (permissionTrustedSurface(webContents)) return
+      event.preventDefault()
+      void item.cancel()
+    })
     // Packaged macOS builds use the bundle icon. Do not replace it at runtime
     // with the pre-masked PNG: macOS 26 adds its own enclosure around that
     // image and produces a visible double border. An unpackaged run has no
@@ -3804,6 +4225,7 @@ if (!gotLock) {
     powerMonitor.on('resume', () => { scheduleWindowHealthCheck('system resume', 3_000) })
     windowHealthTimer = setInterval(() => { void recoverBlankWindow('periodic health check') }, WINDOW_HEALTH_INTERVAL_MS)
     windowHealthTimer.unref()
+    schedulePeriodicAutoUpdateChecks()
     // The official page's enhanced-features card bridges through these. Every
     // handler resolves its sender first (see bridgeCaller): the preload rides
     // on whatever the window loads, so "the renderer asked" is not by itself
@@ -3864,8 +4286,22 @@ if (!gotLock) {
       if (!caller.trusted) throw bridgeDenied()
       return requestServerUrlSave(serverUrl, caller.remote)
     })
-    ipcMain.handle('desktop:connection:switch', (event) => {
-      if (!bridgeCaller(event).trusted) throw bridgeDenied()
+    ipcMain.handle('desktop:connection:switch', async (event) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) throw bridgeDenied()
+      // A persistent mode flip asked for by a REMOTE origin gets the same
+      // native confirmation every other state change does: the window may be
+      // pointed at a page that must not repoint the client silently.
+      if (caller.remote) {
+        const confirmed = await confirmSensitiveAction(
+          localeChinese() ? '当前页面请求切换连接模式' : 'The current page asked to switch the connection mode',
+          (localeChinese()
+            ? '这会让客户端在智能模式与固定地址之间切换。请求来自：'
+            : 'This flips the client between Smart mode and the pinned address. Requested by: ')
+          + (currentTarget() ?? ''),
+        )
+        if (!confirmed) return { switched: false, error: localeChinese() ? '已取消' : 'Cancelled' }
+      }
       return switchConnectionMode()
     })
     ipcMain.on('desktop:open-connection-settings', (event) => {
@@ -3895,8 +4331,20 @@ if (!gotLock) {
       const state = desktopUpdater?.getState()
       return state === undefined ? undefined : updateStateForCaller(state, caller.remote)
     })
-    ipcMain.handle('desktop:update:check', (event) => {
-      if (!bridgeCaller(event).trusted) throw bridgeDenied()
+    ipcMain.handle('desktop:update:check', async (event) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) throw bridgeDenied()
+      // A check also clears "ignore this version" and spends this machine's
+      // requests against the update host; a remote page may not do either
+      // without the person at the keyboard.
+      if (caller.remote) {
+        const confirmed = await confirmSensitiveAction(
+          localeChinese() ? '当前页面请求检查更新' : 'The current page asked to check for updates',
+          (localeChinese() ? '这会清除「忽略此版本」记录并访问更新服务器。请求来自：' : 'This clears the "skip this version" record and contacts the update server. Requested by: ')
+          + (currentTarget() ?? ''),
+        )
+        if (!confirmed) return { hasUpdate: false }
+      }
       desktopUpdater?.resetDismiss()
       return desktopUpdater?.check() ?? { hasUpdate: false }
     })

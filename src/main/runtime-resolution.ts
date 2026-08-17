@@ -123,15 +123,78 @@ export function npxCacheRoot(
  * The version a `--version` run reported, or undefined when its output carries
  * none.
  *
- * Matched anywhere in a line rather than anchored to its start: a CLI is free
- * to print `dsh 0.2.0` instead of a bare version, and an anchored pattern
- * would silently reject a runtime that works — sending the user back to the
- * bundled one with no explanation.
+ * Two shapes are accepted, both anchored: a line that IS a bare semver
+ * (`0.2.7`, `v0.2.7`), and a line prefixed by this CLI's own names
+ * (`dsh 0.2.7`, `dsh/0.3.1 darwin-arm64`, `@deepseek-ai/dsh/0.1.0-rc.6`).
+ * Everything else is noise, not a version: a build stamp or a Node banner
+ * misread as a bogus HIGH version would sail through the bundled-plugin
+ * version gate and seat the plugin into a runtime too old to load it, while
+ * a bogus low or missing version merely sends the user back to the bundled
+ * runtime — safe, but still wrong.
  */
 export function parseVersionOutput(stdout: string): string | undefined {
+  const versionToken = '\\d+\\.\\d+(?:\\.\\d+)?(?:-[0-9A-Za-z][\\w.-]*)?(?:\\+[0-9A-Za-z][\\w.-]*)?'
+  const bare = new RegExp('^\\s*(?:v)?(' + versionToken + ')\\s*$')
+  // A name in front stays accepted, but only this CLI's own names: any other
+  // lowercase word (`node v22.19.0`, `version 0.0.1`) is noise too, and a
+  // false HIGH version from one would be the exact misread the gate exists
+  // to stop.
+  const prefixed = new RegExp('^\\s*(?:dsh|@deepseek-ai/dsh)[/\\s](?:v)?(' + versionToken + ')(?=\\s|$)')
   for (const entry of stdout.split('\n')) {
-    const match = /\d+\.\d+[\w.+-]*/.exec(entry)
-    if (match !== null) return match[0]
+    const bareMatch = bare.exec(entry)
+    if (bareMatch !== null) return bareMatch[1]
+    const prefixedMatch = prefixed.exec(entry)
+    if (prefixedMatch !== null) return prefixedMatch[1]
   }
   return undefined
+}
+
+/**
+ * The age in seconds of a process, from `ps -o etime=` output, or undefined
+ * when the output carries none.
+ *
+ * `etime` spells `[[dd-]hh:]mm:ss` (`01:23:45`, `1-02:03:04`, `12:34`),
+ * possibly with the leading padding `ps` uses to align its columns.
+ */
+export function parsePsElapsedSeconds(output: string): number | undefined {
+  const match = /(?:(\d+)-)?(?:(\d+):)?(\d+):(\d{2})/.exec(output.trim())
+  if (match === null) return undefined
+  const days = match[1] === undefined ? 0 : Number(match[1])
+  const hours = match[2] === undefined ? 0 : Number(match[2])
+  const minutes = Number(match[3])
+  const seconds = Number(match[4])
+  if (![days, hours, minutes, seconds].every(Number.isFinite)) return undefined
+  return days * 86_400 + hours * 3_600 + minutes * 60 + seconds
+}
+
+/**
+ * How a live process's age (seconds) squares with a spawn recorded at
+ * `startedAt` (epoch ms).
+ *
+ * - `recycled`: the pid started measurably AFTER the record. The recorded
+ *   child is gone and the OS has handed the pid to another process — it must
+ *   not be signalled, and the record is stale.
+ * - `ours`: the pid's age tracks the record, or is OLDER than it. Older is
+ *   still ours, not someone else's: the pid belonged to our child from the
+ *   recorded spawn until its death, so any other process holding it now must
+ *   have started after that death — strictly younger. An age older than the
+ *   record can only be the surviving child under a backward clock
+ *   adjustment.
+ * - `unknown`: the record carries no usable `startedAt`, or the age could
+ *   not be read. The caller must refuse BOTH directions — no signalling an
+ *   unidentified process, and no spawning beside one.
+ */
+export type SpawnAgeVerdict = 'recycled' | 'ours' | 'unknown'
+
+export function spawnAgeVerdict(
+  ageSeconds: number,
+  startedAtMs: number,
+  nowMs: number,
+  toleranceMs: number,
+): SpawnAgeVerdict {
+  if (!Number.isSafeInteger(startedAtMs) || startedAtMs <= 0) return 'unknown'
+  if (!Number.isFinite(ageSeconds)) return 'unknown'
+  const recordedAge = Math.max(0, (nowMs - startedAtMs) / 1000)
+  if (ageSeconds < recordedAge - toleranceMs / 1000) return 'recycled'
+  return 'ours'
 }

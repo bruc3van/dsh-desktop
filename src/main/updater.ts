@@ -11,7 +11,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, mkdirSync, unlinkSync } from 'node:fs'
+import { chmodSync, createReadStream, createWriteStream, mkdirSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -113,6 +113,8 @@ const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000
 const PROGRESS_EMIT_MIN_INTERVAL_MS = 100
 const SPAWN_TIMEOUT_MS = 15_000
+/** An installer larger than this is not a plausible release asset. */
+const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 export const AUTO_CHECK_DELAY_MS = 4_000
 export const AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
 
@@ -318,14 +320,20 @@ export function parseUpdateFeed(raw: unknown): UpdateFeed {
   if (body.platforms === null || typeof body.platforms !== 'object' || Array.isArray(body.platforms)) {
     throw new Error('更新清单缺少平台列表')
   }
-  const platforms: Record<string, UpdateFeedPlatform> = {}
+  // A null-prototype map: a platform named `__proto__` must land as an
+  // ordinary entry, not overwrite the record's prototype through the
+  // plain-object assignment path.
+  const platforms: Record<string, UpdateFeedPlatform> = Object.create(null) as Record<string, UpdateFeedPlatform>
   for (const [name, value] of Object.entries(body.platforms as Record<string, unknown>)) {
     if (value === null || typeof value !== 'object') continue
     const platform = value as { url?: unknown; sha256?: unknown }
     if (typeof platform.url !== 'string' || platform.url.trim() === '') continue
     platforms[name] = {
       url: platform.url,
-      ...typeof platform.sha256 === 'string' && { sha256: platform.sha256.toLowerCase() },
+      // A hash that is not 64 hex digits is not a hash; carrying it would
+      // fail every install, so it is dropped rather than trusted.
+      ...typeof platform.sha256 === 'string' && /^[a-fA-F0-9]{64}$/.test(platform.sha256)
+        && { sha256: platform.sha256.toLowerCase() },
     }
   }
   return {
@@ -338,6 +346,7 @@ export function parseUpdateFeed(raw: unknown): UpdateFeed {
 
 export class DesktopUpdater {
   private phase: UpdaterPhase = 'idle'
+  private installerExit: { promise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>; resolve: (outcome: { code: number | null; signal: NodeJS.Signals | null }) => void } | undefined
   private info: UpdateInfo | null = null
   private progress: UpdateProgress | null = null
   private error: string | null = null
@@ -360,6 +369,17 @@ export class DesktopUpdater {
     this.downloadTimeoutMs = envMs(
       'DSH_DESKTOP_UPDATE_DOWNLOAD_MS', DEFAULT_DOWNLOAD_TIMEOUT_MS, this.allowEnvOverrides)
     this.syncDismissedFromStore()
+  }
+
+  /**
+   * Resolves when a launched installer exits while this process is still
+   * alive. A Windows installer that starts and then dies immediately is the
+   * one failure a "spawn succeeded" handoff would otherwise miss; the caller
+   * races this against its quit timer and restores the runtime on a quick
+   * non-zero exit.
+   */
+  installerOutcome(): Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined {
+    return this.installerExit?.promise
   }
 
   getState(): UpdateState {
@@ -512,6 +532,15 @@ export class DesktopUpdater {
         try { unlinkSync(destination) } catch { /* keep going to report the hash error */ }
         throw new Error('安装包校验失败（SHA-256 不匹配）')
       }
+      // The download never carries an executable bit, and an AppImage is the
+      // program itself: give it one before the desktop tries to launch it.
+      if (destination.toLowerCase().endsWith('.appimage')) {
+        try {
+          chmodSync(destination, 0o755)
+        } catch (error) {
+          console.warn('[desktop] could not make the AppImage executable: ' + describeFetchError(error))
+        }
+      }
 
       if (this.options.dryRun) {
         this.progress = null
@@ -521,7 +550,16 @@ export class DesktopUpdater {
 
       this.setPhase('installing')
       await this.options.onBeforeInstall?.()
-      await launchInstaller(destination, this.options.platform)
+      if (this.options.platform === 'win32') {
+        let resolveOutcome: (outcome: { code: number | null; signal: NodeJS.Signals | null }) => void = () => {}
+        this.installerExit = {
+          promise: new Promise((resolve) => { resolveOutcome = resolve }),
+          resolve: resolveOutcome,
+        }
+      }
+      await launchInstaller(destination, this.options.platform, (code, signal) => {
+        this.installerExit?.resolve({ code, signal })
+      })
       if (this.options.platform === 'darwin') {
         this.setPhase('restartRequired')
         return { started: true }
@@ -610,10 +648,12 @@ export class DesktopUpdater {
   private async fetchAssetSha256(sumsUrl: string, fileName: string): Promise<string | undefined> {
     if (fileName === '' || !isAllowedDownloadUrl(sumsUrl, this.options.feedUrl)) return undefined
     try {
-      const response = await this.fetchImpl(sumsUrl, {
-        headers: requestHeaders(this.options.currentVersion),
-        signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
-      })
+      const response = await fetchValidated(
+        this.fetchImpl,
+        sumsUrl,
+        { headers: requestHeaders(this.options.currentVersion), signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) },
+        (target) => isAllowedDownloadUrl(target, this.options.feedUrl),
+      )
       if (!response.ok) return undefined
       return parseSha256Sums(await response.text()).get(fileName)
     } catch {
@@ -625,7 +665,12 @@ export class DesktopUpdater {
     if (!isAllowedDownloadUrl(info.downloadUrl, this.options.feedUrl)) {
       throw new Error('拒绝从不信任的地址下载更新')
     }
-    mkdirSync(dirname(destination), { recursive: true })
+    // The directory holds nothing but verified installers; keep it private so
+    // a lax umask cannot leave another user a file they could swap before the
+    // hash check runs against it. The chmod also tightens a directory an
+    // earlier release created under a laxer umask (Windows no-ops it).
+    mkdirSync(dirname(destination), { recursive: true, mode: 0o700 })
+    try { chmodSync(dirname(destination), 0o700) } catch { /* best effort */ }
     const controller = new AbortController()
     const overallTimer = setTimeout(() => { controller.abort() }, this.downloadTimeoutMs)
     let idleTimer = setTimeout(() => { controller.abort() }, this.downloadIdleTimeoutMs)
@@ -633,11 +678,17 @@ export class DesktopUpdater {
       clearTimeout(idleTimer)
       idleTimer = setTimeout(() => { controller.abort() }, this.downloadIdleTimeoutMs)
     }
+    let sizeExceeded = false
     try {
-      const response = await this.fetchImpl(info.downloadUrl, {
-        headers: requestHeaders(this.options.currentVersion),
-        signal: controller.signal,
-      })
+      const response = await fetchValidated(
+        this.fetchImpl,
+        info.downloadUrl,
+        {
+          headers: requestHeaders(this.options.currentVersion),
+          signal: controller.signal,
+        },
+        (target) => isAllowedDownloadUrl(target, this.options.feedUrl),
+      )
       if (!response.ok || response.body === null) {
         throw new Error('下载更新失败（HTTP ' + String(response.status) + '）')
       }
@@ -653,6 +704,13 @@ export class DesktopUpdater {
       body.on('data', (chunk: Buffer) => {
         bumpIdle()
         downloaded += chunk.length
+        // A slow trickle is still bounded by the timeouts, but a fast host
+        // pushing a huge body must be bounded by size as well.
+        if (downloaded > MAX_DOWNLOAD_BYTES) {
+          sizeExceeded = true
+          controller.abort()
+          return
+        }
         const boundedTotal = this.progress?.total ?? 0
         const percent = boundedTotal > 0 ? Math.min(100, Math.round((downloaded / boundedTotal) * 100)) : 0
         this.progress = { total: boundedTotal, downloaded, percent }
@@ -673,6 +731,11 @@ export class DesktopUpdater {
         this.emit()
       }
     } catch (err) {
+      // A failed download must not leave a partial file behind: the same
+      // version retries into the same name, and a residue here is a file the
+      // user never asked for.
+      try { unlinkSync(destination) } catch { /* nothing was written */ }
+      if (sizeExceeded) throw new Error('下载更新失败：安装包超过大小上限')
       if (controller.signal.aborted) throw new Error('下载更新超时')
       // Everything this block throws itself already says 下载更新失败; anything
       // else is the transport or the disk, and arrives as a bare "fetch failed"
@@ -726,6 +789,35 @@ function githubReleaseToFeed(release: GithubRelease, key: string): FeedWithSums 
   }
 }
 
+/**
+ * One fetch with every hop re-validated. `fetch` follows redirects by
+ * itself, so a whitelist checked on the first URL alone would let a feed
+ * point at an allowed host that 302s anywhere. The stacks differ in what a
+ * redirect exposes, so the rule both honour is: follow, then re-apply the
+ * allow-list to the FINAL url — the hop that actually serves the bytes.
+ *
+ * `redirect: 'manual'` is NOT usable here: Chromium's net.fetch (the
+ * preferred transport, for its system proxy and trust store) throws "Redirect
+ * was cancelled" on it, which would push every GitHub download onto the Node
+ * fallback and silently give up the proxy support the wrapper exists for.
+ * Where the stack reports the final url (Node's fetch does), it is checked;
+ * where it does not (net.fetch returns an empty one), the pinned SHA-256 from
+ * the feed remains the whole verification, as it always was.
+ */
+async function fetchValidated(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  allowUrl: (target: string) => boolean,
+): Promise<Response> {
+  if (!allowUrl(url)) throw new Error('拒绝从不信任的地址下载更新')
+  const response = await fetchImpl(url, { ...init, redirect: 'follow' })
+  if (response.url !== '' && !allowUrl(response.url)) {
+    throw new Error('拒绝从不信任的地址下载更新')
+  }
+  return response
+}
+
 function requestHeaders(version: string): Record<string, string> {
   return {
     'user-agent': 'dsh-desktop/' + version + ' (+https://github.com/bruc3van/dsh-desktop)',
@@ -775,7 +867,9 @@ export function safeDownloadFileName(fileName: string): string {
   if (trimmed === '') throw new Error('更新清单中的安装包文件名无效')
   // A device name is disarmed by prefixing rather than rejected: the download
   // is still a real installer, and the local file name is nobody's contract.
-  const stem = (trimmed.split('.')[0] ?? '').toUpperCase()
+  // Win32 ignores trailing spaces and dots on the stem too, so `CON .exe`
+  // still names the console device and is disarmed the same way.
+  const stem = (trimmed.split('.')[0] ?? '').toUpperCase().replace(/[. ]+$/, '')
   return WINDOWS_DEVICE_NAMES.has(stem) ? '_' + trimmed : trimmed
 }
 
@@ -789,9 +883,13 @@ async function sha256File(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
-async function launchInstaller(filePath: string, platform: NodeJS.Platform): Promise<void> {
+async function launchInstaller(
+  filePath: string,
+  platform: NodeJS.Platform,
+  onExit?: (code: number | null, signal: NodeJS.Signals | null) => void,
+): Promise<void> {
   if (platform === 'win32') {
-    await spawnWindowsInstaller(filePath)
+    await spawnWindowsInstaller(filePath, onExit)
     return
   }
   const opened = await shell.openPath(filePath)
@@ -806,7 +904,10 @@ async function launchInstaller(filePath: string, platform: NodeJS.Platform): Pro
  * actually happen, and fall back to ShellExecute (shell.openPath), which can
  * raise the UAC prompt instead of failing on it.
  */
-function spawnWindowsInstaller(filePath: string): Promise<void> {
+function spawnWindowsInstaller(
+  filePath: string,
+  onExit?: (code: number | null, signal: NodeJS.Signals | null) => void,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     // 'error' can fire after a successful spawn as well (a failed kill, for
     // one), and the fallback below launches a real installer — so the handler
@@ -826,6 +927,9 @@ function spawnWindowsInstaller(filePath: string): Promise<void> {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      // Resolving on spawn is the handoff; an exit still observed while this
+      // process lives is the only trace a quick failure leaves behind.
+      child.once('exit', (code, signal) => { onExit?.(code, signal) })
       child.unref()
       resolve()
     })
@@ -835,8 +939,17 @@ function spawnWindowsInstaller(filePath: string): Promise<void> {
       clearTimeout(timer)
       shell.openPath(filePath).then(
         (opened) => {
-          if (opened === '') resolve()
-          else reject(new Error(opened + '（' + spawnError.message + '）'))
+          if (opened === '') {
+            // ShellExecute handoff: no process handle exists to watch, so the
+            // early-exit watch has nothing to observe. Report a clean handoff
+            // so the caller quits promptly (as it did before the watch
+            // existed) instead of lingering on its timer while the UAC prompt
+            // is on screen.
+            onExit?.(0, null)
+            resolve()
+          } else {
+            reject(new Error(opened + '（' + spawnError.message + '）'))
+          }
         },
         () => { reject(spawnError) },
       )

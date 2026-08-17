@@ -50,7 +50,7 @@ pnpm run e2e            # send a real prompt and verify the streamed response
 
 In addition, `scripts/` contains a family of regression checks for connection and runtime behavior: `check:connection` (mode switching), `check:installed-runtime` (installed runtime), `check:runtime-resolution` (runtime resolution), `check:bundled-plugin` (in-box market seat / withdraw), `check:runtime-lock` (runtime lock and update ordering), `check:auto-fallback` (loss-of-instance fallback), and `check:error-surface` (error UI).
 
-`pnpm run e2e` needs a valid API key. The production window loads the official Web UI; this repository does not maintain a second product renderer. `pnpm run check:updater` drives a local update-feed fixture through check, hash verification, and dismiss.
+`pnpm run e2e` needs a valid API key (export `DEEPSEEK_API_KEY=…`, or add one once via 设置 → 凭据). Without one it exits with code 2 on purpose: a skipped live round trip must not look green. It also runs against a throwaway `DSH_HOME`, so it never touches your real sessions. The production window loads the official Web UI; this repository does not maintain a second product renderer. `pnpm run check:updater` drives a local update-feed fixture through check, hash verification, and dismiss.
 
 ### The bundled safe marketplace (development)
 

@@ -50,7 +50,7 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 
 除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:bundled-plugin`（内置市场接入 / 撤回）、`check:runtime-lock`（运行时锁定与更新时序）、`check:auto-fallback`（失联自动回落）与 `check:error-surface`（错误界面）。
 
-`pnpm run e2e` 需要有效的 API Key。生产窗口直接加载官方 Web UI；仓库不维护第二套产品 renderer。`pnpm run check:updater` 用本地更新清单夹具验证检查、下载校验和忽略版本。
+`pnpm run e2e` 需要有效的 API Key（`export DEEPSEEK_API_KEY=…`，或在「设置 → 凭据」添加一次）。没有 Key 时它有意以退出码 2 失败：被跳过的真实往返不能显示为绿色。它还会在一次性临时 `DSH_HOME` 上运行，绝不会碰到你的真实会话。生产窗口直接加载官方 Web UI；仓库不维护第二套产品 renderer。`pnpm run check:updater` 用本地更新清单夹具验证检查、下载校验和忽略版本。
 
 ### 内置安全市场（开发）
 

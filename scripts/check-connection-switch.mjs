@@ -65,7 +65,7 @@ const thirdPartyOrigin = 'http://127.0.0.1:' + String(thirdPartyAddress.port)
 const remoteServer = createServer((req, res) => {
   if (req.url === '/api/host.describe' && req.method === 'POST') {
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ result: { ok: true } }))
+    res.end(JSON.stringify({ result: { ok: true, value: { version: '0.1.0-rc.6', cwd: '/', attachedSessions: 0, canOpenPath: false } } }))
     return
   }
   if (req.url === '/redirect-frame') {
