@@ -33,6 +33,8 @@ interface ConnectionStatus {
   installedDshVersion?: string
   /** The selected npx cache lags the bundled runtime (note, not veto). */
   npxCacheOutdated?: boolean
+  /** Smart-mode sources currently enabled. Missing means all four. */
+  smartRuntimes?: Array<'probe' | 'installed' | 'npx' | 'bundled'>
 }
 
 /** The connection bridge: read/save the Web UI origin through the main process. */
@@ -55,6 +57,17 @@ const connection = {
   /** An official Web UI answering on the default port right now, if any. */
   probeLocal: (): Promise<{ url: string | null }> =>
     ipcRenderer.invoke('desktop:connection:probe') as Promise<{ url: string | null }>,
+  /** Which Smart-mode sources this client will try. At least one must remain. */
+  setSmartRuntimes: (runtimes: Array<'probe' | 'installed' | 'npx' | 'bundled'>): Promise<{
+    saved: boolean
+    smartRuntimes: Array<'probe' | 'installed' | 'npx' | 'bundled'>
+    error?: string
+  }> =>
+    ipcRenderer.invoke('desktop:connection:smartRuntimes', runtimes) as Promise<{
+      saved: boolean
+      smartRuntimes: Array<'probe' | 'installed' | 'npx' | 'bundled'>
+      error?: string
+    }>,
 }
 
 interface UpdateInfo {
@@ -615,6 +628,8 @@ function injectEnhance(panel: Element): void {
       '#' + ENHANCE_ID + ' .dsh-enhance-market{display:flex;align-items:center;gap:8px;font-size:13px;'
         + 'color:var(--dsw-alias-label-primary,#0F1115);cursor:pointer}',
       '#' + ENHANCE_ID + ' .dsh-enhance-market input{cursor:pointer}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-runtimes{flex-wrap:wrap;margin-top:8px}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-runtime{padding:5px 12px}',
       '#' + UPDATE_ID + '{margin:0;padding:16px 0;border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
       '#' + UPDATE_ID + ' .dsh-update-title{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + UPDATE_ID + ' .dsh-update-version{margin:0 0 4px;font-size:12px;color:var(--dsw-alias-label-tertiary,#8A9099)}',
@@ -659,6 +674,14 @@ function injectEnhance(panel: Element): void {
     + '<input class="dsh-enhance-input" id="dsh-enhance-url" spellcheck="false" placeholder="Web UI 地址，留空 = 智能（本机官方实例优先，否则本地启动）">'
     + '</div>'
     + '<p class="dsh-enhance-note" id="dsh-enhance-note"></p>'
+    + '<p class="dsh-enhance-note">智能模式来源（点选开关，至少一种）</p>'
+    + '<div class="dsh-enhance-row dsh-enhance-runtimes" id="dsh-enhance-runtimes">'
+    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="probe">复用本机实例</button>'
+    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="installed">本机安装的 dsh</button>'
+    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="npx">npx 缓存</button>'
+    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="bundled">内置运行时</button>'
+    + '</div>'
+    + '<p class="dsh-enhance-note" id="dsh-enhance-runtimeNote">只影响智能模式。勾选的来源按默认优先级依次尝试。</p>'
     + '<div class="dsh-enhance-row dsh-enhance-marketRow">'
     + '<label class="dsh-enhance-market"><input type="checkbox" id="dsh-enhance-market"> 接入内置插件市场</label>'
     + '</div>'
@@ -711,6 +734,41 @@ function injectEnhance(panel: Element): void {
       switchEl.disabled = false
     }
   })
+  const runtimeButtons = [...block.querySelectorAll('[data-smart-runtime]')] as HTMLButtonElement[]
+  const runtimeNoteEl = block.querySelector('#dsh-enhance-runtimeNote') as HTMLElement
+  const allRuntimes: Array<'probe' | 'installed' | 'npx' | 'bundled'> = ['probe', 'installed', 'npx', 'bundled']
+  const paintRuntimes = (ids: Array<'probe' | 'installed' | 'npx' | 'bundled'> | undefined): void => {
+    const on = new Set(ids !== undefined && ids.length > 0 ? ids : allRuntimes)
+    for (const button of runtimeButtons) {
+      const id = button.getAttribute('data-smart-runtime')
+      button.classList.toggle('dsh-enhance-switch', id !== null && on.has(id as typeof allRuntimes[number]))
+    }
+  }
+  for (const button of runtimeButtons) {
+    button.addEventListener('click', () => {
+      const id = button.getAttribute('data-smart-runtime')
+      if (id === null) return
+      const current = runtimeButtons
+        .filter((entry) => entry.classList.contains('dsh-enhance-switch'))
+        .map((entry) => entry.getAttribute('data-smart-runtime'))
+        .filter((entry): entry is 'probe' | 'installed' | 'npx' | 'bundled' => entry !== null)
+      const next = current.includes(id as typeof current[number])
+        ? current.filter((entry) => entry !== id)
+        : [...current, id as typeof current[number]]
+      if (next.length === 0) {
+        runtimeNoteEl.textContent = '至少保留一种来源'
+        return
+      }
+      void connection.setSmartRuntimes(next).then((result) => {
+        paintRuntimes(result.smartRuntimes)
+        runtimeNoteEl.textContent = result.saved
+          ? '已更新智能连接来源'
+          : ('保存失败：' + (result.error ?? '至少保留一种来源'))
+      }, (error: unknown) => {
+        runtimeNoteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
+      })
+    })
+  }
   void connection.getStatus().then((status) => {
     // Named by WHO started the runtime, then which dsh it is — "本地"/"内置"
     // used to overlap, and a reused instance the user started got neither.
@@ -733,6 +791,7 @@ function injectEnhance(panel: Element): void {
     urlEl.value = status.savedServerUrl
     switchEl.hidden = status.selectedMode !== 'connect'
     switchEl.textContent = '切换到智能模式'
+    paintRuntimes(status.smartRuntimes)
     // Nothing saved: offer a live official instance on the default port, so
     // switching to it is one click. Never overwrite a value already in the box.
     if (status.savedServerUrl !== '') return
