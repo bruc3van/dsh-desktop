@@ -11,8 +11,6 @@ DeepSeek Harness Desktop is an independent Electron client for `dsh`. The window
 
 Release packages bundle a pinned version of the official `@deepseek-ai/dsh` runtime. End users do not need to install Node.js, pnpm, or the `dsh` CLI separately. The desktop shell, installers, connection enhancements, and release signatures are independently maintained by this project and are not part of the official runtime. The desktop client and official `dsh` use independent version numbers; the connection settings page displays both for compatibility diagnostics.
 
-![DeepSeek Harness Desktop home screen (light theme)](docs/images/readme-home.png)
-
 ![DeepSeek Harness Desktop home screen (dark theme)](docs/images/readme-home-dark.jpeg)
 
 ## Why use the desktop client?
@@ -116,8 +114,6 @@ Connection status is described by **who started the runtime**, so "local" and "b
 > Choosing **Save and connect** for `127.0.0.1:3080` — the default probe address — keeps the client in Smart mode. Smart already prefers that instance and can still fall back automatically when it stops.
 
 Leave the Web UI address empty to return to Smart mode. Connection settings can be changed from the enhanced block in General Settings or from **Web UI Connection…** in the application menu.
-
-![Connection settings in the current desktop client](docs/images/readme-settings.png)
 
 > [!TIP]
 > Connecting to an instance outside this machine is currently outside official support; if you still do (for example through your own SSH tunnel), use a trusted network and HTTPS where available. The configured address is a direct connection target, not a relay operated by this project.

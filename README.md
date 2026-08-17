@@ -11,8 +11,6 @@ DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里
 
 发布安装包内置固定版本的官方 `@deepseek-ai/dsh` 运行时；普通用户无需另外安装 Node.js、pnpm 或 `dsh` CLI。桌面外壳、安装包、连接增强与发布签名均由本项目独立负责，不属于官方运行时的一部分。桌面客户端与官方 `dsh` 使用各自独立的版本号；应用的连接设置页会同时显示两个版本号，便于排查兼容问题。
 
-![DeepSeek Harness Desktop 首页（浅色主题）](docs/images/readme-home.png)
-
 ![DeepSeek Harness Desktop 首页（深色主题）](docs/images/readme-home-dark.jpeg)
 
 ## 为什么值得使用
@@ -106,8 +104,6 @@ DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里
 > 填入 `127.0.0.1:3080`（即默认探测地址）并点击「保存并连接」时，客户端仍保持智能模式——智能模式本来就优先使用它，并且能在该实例停止时自动回落。
 
 清空 Web UI 地址即可恢复智能模式。连接设置位于官方设置弹窗「通用设置」里的「连接」增强区块。
-
-![当前桌面端的 Web UI 连接设置](docs/images/readme-settings.png)
 
 > [!TIP]
 > 连接本机之外的实例目前不在官方支持范围内；若你确实这样做（例如自行通过 SSH 隧道转发），请使用可信网络，并在条件允许时使用 HTTPS。这里填写的是客户端直连地址，本项目不会通过第三方中转你的请求。
