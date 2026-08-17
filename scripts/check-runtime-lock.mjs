@@ -47,17 +47,20 @@ mkdirSync(home, { recursive: true })
 // that answer is the one that spawns a second writer.
 if (readRuntimeLock(home) !== undefined) throw new Error('an empty DSH_HOME reported a runtime')
 
-writeRuntimeLock(home, { childPid: 4242, desktopPid: 99, startedAt: 1_700_000_000_000 })
+writeRuntimeLock(home, { childPid: 4242, desktopPid: 99, startedAt: 1_700_000_000_000, source: 'bundled' })
 const written = readRuntimeLock(home)
 if (written?.childPid !== 4242 || written.desktopPid !== 99 || written.startedAt !== 1_700_000_000_000) {
   throw new Error('runtime record did not read back: ' + JSON.stringify(written))
 }
 if (written.url !== undefined) throw new Error('a runtime that never reported readiness must carry no origin')
+// The rung that spawned it decides whether the next start may adopt it, so it
+// has to survive the record — including the read-modify-write below.
+if (written.source !== 'bundled') throw new Error('the spawning source did not read back: ' + JSON.stringify(written))
 
 recordRuntimeLockUrl(home, 'http://127.0.0.1:31104', 4242)
 const adopted = readRuntimeLock(home)
-if (adopted?.url !== 'http://127.0.0.1:31104' || adopted.childPid !== 4242) {
-  throw new Error('recording an origin must preserve the pid: ' + JSON.stringify(adopted))
+if (adopted?.url !== 'http://127.0.0.1:31104' || adopted.childPid !== 4242 || adopted.source !== 'bundled') {
+  throw new Error('recording an origin must preserve the pid and source: ' + JSON.stringify(adopted))
 }
 
 // Readiness belongs to one child. A record naming a different one is a
@@ -89,6 +92,16 @@ for (const corrupt of ['', '{', 'null', '[]', '{"childPid":0}', '{"childPid":"x"
   }
 }
 console.log('✓ a malformed or truncated record reads as absent, never as a runtime')
+
+// A source that is not a usable string reads as "no source to check", so the
+// adoption gate falls open to adopting rather than to a second writer.
+for (const junk of [12, '', null, ['bundled']]) {
+  writeFileSync(runtimeLockFile(home), JSON.stringify({ childPid: 4242, desktopPid: 1, startedAt: 1, source: junk }))
+  const read = readRuntimeLock(home)
+  if (read?.childPid !== 4242) throw new Error('an unusable source discarded the whole record: ' + JSON.stringify(junk))
+  if (read.source !== undefined) throw new Error('an unusable source was trusted: ' + JSON.stringify(junk))
+}
+console.log('✓ an unusable source reads as absent without discarding the runtime it names')
 
 clearRuntimeLock(home)
 if (existsSync(runtimeLockFile(home))) throw new Error('clearing the record left the file behind')

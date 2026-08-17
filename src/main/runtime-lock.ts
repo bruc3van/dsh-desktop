@@ -37,6 +37,13 @@ export interface RuntimeLock {
   startedAt: number
   /** The origin the child serves, once it has reported readiness. */
   url?: string
+  /**
+   * Which resolved source spawned it (`bundled`, `installed`, `npx`, …), so
+   * the next start can tell whether adopting this survivor still matches the
+   * sources the user allows. Absent in records written before the field
+   * existed, which read as "no source to check".
+   */
+  source?: string
 }
 
 /** The record lives beside the session store it protects. */
@@ -65,6 +72,7 @@ export function readRuntimeLock(home: string): RuntimeLock | undefined {
       desktopPid: Number(parsed.desktopPid ?? 0),
       startedAt: Number(parsed.startedAt ?? 0),
       ...typeof parsed.url === 'string' && parsed.url !== '' && { url: parsed.url },
+      ...typeof parsed.source === 'string' && parsed.source !== '' && { source: parsed.source },
     }
   } catch {
     return undefined
