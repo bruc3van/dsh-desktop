@@ -24,7 +24,7 @@ import { createRequire } from 'node:module'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, session, shell, Tray } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, screen, session, shell, Tray } from 'electron'
 import {
   AUTO_CHECK_DELAY_MS,
   DesktopUpdater,
@@ -2285,12 +2285,57 @@ function createTray(): void {
   if (process.platform === 'darwin') {
     tray.on('right-click', () => { tray?.popUpContextMenu(Menu.buildFromTemplate(trayMenuTemplate())) })
   }
+  // Moving the window to a display with different scaling, or changing the
+  // scaling itself, changes the notification-area slot size. Without this the
+  // icon rendered for the old slot stays and gets stretched by the shell.
+  if (process.platform === 'win32') {
+    screen.on('display-metrics-changed', () => {
+      if (tray === null || tray.isDestroyed()) return
+      const next = trayImage()
+      if (!next.isEmpty()) tray.setImage(next)
+    })
+  }
   refreshTrayMenu()
 }
 
+/**
+ * Windows notification-area icon sizes, in device pixels: the slot is
+ * SM_CXSMICON, which is 16 at 100% scaling and grows with it (20 at 125%,
+ * 24 at 150%, 32 at 200%). One rendered file per slot, so the shell has an
+ * exact-size icon to draw instead of a stretched 16px one — Windows takes the
+ * 1x representation of a NativeImage and scales it up, which is what made the
+ * tray icon look soft on every display above 100%.
+ *
+ * Rendered from resources/icon.svg by scripts/make-tray-icons.cjs; that list
+ * and this one have to stay in step.
+ */
+const TRAY_ICON_SIZES = [16, 20, 24, 32, 40, 48] as const
+
+/** The rendered size for the current display scale, snapped up to a real file. */
+function trayIconSize(): number {
+  let scale = 1
+  try {
+    scale = screen.getPrimaryDisplay().scaleFactor
+  } catch {
+    // Called before the screen module is usable: 16px is the 100% slot.
+  }
+  const wanted = Math.round(16 * (Number.isFinite(scale) && scale > 0 ? scale : 1))
+  // Above the largest rendered size (400% scaling and beyond), the biggest file
+  // is still the closest fit the shell can be given.
+  return TRAY_ICON_SIZES.find(size => size >= wanted) ?? 48
+}
+
 function trayImage(): Electron.NativeImage {
-  const iconName = process.platform === 'win32' ? 'iconTrayWhite.png' : 'iconMenuTemplate.png'
-  return nativeImage.createFromPath(join(APP_DIR, 'resources', iconName))
+  if (process.platform !== 'win32') {
+    // macOS recolours a Template image to match the menu bar, and reads the @2x
+    // companion beside it for Retina; nothing to choose per display here.
+    return nativeImage.createFromPath(join(APP_DIR, 'resources', 'iconMenuTemplate.png'))
+  }
+  const size = trayIconSize()
+  const exact = nativeImage.createFromPath(join(APP_DIR, 'resources', 'iconTray-' + String(size) + '.png'))
+  if (!exact.isEmpty()) return exact
+  // A resource set older than this code: the 16px glyph still shows an icon.
+  return nativeImage.createFromPath(join(APP_DIR, 'resources', 'iconTrayWhite.png'))
 }
 
 function trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {

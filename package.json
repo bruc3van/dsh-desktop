@@ -20,6 +20,7 @@
     "build:shell": "esbuild src/main/index.ts --bundle --platform=node --format=esm --external:electron --outfile=.build/main.mjs && esbuild src/main/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=.build/preload.cjs && esbuild src/main/runtime-launcher.ts --bundle --platform=node --format=esm --external:electron --outfile=.build/runtime-launcher.mjs",
     "build": "npm run build:shell",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "icons:tray": "electron scripts/make-tray-icons.cjs",
     "check:picker": "node scripts/check-win32-picker.mjs",
     "check:runtime-env": "node scripts/check-runtime-env.mjs",
     "check:identity": "node scripts/check-identity.mjs",
