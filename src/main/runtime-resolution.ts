@@ -81,6 +81,10 @@ function directoryKey(value: string, platform: NodeJS.Platform): string {
  * other case — a real `.exe`, and everything on POSIX, where a shebang makes
  * the file directly executable — is spawned as-is, and must NOT be quoted:
  * with no shell to strip them, the quotes would become part of the filename.
+ *
+ * Windows callers that spawn this target must pass `windowsHide: true`. The
+ * shell is `cmd.exe`, and CreateProcess otherwise flashes a console for every
+ * `--version` probe and every `dsh web` start.
  */
 export function spawnTargetFor(binPath: string, platform: NodeJS.Platform): { command: string; shell: boolean } {
   const shell = platform === 'win32' && /\.(?:cmd|bat)$/i.test(binPath)

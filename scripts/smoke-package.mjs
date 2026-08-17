@@ -94,7 +94,35 @@ async function assertLocalePacks(packagedExecutable) {
     return
   }
 }
+
+/**
+ * The dsh shim's gateway lives beside runtime-launcher.mjs, outside app.asar,
+ * because the Agent child reads it as an ordinary file. A pack that omitted it
+ * would leave the shim pointing at a missing path — `dsh --version` would fail
+ * as a missing file rather than as the classified CLI.
+ */
+function packagedResourcesDir(packagedExecutable) {
+  if (process.platform === 'darwin') return join(dirname(packagedExecutable), '..', 'Resources')
+  return join(dirname(packagedExecutable), 'resources')
+}
+
+function assertPackagedGateway(packagedExecutable) {
+  const resources = packagedResourcesDir(packagedExecutable)
+  const cli = join(resources, 'dsh-cli.mjs')
+  if (!existsSync(cli)) throw new Error('packaged resources missing dsh-cli.mjs: ' + cli)
+}
+
+function assertPackagedPnpm(packagedExecutable) {
+  const resources = packagedResourcesDir(packagedExecutable)
+  const pnpm = join(resources, 'dsh-runtime', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
+  if (!existsSync(pnpm)) throw new Error('packaged resources missing pnpm/bin/pnpm.mjs: ' + pnpm)
+  const artifacts = join(resources, 'dsh-runtime', 'node_modules', 'pnpm', 'artifacts')
+  if (existsSync(artifacts)) throw new Error('packaged pnpm artifacts/ was not pruned: ' + artifacts)
+}
+
 await assertLocalePacks(executable)
+assertPackagedGateway(executable)
+assertPackagedPnpm(executable)
 
 const smokeHome = await mkdtemp(join(tmpdir(), 'dsh-desktop-package-smoke-'))
 const emptyPath = join(smokeHome, 'empty-path')
@@ -213,6 +241,8 @@ try {
   if (!response.ok || body?.result?.ok !== true) throw new Error('packaged Web UI probe failed')
   console.log('✓ packaged app selected its bundled @deepseek-ai/dsh runtime')
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
+  console.log('✓ packaged resources include dsh-cli.mjs')
+  console.log('✓ packaged pnpm.mjs is present and artifacts/ was pruned')
   console.log('✓ bundled node shim runs with no system PATH: ' + shim)
   console.log('✓ packaged runtime keeps ELECTRON_RUN_AS_NODE out of the Agent environment')
   console.log('✓ packaged Web UI answered host.describe at ' + url)

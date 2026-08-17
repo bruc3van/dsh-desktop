@@ -21,6 +21,8 @@ extraResources:
   # same way it reads the bundled CLI entry beside it.
   - from: .build/runtime-launcher.mjs
     to: runtime-launcher.mjs
+  - from: .build/dsh-cli.mjs
+    to: dsh-cli.mjs
 
 asar: true
 npmRebuild: false

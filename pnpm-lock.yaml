@@ -48,6 +48,9 @@ importers:
       dsh-desktop-safe-market:
         specifier: https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz
         version: https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz(9693bc9202a3e1d1c6f81e9b6a22dd10)
+      pnpm:
+        specifier: 11.16.0
+        version: 11.16.0
     optionalDependencies:
       '@deepseek-ai/node-addon-landlock-run-linux-x64':
         specifier: 0.1.1
@@ -4422,6 +4425,11 @@ packages:
   plist@3.1.1:
     resolution: {integrity: sha512-ZIfcLJC+7E7FBFnDxm9MPmt7D+DidyQ26lewieO75AdhA2ayMtsJSES0iWzqJQbcVRSrTufQoy0DR94xHue0oA==}
     engines: {node: '>=10.4.0'}
+
+  pnpm@11.16.0:
+    resolution: {integrity: sha512-t2fpqY/IeuwPQtrvzQ6ElBws20XXPE4eaIYPsr39vgMqtZIQVHnl4Fwjf3QMil/9u7UjhXl93CKWdFobu4g+jQ==}
+    engines: {node: '>=22.13'}
+    hasBin: true
 
   postject@1.0.0-alpha.6:
     resolution: {integrity: sha512-b9Eb8h2eVqNE8edvKdwqkrY6O7kAwmI8kcnBv1NScolYJbo59XUF0noFq+lxbC1yN20bmC0WBEbDC5H/7ASb0A==}
@@ -10056,6 +10064,8 @@ snapshots:
       '@xmldom/xmldom': 0.9.10
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
+
+  pnpm@11.16.0: {}
 
   postject@1.0.0-alpha.6:
     dependencies:

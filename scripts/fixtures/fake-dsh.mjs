@@ -7,6 +7,8 @@
  * must print the official readiness line and then serve `/api/host.describe`.
  * DSH_FIXTURE_FAIL=1 makes `web` exit immediately, standing in for an
  * installed runtime that is present but cannot start.
+ * DSH_FIXTURE_DELAY_MS delays the readiness line so a source toggle can land
+ * while the child is still booting.
  * @module desktop/scripts/fixtures/fake-dsh
  */
 
@@ -42,14 +44,21 @@ const server = createServer((req, res) => {
     + '<body><p>installed fixture</p></body></html>')
 })
 
-server.listen(0, '127.0.0.1', () => {
-  const address = server.address()
-  // The exact line shape `parseReadiness` matches in the official runtime.
-  process.stdout.write('dsh web: http://127.0.0.1:' + String(address.port) + '\n')
-})
+function listen() {
+  server.listen(0, '127.0.0.1', () => {
+    const address = server.address()
+    // The exact line shape `parseReadiness` matches in the official runtime.
+    process.stdout.write('dsh web: http://127.0.0.1:' + String(address.port) + '\n')
+  })
+}
 
 // The client stops this child with SIGTERM before it quits; exit cleanly so a
-// leaked process is a real failure rather than fixture noise.
+// leaked process is a real failure rather than fixture noise. Registered
+// before listen() so a source toggle during DSH_FIXTURE_DELAY_MS still exits.
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => { server.close(() => { process.exit(0) }) })
 }
+
+const delayMs = Number(process.env.DSH_FIXTURE_DELAY_MS)
+if (Number.isFinite(delayMs) && delayMs > 0) setTimeout(listen, delayMs)
+else listen()

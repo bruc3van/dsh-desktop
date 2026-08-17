@@ -9,7 +9,10 @@
  *  1. a working installed dsh is detected and preferred over the bundled one;
  *  2. an installed dsh that cannot start falls back to the bundled runtime
  *     instead of spending the recovery budget on the same failure;
- *  3. the connection surfaces can see a live instance on the default port, so
+ *  3. switching Smart-mode sources while a local child is running (ready, or
+ *     still booting) respawns from the new set without treating the stop as a
+ *     crash — PATH/npx stay eligible, and the retry budget is not spent;
+ *  4. the connection surfaces can see a live instance on the default port, so
  *     switching to it is one click rather than a typed address.
  * @module desktop/scripts/check-installed-runtime
  */
@@ -108,6 +111,12 @@ async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
       inheritedPath = value ?? ''
       continue
     }
+    // A leftover diagnostic from a previous packaged run must not skip PATH
+    // detection or pin a command this check did not ask for.
+    if (upper === 'DSH_DESKTOP_SKIP_INSTALLED_DSH') continue
+    if (upper === 'DSH_DESKTOP_DSH') continue
+    if (upper === 'DSH_FIXTURE_FAIL') continue
+    if (upper === 'DSH_FIXTURE_DELAY_MS') continue
     env[key] = value
   }
   Object.assign(env, extraEnv)
@@ -193,6 +202,66 @@ if (startedPid !== undefined) {
   check('quitting stops the runtime the client started', !alive(startedPid), 'PID ' + String(startedPid))
 }
 
+function attachLog(app) {
+  let log = ''
+  const runner = app.process()
+  runner.stdout?.on('data', chunk => { log += chunk.toString() })
+  runner.stderr?.on('data', chunk => { log += chunk.toString() })
+  return {
+    text: () => log,
+    sawCrashLadder: () => /trying the next enabled runtime/.test(log)
+      || /本地服务意外退出/.test(log)
+      || /The local service exited; restarting/.test(log),
+  }
+}
+
+// 1b. Toggling Smart-mode sources after the installed child is ready must
+//     respawn from the new set, not walk the crash ladder (which would reject
+//     PATH for the rest of the session and spend a retry).
+try {
+  app = await launch('switch-ready', { DSH_DESKTOP_SKIP_PROBE: '1' })
+  const log = attachLog(app)
+  await app.firstWindow()
+  await waitForStatus(app, s => s.runtimeSource === 'installed' && typeof s.childPid === 'number' && s.targetUrl !== '')
+  await app.windows()[0].waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
+  const switched = await evaluateStable(app, () => window.desktop.connection.setSmartRuntimes(['bundled']))
+  check('a ready-child source save is accepted', switched.saved === true
+    && JSON.stringify(switched.smartRuntimes) === JSON.stringify(['bundled']), JSON.stringify(switched))
+  const bundled = await waitForStatus(app, s => s.runtimeSource === 'bundled' && s.targetUrl !== '')
+  check('the ready child is replaced by the bundled runtime', bundled.runtimeSource === 'bundled', bundled.runtimeSource)
+  check('that stop is not treated as a crash', !log.sawCrashLadder(), log.text().match(/dsh runtime: \w+|trying the next|意外退出|exited; restarting/g)?.join(' → '))
+  const restored = await evaluateStable(app,
+    () => window.desktop.connection.setSmartRuntimes(['probe', 'installed', 'npx', 'bundled']))
+  check('re-enabling every source is accepted', restored.saved === true, JSON.stringify(restored))
+  const back = await waitForStatus(app, s => s.runtimeSource === 'installed' && s.targetUrl !== '')
+  check('PATH is still eligible after the toggle', back.runtimeSource === 'installed', back.runtimeSource)
+} finally {
+  await app?.close().catch(() => {})
+}
+
+// 1c. The same toggle while the installed child is still booting must not
+//     mark PATH rejected — lastSource is already `installed` and wasReady is
+//     still false, which is exactly the crash-ladder's "give up on PATH" case.
+try {
+  app = await launch('switch-boot', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_DELAY_MS: '4000' })
+  const log = attachLog(app)
+  await app.firstWindow()
+  const spawnedDeadline = Date.now() + 15_000
+  while (Date.now() < spawnedDeadline && !/dsh runtime: installed/.test(log.text())) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  check('the installed runtime was spawned before the toggle',
+    /dsh runtime: installed/.test(log.text()), log.text().match(/dsh runtime: \w+/g)?.join(' → '))
+  const switched = await evaluateStable(app, () => window.desktop.connection.setSmartRuntimes(['bundled']))
+  check('a booting-child source save is accepted', switched.saved === true
+    && JSON.stringify(switched.smartRuntimes) === JSON.stringify(['bundled']), JSON.stringify(switched))
+  const bundled = await waitForStatus(app, s => s.runtimeSource === 'bundled' && s.targetUrl !== '', 60_000)
+  check('the booting child is replaced by the bundled runtime', bundled.runtimeSource === 'bundled', bundled.runtimeSource)
+  check('a stop before readiness does not reject PATH', !log.sawCrashLadder(), log.text().match(/dsh runtime: \w+|trying the next|意外退出|exited; restarting/g)?.join(' → '))
+} finally {
+  await app?.close().catch(() => {})
+}
+
 // 2. An installed dsh that cannot start falls back to the bundled runtime.
 //    The switch is asserted from the main process's own log: a failing runtime
 //    can be replaced faster than the status bridge can be polled.
@@ -207,7 +276,7 @@ try {
   check('the failing installed runtime is tried first', /dsh runtime: installed/.test(log),
     log.match(/dsh runtime: \w+/g)?.join(' → '))
   check('a failed installed runtime falls back to the bundled one',
-    /falling back to the bundled runtime/.test(log) && fellBack.runtimeSource === 'bundled')
+    /trying the next enabled runtime/.test(log) && fellBack.runtimeSource === 'bundled')
   check('the rejected runtime is no longer offered', fellBack.installedDshVersion === undefined, fellBack.installedDshVersion)
 } finally {
   await app?.close().catch(() => {})

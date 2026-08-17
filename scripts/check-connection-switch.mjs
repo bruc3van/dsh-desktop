@@ -154,12 +154,60 @@ try {
     || await window.locator('#dsh-enhance-url').inputValue() !== remoteOrigin) {
     throw new Error('enhanced connection card did not expose the saved remote shortcut')
   }
+  if (await window.locator('#dsh-enhance-runtimes [data-smart-runtime]').count() !== 4) {
+    throw new Error('enhanced connection card is missing Smart-mode source toggles')
+  }
   const remoteSettingsPagePromise = app.waitForEvent('window')
   await window.evaluate(() => { window.desktop.openConnectionSettings() })
   const remoteSettingsPage = await remoteSettingsPagePromise
   await remoteSettingsPage.waitForFunction(() => document.querySelector('#switch')?.hidden === false)
   if (await remoteSettingsPage.locator('#switch').textContent() !== '切换到智能模式') {
     throw new Error('pinned-address shortcut did not offer Smart mode')
+  }
+  if (await remoteSettingsPage.locator('[data-smart-runtime]').count() !== 4) {
+    throw new Error('native connection page is missing Smart-mode source toggles')
+  }
+  // This page is the client's own loopback, so the save does not go through
+  // the remote-origin confirmation the injected card would hit.
+  const emptySources = await remoteSettingsPage.evaluate(async () => {
+    const response = await fetch('desktop/smart-runtimes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ smartRuntimes: [] }),
+    })
+    return response.json()
+  })
+  if (emptySources.saved) {
+    throw new Error('an empty Smart-mode source list was accepted: ' + JSON.stringify(emptySources))
+  }
+  const onlyBundled = await remoteSettingsPage.evaluate(async () => {
+    const response = await fetch('desktop/smart-runtimes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ smartRuntimes: ['bundled'] }),
+    })
+    return response.json()
+  })
+  if (!onlyBundled.saved || JSON.stringify(onlyBundled.smartRuntimes) !== JSON.stringify(['bundled'])) {
+    throw new Error('Smart-mode source save failed: ' + JSON.stringify(onlyBundled))
+  }
+  const savedRuntimes = JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8'))
+  if (JSON.stringify(savedRuntimes.smartRuntimes) !== JSON.stringify(['bundled'])) {
+    throw new Error('Smart-mode sources were not persisted: ' + JSON.stringify(savedRuntimes))
+  }
+  if (new URL(window.url()).origin !== remoteOrigin) {
+    throw new Error('toggling Smart-mode sources in Connect mode left the pinned origin: ' + window.url())
+  }
+  const restoredSources = await remoteSettingsPage.evaluate(async () => {
+    const response = await fetch('desktop/smart-runtimes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ smartRuntimes: ['probe', 'installed', 'npx', 'bundled'] }),
+    })
+    return response.json()
+  })
+  if (!restoredSources.saved) {
+    throw new Error('restoring Smart-mode sources failed: ' + JSON.stringify(restoredSources))
   }
   const toSmart = await window.evaluate(() => window.desktop.connection.switchMode())
   if (!toSmart.switched || toSmart.mode !== 'smart') throw new Error('failed to switch to Smart mode: ' + JSON.stringify(toSmart))
@@ -204,6 +252,7 @@ try {
   console.log('✓ legacy remote configuration remains active')
   console.log('✓ a cross-origin sub-frame redirect is not treated as a top-frame navigation')
   console.log('✓ enhanced connection card shows the saved remote shortcut')
+  console.log('✓ Smart-mode source toggles persist without leaving Connect mode')
   console.log('✓ native settings shows the context-aware shortcut')
   console.log('✓ shortcut switches to Smart mode without deleting the remote address')
   console.log('✓ shortcut switches back to the saved remote origin')

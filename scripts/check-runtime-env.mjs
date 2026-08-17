@@ -23,7 +23,9 @@ import { fileURLToPath } from 'node:url'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const LAUNCHER = join(APP_DIR, '.build', 'runtime-launcher.mjs')
+const GATEWAY = join(APP_DIR, '.build', 'dsh-cli.mjs')
 if (!existsSync(LAUNCHER)) throw new Error('run `pnpm run build` first: ' + LAUNCHER + ' is missing')
+if (!existsSync(GATEWAY)) throw new Error('run `pnpm run build` first: ' + GATEWAY + ' is missing')
 
 // `pnpm run <script> -- <path>` forwards the separator itself as an argument.
 const requested = process.argv.slice(2).find(argument => argument !== '--')
@@ -36,7 +38,10 @@ const workDir = await mkdtemp(join(tmpdir(), 'dsh-desktop-runtime-env-'))
 // this executable (the picker worker) inherits.
 const fixture = join(workDir, 'entry.mjs')
 await writeFile(fixture, `
+import { writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+
+if (process.env.DSH_DESKTOP_FIXTURE_MARKER) writeFileSync(process.env.DSH_DESKTOP_FIXTURE_MARKER, 'imported')
 
 const readVariable = (command, args) => {
   const result = spawnSync(command, args, { encoding: 'utf8' })
@@ -56,12 +61,16 @@ console.log('RESULT ' + JSON.stringify({
 }))
 `)
 
-/** Run the launcher with the fixture as its entry; resolve its reported facts. */
-async function runLauncher(nodeMode) {
-  const env = { ...process.env, DSH_DESKTOP_RUNTIME_ENTRY: fixture }
+let fixtureRun = 0
+
+/** Run a built entry (launcher or gateway) with the fixture as its CLI target. */
+async function runEntry(entry, args, nodeMode) {
+  fixtureRun += 1
+  const marker = join(workDir, 'imported-' + String(fixtureRun) + '.marker')
+  const env = { ...process.env, DSH_DESKTOP_RUNTIME_ENTRY: fixture, DSH_DESKTOP_FIXTURE_MARKER: marker }
   if (nodeMode === undefined) Reflect.deleteProperty(env, 'ELECTRON_RUN_AS_NODE')
   else env.ELECTRON_RUN_AS_NODE = nodeMode
-  const child = spawn(EXECUTABLE, [LAUNCHER, 'web', '--port', '0'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(EXECUTABLE, [entry, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   let stdout = ''
   let stderr = ''
   child.stdout.on('data', chunk => { stdout += chunk.toString() })
@@ -78,10 +87,22 @@ async function runLauncher(nodeMode) {
     child.once('exit', value => { clearTimeout(timer); resolve(value) })
   })
   const line = stdout.split('\n').find(entry => entry.startsWith('RESULT '))
-  if (code !== 0 || line === undefined) {
-    throw new Error('launcher run failed (code=' + String(code) + ')\n' + stdout + stderr)
+  return {
+    code,
+    stdout,
+    stderr,
+    imported: existsSync(marker),
+    result: line === undefined ? undefined : JSON.parse(line.slice('RESULT '.length)),
   }
-  return JSON.parse(line.slice('RESULT '.length))
+}
+
+/** Run the launcher with the fixture as its entry; resolve its reported facts. */
+async function runLauncher(nodeMode) {
+  const run = await runEntry(LAUNCHER, ['web', '--port', '0'], nodeMode)
+  if (run.code !== 0 || run.result === undefined) {
+    throw new Error('launcher run failed (code=' + String(run.code) + ')\n' + run.stdout + run.stderr)
+  }
+  return run.result
 }
 
 const checks = []
@@ -162,6 +183,40 @@ try {
     JSON.stringify(packagedLike.plainChild))
   check('process.execPath children still receive it', packagedLike.selfChild === '1',
     JSON.stringify(packagedLike.selfChild))
+
+  const blocked = await runEntry(GATEWAY, ['web'], '1')
+  check('gateway refuses `web` with exit 2', blocked.code === 2, String(blocked.code))
+  check('gateway does not import the runtime entry when refusing', blocked.imported === false,
+    'imported=' + String(blocked.imported) + '\n' + blocked.stdout + blocked.stderr)
+  check('gateway refusal names the desktop client', blocked.stderr.includes('already running'),
+    blocked.stderr)
+
+  const blockedAlias = await runEntry(GATEWAY, ['--profile', 'web'], '1')
+  check('gateway refuses `--profile web` (alias cannot bypass)',
+    blockedAlias.code === 2 && blockedAlias.imported === false,
+    'code=' + String(blockedAlias.code) + ' imported=' + String(blockedAlias.imported))
+
+  const blockedInner = await runEntry(GATEWAY, ['--profile', 'web', '--', '--dump-config'], '1')
+  check('gateway refuses inner `--dump-config` after `--`',
+    blockedInner.code === 2 && blockedInner.imported === false,
+    'code=' + String(blockedInner.code) + ' imported=' + String(blockedInner.imported))
+
+  const forwarded = await runEntry(GATEWAY, ['plugin', '--profile', 'web', 'add', 'x'], '1')
+  check('gateway forwards `plugin` to the launcher', forwarded.code === 0 && forwarded.result !== undefined,
+    'code=' + String(forwarded.code) + '\n' + forwarded.stdout + forwarded.stderr)
+  check('forwarded plugin argv reaches the entry',
+    JSON.stringify(forwarded.result?.argv) === JSON.stringify(['plugin', '--profile', 'web', 'add', 'x']),
+    JSON.stringify(forwarded.result?.argv))
+  check('forwarded plugin still strips ELECTRON_RUN_AS_NODE', forwarded.result?.ambient === null,
+    String(forwarded.result?.ambient))
+  check('forwarded plugin Agent children do not inherit it', forwarded.result?.plainChild === '',
+    JSON.stringify(forwarded.result?.plainChild))
+  check('forwarded plugin still reattaches it for process.execPath children', forwarded.result?.selfChild === '1',
+    JSON.stringify(forwarded.result?.selfChild))
+
+  const forwardedDump = await runEntry(GATEWAY, ['--profile', 'web', '--dump-config'], '1')
+  check('gateway forwards `--dump-config`', forwardedDump.code === 0 && forwardedDump.imported === true,
+    'code=' + String(forwardedDump.code) + ' imported=' + String(forwardedDump.imported))
 
   // Development and any real Node install: nothing to strip, nothing patched.
   // Only a real Node can run this arm — without the variable, a packaged

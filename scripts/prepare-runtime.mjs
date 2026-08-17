@@ -95,6 +95,34 @@ await prune(runtimeModules)
 console.log('[runtime] pruned ' + prunedFiles + ' development entries ('
   + (prunedBytes / 1e6).toFixed(1) + ' MB) from ' + relative(APP_DIR, runtimeModules))
 
+/**
+ * pnpm ships a standalone Node executable under `artifacts/exe` (~18 MB) that
+ * this client never launches: the Agent runs `pnpm.mjs` on Electron's Node.
+ * The path is this exact relative location. Pruning a directory named
+ * `artifacts` anywhere would be the same class of bug as pruning `doc/`
+ * (`yaml` keeps runtime code under `dist/doc/`).
+ */
+const pnpmArtifacts = join(runtimeModules, 'pnpm', 'artifacts')
+if (existsSync(pnpmArtifacts)) {
+  let artifactBytes = 0
+  const collect = async (directory) => {
+    const entries = await readdir(directory, { withFileTypes: true })
+    for (const entry of entries) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) await collect(path)
+      else if (entry.isFile()) artifactBytes += (await stat(path)).size
+    }
+  }
+  await collect(pnpmArtifacts)
+  await rm(pnpmArtifacts, { recursive: true, force: true })
+  console.log('[runtime] pruned pnpm/artifacts (' + (artifactBytes / 1e6).toFixed(1) + ' MB)')
+}
+
+const pnpmBin = join(runtimeModules, 'pnpm', 'bin', 'pnpm.mjs')
+if (!existsSync(pnpmBin)) {
+  throw new Error('pnpm bin missing after deploy: ' + pnpmBin + ' — add pnpm to dsh-runtime/package.json')
+}
+
 // The .ts prune is only safe while no manifest resolves to a .ts file at
 // runtime; this invariant fails the release job with the offending package
 // name if a future dependency starts shipping one. See ts-entry-guard.mjs.

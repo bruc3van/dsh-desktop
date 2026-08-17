@@ -22,9 +22,11 @@ pnpm run dev
 3. 再找 npx 是否已经缓存过官方包。**官方安装方式 `npx @deepseek-ai/dsh web` 不会往 PATH 里装任何东西**，而是把完整的包留在 npm 缓存里（POSIX 在 `~/.npm/_npx/`，Windows 在 `%LOCALAPPDATA%\npm-cache\_npx\`）。只要你按官方文档跑过一次，这份包就能直接复用。
 4. 都没有时，才使用安装包或项目依赖中固定的内置运行时。
 
+这四种来源都可以在连接设置里单独关闭（多选按钮），方便测试时固定到某一种；缺省全部开启，至少保留一种。未勾选的来源会被跳过，顺序不变。关掉「复用本机实例」只表示客户端不再连接探测到的实例：客户端不会结束用户自己启动的进程。若该实例仍在应答，也不会在同一份会话数据上再启动本地运行时（以免双写损坏），而是提示先退出该实例再重试。`DSH_DESKTOP_SKIP_PROBE=1` 会同时跳过这道占用闸和复用连接。`DSH_DESKTOP_SKIP_INSTALLED_DSH=1` 仍只在开发环境生效，会跳过 PATH 与 npx 探测。
+
 第 2、3 步都跑在**你自己的 Node** 上，且只使用**已经存在**的包——不联网、不下载、不替你安装 Node.js；缓存里没有就直接跳过。客户端读取缓存包的 `package.json` 校验其确实是 `@deepseek-ai/dsh` 并取用真实版本号，不会误启动同路径下的其他东西。npx 缓存不会自行更新：若缓存版本低于内置运行时，客户端仍优先使用你的缓存，但会在连接设置里提示；重新运行一次 `npx @deepseek-ai/dsh web` 即可把缓存刷新到最新版。
 
-启动的都是纯后台服务进程（`dsh web --port 0`），不会打开浏览器窗口，也不占用 3080；退出桌面端时，客户端启动的服务会被一并关闭。若选中的运行时启动失败，客户端会自动回退到内置运行时。连接设置里会显示当前用的是哪一种（本机安装 / npx 缓存 / 内置）及其版本。内置安全市场会接入客户端启动的任一运行时（复用实例与固定地址除外——那两种不由客户端启动），见下文「开发与验证」与 README 的[「内置安全市场」](../README.md#内置安全市场)。
+启动的都是纯后台服务进程（`dsh web --port 0`），不会打开浏览器窗口，也不占用 3080；退出桌面端时，客户端启动的服务会被一并关闭。若选中的运行时启动失败，客户端会按仍启用的来源依次回退（默认最后是内置运行时）。连接设置里会显示当前用的是哪一种（本机安装 / npx 缓存 / 内置）及其版本。内置安全市场会接入客户端启动的任一运行时（复用实例与固定地址除外——那两种不由客户端启动），见下文「开发与验证」与 README 的[「内置安全市场」](../README.md#内置安全市场)。
 
 如果内置运行时无法启动，或希望使用其他实例，请打开**「设置 → 通用设置 → 连接」**修改连接；页面完全加载不出来时，启动界面会直接给出**「Web UI 连接…」**按钮。
 
@@ -48,7 +50,7 @@ pnpm run shot:readme    # 更新 README 使用的隐私安全截图
 pnpm run e2e            # 发送真实请求并验证流式回复
 ```
 
-除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:bundled-plugin`（内置市场接入 / 撤回）、`check:runtime-lock`（运行时锁定与更新时序）、`check:auto-fallback`（失联自动回落）与 `check:error-surface`（错误界面）。
+除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:smart-runtimes`（智能连接来源开关）、`check:bundled-plugin`（内置市场接入 / 撤回）、`check:runtime-lock`（运行时锁定与更新时序）、`check:auto-fallback`（关掉复用时的占用拒绝，以及失联自动回落）与 `check:error-surface`（错误界面）。
 
 `pnpm run e2e` 需要有效的 API Key（`export DEEPSEEK_API_KEY=…`，或在「设置 → 凭据」添加一次）。没有 Key 时它有意以退出码 2 失败：被跳过的真实往返不能显示为绿色。它还会在一次性临时 `DSH_HOME` 上运行，绝不会碰到你的真实会话。生产窗口直接加载官方 Web UI；仓库不维护第二套产品 renderer。`pnpm run check:updater` 用本地更新清单夹具验证检查、下载校验和忽略版本。
 
