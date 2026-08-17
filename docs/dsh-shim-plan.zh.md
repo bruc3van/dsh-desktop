@@ -11,7 +11,18 @@
 dsh plugin --profile <profile> add <该仓库 tarball>
 ```
 
-市场插件自身**不 spawn 任何进程**，安装动作完全依赖 Agent 去执行 `dsh`。而纯桌面用户（未安装 Node / dsh）的 PATH 上没有 `dsh`，这条命令必然失败——Agent 拿到的是 shell 的「命令不存在」，而不是一条可转述的诊断。
+市场插件自身**不 spawn 任何进程**，安装动作完全依赖 Agent 去执行 `dsh`。而纯桌面用户（未安装 Node / dsh）的 PATH 上没有 `dsh`，这条命令必然失败。
+
+市场 0.2.9 起，提示词不再假定 `dsh` 就在 PATH 上，而是让 Agent 自己按四步定位：① PATH；② dsh 默认安装目录；③ npm / pnpm 全局 bin；④ 正在监听 1466 端口的 dsh 进程，取其可执行文件路径。**这改善了失败的形态，但没有关闭这个洞**——内置运行时下四步全部落空：
+
+- ①②③ 对纯桌面用户本就为空。客户端只往子进程 PATH 追加 `~/.dsh-desktop/bin`，那里只有 `ensureNodeShim()` 写出的 `node`；闭包里的 `dsh-runtime/node_modules/.bin/dsh` 不在 PATH 上。
+- ④ 也匹配不上：客户端以 `web --port 0` 启动运行时（`src/main/index.ts`），端口是随机的，不是 1466。
+
+所以 Agent 拿到的从「命令不存在」变成了「四处都找不到」——更像一条诊断，但仍不是能转述给用户的准确结论。
+
+⚠️ 第 ④ 步还藏着一个踩空点：客户端启动的内置运行时，其**可执行文件路径就是客户端自己的 exe**（`spawn(process.execPath, [runtime-launcher.mjs, 'web', '--port', '0'])`）。今天靠随机端口侥幸不匹配；一旦端口固定，Agent 就会去执行 `<客户端 exe> plugin --profile <name> add …`——那不是 dsh CLI，是拉起第二个 Electron 实例。
+
+注意本计划的网关**挡不住这一条**：`dsh-cli.mjs` 只在 shim 这条链路上生效，Agent 直接执行客户端 exe 时它根本不在调用栈里。真正的缓解是 shim 让第 ① 步先命中，Agent 压根走不到第 ④ 步——见第一阶段末尾的收益清单。
 
 更深一层：`dsh plugin` 只是 pnpm 的转发器（`spawnSync("pnpm", ...)`，找不到即打印 `pnpm not found on PATH` 并返回 127），而客户端也不打包 pnpm。所以要让市场真正闭环，缺的是**两样东西**。
 
@@ -192,7 +203,8 @@ exit /b %ERRORLEVEL%
 因此第一阶段的**实际**收益收敛为：
 
 - `--dump-config` / `--dump-default-config` / `--version` 三类自省能力
-- 一次准确、可转述的失败（`dsh: pnpm not found on PATH — install pnpm to manage profile plugins`，退出 127），取代 Agent 面对「命令不存在」时的自作主张
+- 一次准确、可转述的失败（`dsh: pnpm not found on PATH — install pnpm to manage profile plugins`，退出 127），取代 Agent「四处都找不到 dsh」之后的自作主张
+- **让市场提示词的定位在第 ① 步就收敛**：`dsh` 进了 PATH 之后 Agent 不再向下试探，走不到第 ④ 步那条「按端口找进程、把客户端 exe 当 dsh 使」的路。这是对该踩空点唯一有效的缓解——网关只覆盖 shim 这条链路，对直接执行客户端 exe 无能为力。这条收益不依赖第二阶段
 - 第二阶段的必要前置
 
 ## 验收
@@ -220,7 +232,7 @@ exit /b %ERRORLEVEL%
 
 - **pnpm 在 Electron Node 模式下可用。** `ELECTRON_RUN_AS_NODE=1 electron.exe pnpm.mjs --version` 正常返回。
 - **真实安装可以走通。** 在一个仿造的 web profile 目录里执行
-  `ELECTRON_RUN_AS_NODE=1 electron.exe pnpm.mjs add <市场 v0.2.7 tarball>`
+  `ELECTRON_RUN_AS_NODE=1 electron.exe pnpm.mjs add <市场 tarball>`（实测用的是当时内置的 v0.2.7）
   → `Packages: +3`，**9.6 秒**完成，装出的 `lib/` 齐全。
 - **不需要构建工具链。** 市场插件的 `package.json` 没有 `prepare` 脚本，`lib/` 随 tarball 直接下发，`pnpm-workspace.yaml` 的 `allowBuilds` 里也没有它。一次安装只是「下载 tarball + 从 registry 拉 `yaml`/`zod` 两个小包」。
 - **体积代价可控。** pnpm 包 37 MB，其中 `artifacts/exe` 占 18 MB——那是自带 Node 的独立可执行变体，用不上、可裁。实需 `dist/` + `bin/` ≈ **20 MB 未压缩**。

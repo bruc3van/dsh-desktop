@@ -6,7 +6,7 @@
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "1.0.1",
     "@deepseek-ai/dsh": "0.1.0-rc.6",
-    "dsh-desktop-safe-market": "https://github.com/bruc3van/dsh-desktop-safe-market/archive/edcc750d7749671f0d1a3567ade56945b8ddf713.tar.gz"
+    "dsh-desktop-safe-market": "https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz"
   },
   "optionalDependencies": {
     "@deepseek-ai/node-addon-landlock-run-linux-x64": "0.1.1",

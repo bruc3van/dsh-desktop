@@ -46,8 +46,8 @@ importers:
         specifier: 0.1.0-rc.6
         version: 0.1.0-rc.6(747a41d0547926e514b50a187dac12e4)
       dsh-desktop-safe-market:
-        specifier: https://github.com/bruc3van/dsh-desktop-safe-market/archive/edcc750d7749671f0d1a3567ade56945b8ddf713.tar.gz
-        version: https://github.com/bruc3van/dsh-desktop-safe-market/archive/edcc750d7749671f0d1a3567ade56945b8ddf713.tar.gz(3337eec68ff8cfd4dea3630f846d9254)
+        specifier: https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz
+        version: https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz(3337eec68ff8cfd4dea3630f846d9254)
     optionalDependencies:
       '@deepseek-ai/node-addon-landlock-run-linux-x64':
         specifier: 0.1.1
@@ -3147,10 +3147,12 @@ packages:
   '@xmldom/xmldom@0.8.13':
     resolution: {integrity: sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw==}
     engines: {node: '>=10.0.0'}
+    deprecated: this version has critical issues, please update to the latest version
 
   '@xmldom/xmldom@0.9.10':
     resolution: {integrity: sha512-A9gOqLdi6cV4ibazAjcQufGj0B1y/vDqYrcuP6d/6x8P27gRS8643Dj9o1dEKtB6O7fwxb2FgBmJS2mX7gpvdw==}
     engines: {node: '>=14.6'}
+    deprecated: this version has critical issues, please update to the latest version
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -3495,9 +3497,9 @@ packages:
     resolution: {integrity: sha512-ZmdL2rui+eB2YwhsWzjInR8LldtZHGDoQ1ugH85ppHKwpUHL7j7rN0Ti9NCnGiQbhaZ11FpR+7ao1dNsmduNUg==}
     engines: {node: '>=12'}
 
-  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/edcc750d7749671f0d1a3567ade56945b8ddf713.tar.gz:
-    resolution: {integrity: sha512-K5Rz53cYg6tkB0ZTC1im1fRNH3pKvEUSlDJuU/FS8/Rg2iMFI+JiFXgZWsaeiLjphpw1Ix0++oVx4RXsfBtBww==, tarball: https://github.com/bruc3van/dsh-desktop-safe-market/archive/edcc750d7749671f0d1a3567ade56945b8ddf713.tar.gz}
-    version: 0.2.7
+  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz:
+    resolution: {integrity: sha512-z6InkjQ/mJtcHjlwqRaxywSE3FLajj7Pm4LfMELoDjJ1SCZ5Gqcx4AjOXtUMwSyK7WFIHEDBetfz4hUg723LEQ==, tarball: https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz}
+    version: 0.2.9
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
       '@deepseek-ai/cordis-plugin-loader': '>=1.0.0'
@@ -8843,7 +8845,7 @@ snapshots:
 
   dotenv@16.4.5: {}
 
-  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/edcc750d7749671f0d1a3567ade56945b8ddf713.tar.gz(3337eec68ff8cfd4dea3630f846d9254):
+  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz(3337eec68ff8cfd4dea3630f846d9254):
     dependencies:
       yaml: 2.9.0
       zod: 4.4.3
