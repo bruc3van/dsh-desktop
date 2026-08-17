@@ -126,6 +126,74 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+/** An origin, or '' for anything that is not a parseable absolute URL. */
+export function originOf(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return ''
+  }
+}
+
+/** What identity checking concluded about the process holding a recorded pid. */
+export type PidVerdict = 'ours' | 'recycled' | 'unknown'
+
+/**
+ * What a restart must do with the runtime the window is currently pointed at.
+ * `verify` means the cheap clauses all passed and the identity check — which
+ * costs a spawned command and up to seconds — is now worth paying for.
+ */
+export type RestartDisposition = 'leave' | 'verify' | 'stop'
+
+export interface RestartDispositionInput {
+  /** True when the target was adopted by the startup probe, not spawned here. */
+  adopted: boolean
+  /** The origin the window is actually pointed at. */
+  targetOrigin: string
+  /** The recorded runtime, if there is one. */
+  lock: RuntimeLock | undefined
+  /** The pid of the child this client owns, when it has one running. */
+  ownedChildPid: number | undefined
+  /** Whether the recorded pid names a live process. */
+  pidAlive: boolean
+  /** The identity verdict, once it has been paid for. */
+  verdict?: PidVerdict
+}
+
+/**
+ * Decide whether a restart may stop the runtime it is connected to.
+ *
+ * Stopping is the point of the gesture — a successor that adopts the same
+ * instance restarts nothing the user asked for — but it is also the only step
+ * that can reach a process this client does not own, so every clause below
+ * exists to keep a stranger out of the kill:
+ *
+ * - a runtime this process spawned is stopped by the manager's own ladder,
+ *   which waits on an exit event this path cannot see;
+ * - only the recorded child qualifies, and only while the record names the
+ *   origin the window is on, so a `dsh web` the user started in a terminal
+ *   (which writes no record) keeps running;
+ * - a dead pid is nothing to stop, and a live one still has to prove its age
+ *   matches the recorded spawn, because a recycled pid names a stranger and
+ *   the Windows kill takes a whole process tree.
+ *
+ * Every refusal degrades the same safe way: the runtime keeps running, the
+ * successor adopts it again, and the user gets a restarted shell rather than
+ * a stopped process that was never ours.
+ */
+export function restartDisposition(input: RestartDispositionInput): RestartDisposition {
+  const lock = input.lock
+  if (!input.adopted) return 'leave'
+  // No record, or one whose child never reported readiness: nothing here can
+  // be tied to the origin on screen.
+  if (lock?.url === undefined) return 'leave'
+  if (lock.childPid === input.ownedChildPid) return 'leave'
+  if (input.targetOrigin === '' || originOf(lock.url) !== input.targetOrigin) return 'leave'
+  if (!input.pidAlive) return 'leave'
+  if (input.verdict === undefined) return 'verify'
+  return input.verdict === 'ours' ? 'stop' : 'leave'
+}
+
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

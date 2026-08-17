@@ -25,6 +25,7 @@
     "check:runtime-env": "node scripts/check-runtime-env.mjs",
     "check:identity": "node scripts/check-identity.mjs",
     "check:runtime-lock": "node scripts/check-runtime-lock.mjs",
+    "check:restart": "node scripts/check-restart.mjs",
     "pack": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:runtime-env && npm run check:bundled-plugin && npm run check:runtime-lock && electron-builder --dir",
     "dist": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:runtime-env && npm run check:bundled-plugin && npm run check:runtime-lock && electron-builder --publish never",
     "dev": "npm run build && electron .",

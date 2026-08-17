@@ -38,7 +38,7 @@ import {
 } from './updater.ts'
 import { abandonBundledPlugin, BUNDLED_PLUGIN_NAME, seatBundledPlugin, WEB_PROFILE, withdrawBundledPlugin } from './bundled-plugin.ts'
 import { releaseNotesCss, renderReleaseNotes } from './release-notes.ts'
-import { clearRuntimeLock, isProcessAlive, readRuntimeLock, recordRuntimeLockUrl, runtimeLockFile, writeRuntimeLock, type RuntimeLock } from './runtime-lock.ts'
+import { clearRuntimeLock, isProcessAlive, originOf, readRuntimeLock, recordRuntimeLockUrl, restartDisposition, runtimeLockFile, writeRuntimeLock, type PidVerdict, type RuntimeLock } from './runtime-lock.ts'
 import { webProbeOrigins } from './web-discovery.ts'
 import {
   executableCandidates,
@@ -1166,6 +1166,14 @@ let launchBudget = MAX_LAUNCH_RETRIES
 let launchBudgetResetTimer: NodeJS.Timeout | undefined
 let quitting = false
 /**
+ * Set when this quit is a restart, so the stop ladder also disposes of a
+ * runtime the client adopted rather than spawned. Read only inside the
+ * shutdown path: by then `quitting` already suppresses every recovery route,
+ * so stopping the harness the window is pointed at cannot be mistaken for an
+ * outage and answered with a second writer.
+ */
+let restarting = false
+/**
  * Set from the moment a Windows installer is about to be handed this process
  * tree until the client exits. The relaunch ladder must not fire in that
  * window: the runtime was stopped on purpose, and a child respawned 250ms
@@ -1348,11 +1356,7 @@ function openExternal(url: string): void {
 
 /** The official Web UI origin (the window must stay inside it). */
 function appOrigin(url: string): string {
-  try {
-    return new URL(url).origin
-  } catch {
-    return ''
-  }
+  return originOf(url)
 }
 
 /** The official UI always renders visible text; an empty body after settling is a blank renderer. */
@@ -2347,8 +2351,63 @@ function trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
     { label: localeChinese() ? '显示主窗口' : 'Show Window', click: showMainWindow },
     { label: updateLabel, click: () => { void handleManualUpdateCheck(true) } },
     { type: 'separator' },
+    { label: localeChinese() ? '重启客户端' : 'Restart', click: restartApp },
     { label: localeChinese() ? '退出' : 'Quit', click: () => { app.quit() } },
   ]
+}
+
+/**
+ * Restart the whole client. A plugin that only takes effect on a fresh runtime
+ * needs the harness replaced, not the page reloaded, and this is the one
+ * gesture that does both without the user hunting for the app again.
+ *
+ * `relaunch` hands the successor to Electron's relauncher helper, which waits
+ * for this process to exit before spawning — so `before-quit` still runs the
+ * stop ladder, and the single-instance lock is free by the time the new
+ * instance asks for it.
+ *
+ * Refused during the Windows installer handoff: `installerHandoff` is set
+ * seconds before that quit lands, and a successor started into a half-written
+ * installation is exactly the damage no relaunch can repair.
+ */
+function restartApp(): void {
+  if (quitting || installerHandoff) return
+  restarting = true
+  app.relaunch()
+  app.quit()
+}
+
+/**
+ * Stop a runtime this client adopted rather than spawned, so that a restart
+ * really does restart the harness. Without this the successor's startup probe
+ * finds the same instance still serving, adopts it again, and the plugin the
+ * user restarted for is still not loaded.
+ *
+ * Which runtimes qualify is decided by `restartDisposition`, where the rules
+ * and their reasons live; this reads the state it needs, pays for the identity
+ * check only once the cheap clauses have passed, and carries out the verdict.
+ */
+async function stopAdoptedRuntimeForRestart(): Promise<void> {
+  const home = childHome()
+  const lock = readRuntimeLock(home)
+  const state = {
+    adopted: probeConnected,
+    targetOrigin: appOrigin(currentTarget() ?? ''),
+    lock,
+    ownedChildPid: webUi?.pid(),
+    pidAlive: lock !== undefined && isProcessAlive(lock.childPid),
+  }
+  if (lock === undefined || restartDisposition(state) !== 'verify') return
+  const verdict: PidVerdict = await pidVerdictForLockedChild(lock)
+  if (restartDisposition({ ...state, verdict }) !== 'stop') {
+    console.warn('[desktop] restart: cannot verify the adopted runtime (PID ' + String(lock.childPid)
+      + '); leaving it running — the new instance will adopt it again')
+    return
+  }
+  console.warn('[desktop] restart: stopping the adopted runtime (PID ' + String(lock.childPid) + ')')
+  // The record stays on a failed kill, for the reason the adoption path
+  // documents: the next start must not spawn beside a writer nobody stopped.
+  if (await terminateProcessTree(lock.childPid)) clearRuntimeLock(home)
 }
 
 function refreshTrayMenu(): void {
@@ -4446,6 +4505,19 @@ if (!gotLock) {
     quitting = true
     if (windowHealthTimer !== undefined) clearInterval(windowHealthTimer)
     if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
-    void webUi?.stop().finally(() => { app.quit() })
+    void (async () => {
+      // A restart carries one extra step: the owned child is stopped below
+      // either way, but an adopted one would otherwise outlive this process
+      // and be adopted right back by the successor.
+      try {
+        if (restarting) await stopAdoptedRuntimeForRestart()
+        await webUi?.stop()
+      } catch (error) {
+        // Never strand the app in a half-quit state over a failed stop: the
+        // ladder is best-effort, the quit is not.
+        console.error('[desktop] shutdown ladder failed: ' + (error instanceof Error ? error.message : String(error)))
+      }
+      app.quit()
+    })()
   })
 }
