@@ -86,6 +86,9 @@ jobs:
       - name: 校验发布产物命名约定 / Verify release artifact naming
         run: pnpm run check:release-artifacts
 
+      - name: 校验 NSIS 安装详情接线 / Verify NSIS install-details wiring
+        run: pnpm run check:nsis-details
+
       - name: 类型检查 / Typecheck
         run: pnpm run typecheck
 

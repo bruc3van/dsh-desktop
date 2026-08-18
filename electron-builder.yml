@@ -93,11 +93,20 @@ win:
   target:
     - nsis
 
+# The assisted wizard already draws an InstFiles list under the progress bar;
+# electron-builder then silences it (`SetDetailsPrint none`) and extracts the
+# app 7z without a percent string. The include keeps that list open; beforePack
+# edits the templates so the list shows stage lines and 7-Zip's `N% (a / b MB)`.
+# Silent `/S` installs are unchanged. Re-check with `pnpm run check:nsis-details`
+# after bumping electron-builder — the templates are not a public API.
+beforePack: scripts/patch-nsis-install-details.mjs
+
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   differentialPackage: false
+  include: resources/installer.nsh
 
 # Releases are assembled explicitly by GitHub Actions. The in-app updater
 # reads latest.json from the GitHub Release (see scripts/write-update-feed.mjs);
