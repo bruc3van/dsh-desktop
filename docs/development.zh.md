@@ -70,8 +70,8 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 发布版本时直接推送版本 tag；GitHub Actions 会以 tag 为唯一版本来源，并在构建时写入 `package.json`：
 
 ```sh
-git tag v0.2.3
-git push origin v0.2.3
+git tag v0.2.4
+git push origin v0.2.4
 ```
 
 GitHub Actions 会校验 tag 格式，并以 tag 作为发布版本分别构建：
