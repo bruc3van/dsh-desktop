@@ -168,7 +168,7 @@ jobs:
   # PR 上不跑：它要真打一次包，与 app 作业抢同一批 macOS runner——有一轮把 app
   # 作业压到排队 20 多分钟。PR 想要的是快反馈，而「装出来的应用能不能起来」在
   # 合进 main 时拦住就够了，那仍然远早于打 tag 发布。
-  package:
+  package-macos:
     name: macOS 安装包冒烟 / macOS package smoke
     if: ${{ github.event_name != 'pull_request' }}
     runs-on: macos-15
@@ -200,13 +200,113 @@ jobs:
 
       # 与发布同样的打包命令与签名设置，否则这里绿了也说明不了发布会绿。
       - name: 生成 DMG / Package DMG
+        id: package
         run: pnpm exec electron-builder --mac dmg --arm64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      # 打包成功才验证——打包本身failed时后面全是「找不到产物」的噪声；打包成功
+      # 之后则彼此不遮蔽，一次运行看全。
       - name: 验证安装包内置运行时 / Smoke packaged runtime
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         run: pnpm run smoke:package
 
       - name: 验证 DMG 装出来的应用 / Smoke the app installed from the DMG
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         run: pnpm run smoke:dmg
+
+  # Windows 侧的同一件事。check:picker、check:pnpm-runtime 和「静默安装 NSIS 再
+  # 冒烟」此前只在 release.yml 里跑——Windows 的打包与安装路径至今只在真发版时
+  # 验证一次。check:pnpm-runtime 尤其要在 runner 上跑：它栽过的那次是 GitHub
+  # Windows runner 的 8.3 短路径 C:\Users\RUNNER~1\...，开发机上的正常路径
+  # 跑一万次都是绿的。
+  package-windows:
+    name: Windows 安装包冒烟 / Windows package smoke
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出 / Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: 安装 pnpm / Setup pnpm
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+
+      - name: 安装 Node.js / Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # 内置运行时是几万个小文件，打包写一遍、安装冒烟再写一遍。实时扫描这些文件
+      # 会占掉这个作业的大部分时间；排除两个由构建自己拥有的目录只影响 runner
+      # 本地，不会进入任何产物。与 release.yml 的同名步骤保持一致。
+      - name: 排除 Defender 实时扫描 / Exclude build paths from Defender
+        shell: pwsh
+        run: |
+          foreach ($path in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)) {
+            try {
+              Add-MpPreference -ExclusionPath $path -ErrorAction Stop
+              Write-Host "excluded $path"
+            } catch {
+              Write-Host "could not exclude ${path}: $($_.Exception.Message)"
+            }
+          }
+
+      - name: 安装依赖 / Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建应用 / Build application
+        run: pnpm run build
+
+      - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
+        run: pnpm run prepare:runtime
+        env:
+          DSH_RUNTIME_TARGET: win32-x64
+
+      - name: 验证 Windows 目录选择器兼容补丁 / Verify Win32 picker compatibility patch
+        run: pnpm run check:picker
+
+      - name: 生成 NSIS 安装包 / Package NSIS installer
+        id: package
+        run: pnpm exec electron-builder --win nsis --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: 验证打包产物中的 pnpm / Verify packaged pnpm
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: pnpm run check:pnpm-runtime
+
+      - name: 验证安装包内置运行时 / Smoke packaged runtime
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: pnpm run smoke:package
+
+      # 与 release.yml 的同名步骤逐字一致：装出来的应用能不能起来，是这里唯一
+      # 回答得了、而未打包目录回答不了的问题。
+      - name: 验证 NSIS 实际安装结果 / Smoke installed Windows runtime
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path release -File -Filter '*.exe' | Select-Object -First 1
+          if ($null -eq $installer) {
+            throw 'NSIS installer not found under release/'
+          }
+
+          $installDir = Join-Path $env:RUNNER_TEMP ('dsh-desktop-nsis-' + [guid]::NewGuid().ToString('N'))
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "NSIS installer exited with code $($install.ExitCode)"
+          }
+
+          $executable = Join-Path $installDir 'DeepSeek Harness Desktop.exe'
+          if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+            throw "Installed executable not found: $executable"
+          }
+          # Not `pnpm run smoke:package -- ...`: pnpm forwards the separator
+          # itself, so the script would receive a literal `--` as its target.
+          node scripts/smoke-package.mjs "$executable"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed NSIS runtime smoke failed with code $LASTEXITCODE"
+          }
