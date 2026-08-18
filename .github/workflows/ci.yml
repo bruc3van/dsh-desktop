@@ -141,13 +141,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: pnpm run check:connection
 
-      # 暂时只在 Windows 上跑。首次在 macOS 上运行时，npx 缓存那个场景
-      # （scripts/check-installed-runtime.mjs 第 340 行起）在 firstWindow() 上
-      # 超时 30 秒——它之前 17 条断言在同一台 runner 上都通过，所以不是 Electron
-      # 起不来。成因未查清，先不假装修好：这里限定平台并留下线索，好过让一个
-      # 从未在任何 CI 跑过的检查长期把 main 染红。macOS 覆盖是待办，不是已完成。
       - name: 验证已安装运行时解析 / Verify installed-runtime resolution
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        if: ${{ !cancelled() }}
         run: pnpm run check:installed-runtime
 
       - name: 验证更新器契约 / Verify updater contract
