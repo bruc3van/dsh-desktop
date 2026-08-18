@@ -132,6 +132,96 @@ function fixtureNpxCache(home, version) {
   return root
 }
 
+/**
+ * Every launch records the main process's own output. A check that fails on a
+ * window that never appeared has nothing else to go on: Playwright's timeout
+ * carries an empty log, so without this the only report from a CI machine is
+ * "firstWindow timed out". The launch PATH travels with it, because the
+ * scenarios that strip `dsh` out of PATH are the ones worth reading it for.
+ */
+const logs = new WeakMap()
+function attachLog(app, launchPath) {
+  let text = ''
+  const runner = app.process()
+  runner.stdout?.on('data', chunk => { text += chunk.toString() })
+  runner.stderr?.on('data', chunk => { text += chunk.toString() })
+  const record = {
+    text: () => text,
+    path: () => launchPath,
+    sawCrashLadder: () => /trying the next enabled runtime/.test(text)
+      || /本地服务意外退出/.test(text)
+      || /The local service exited; restarting/.test(text),
+  }
+  logs.set(app, record)
+  return record
+}
+
+/** The recorder attached by launch(). */
+function logFor(app) {
+  return logs.get(app)
+}
+
+/**
+ * What the main process itself says about its state. A window that never
+ * arrives has three different causes that look identical from outside — the
+ * process quit, `whenReady` never resolved, or a window exists that Playwright
+ * never saw as a page — and only the process can tell them apart.
+ */
+async function mainProcessState(app) {
+  const runner = app.process()
+  if (runner.exitCode !== null || runner.signalCode !== null) {
+    return 'electron exited (code ' + String(runner.exitCode) + ' / signal ' + String(runner.signalCode) + ')'
+  }
+  try {
+    const state = await app.evaluate(({ app: electronApp, BrowserWindow }) => ({
+      ready: electronApp.isReady(),
+      windows: BrowserWindow.getAllWindows().map(window => ({
+        visible: window.isVisible(),
+        destroyed: window.isDestroyed(),
+        url: window.webContents.getURL(),
+      })),
+    }))
+    return 'electron alive: ' + JSON.stringify(state)
+  } catch (error) {
+    return 'electron alive, but the main process would not answer: ' + error.message
+  }
+}
+
+/**
+ * Wait for the window, and report what the main process said when it never
+ * comes. Playwright's own message stops at "Timeout 30000ms exceeded".
+ */
+async function firstWindow(app, timeoutMs = 30_000) {
+  try {
+    return await app.firstWindow({ timeout: timeoutMs })
+  } catch (error) {
+    const record = logFor(app)
+    throw new Error([
+      'no window after ' + String(timeoutMs) + 'ms: ' + error.message,
+      await mainProcessState(app),
+      'launch PATH: ' + (record?.path() ?? '(unrecorded)'),
+      'main process output:',
+      (record?.text() ?? '').trim() || '(nothing on stdout/stderr)',
+    ].join('\n'))
+  }
+}
+
+/**
+ * Close a run without letting the teardown outlive the check. `close()` waits
+ * for the process to exit, and a run that failed before its window appeared is
+ * exactly the state where it may never do so — which would turn a 30-second
+ * assertion failure into a job-timeout with no output at all.
+ */
+async function closeApp(app) {
+  if (app === undefined) return
+  const runner = app.process()
+  const closed = app.close().then(() => true, () => true)
+  const timedOut = new Promise(resolve => { setTimeout(() => { resolve(false) }, 15_000).unref() })
+  if (await Promise.race([closed, timedOut])) return
+  console.warn('[check] the app did not close within 15s; killing it')
+  try { runner.kill('SIGKILL') } catch { /* already gone */ }
+}
+
 /** One Electron run against its own homes, with the fixture ahead on PATH. */
 async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
   const home = join(checkHome, name)
@@ -178,10 +268,12 @@ async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
     // cache as the npx rung, including the "failed PATH → bundled" case.
     env.npm_config_cache = join(home, 'empty-npm-cache')
   }
-  return electron.launch({
+  const app = await electron.launch({
     args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(home, 'chromium')],
     env,
   })
+  attachLog(app, env.PATH)
+  return app
 }
 
 /**
@@ -232,7 +324,7 @@ let app
 let startedPid
 try {
   app = await launch('prefer', { DSH_DESKTOP_SKIP_PROBE: '1' })
-  await app.firstWindow()
+  await firstWindow(app)
   const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined)
   check('installed dsh is preferred over the bundled runtime', status.runtimeSource === 'installed', status.runtimeSource)
   check('the detected version is reported', status.installedDshVersion === FIXTURE_VERSION, status.installedDshVersion)
@@ -245,7 +337,7 @@ try {
   await app.windows()[0].waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
   check('the window loads the installed runtime\'s Web UI', true, 'Installed Harness Fixture')
 } finally {
-  await app?.close().catch(() => {})
+  await closeApp(app)
 }
 if (startedPid !== undefined) {
   // The client owns what it started: quitting must take the runtime with it,
@@ -255,26 +347,13 @@ if (startedPid !== undefined) {
   check('quitting stops the runtime the client started', !alive(startedPid), 'PID ' + String(startedPid))
 }
 
-function attachLog(app) {
-  let log = ''
-  const runner = app.process()
-  runner.stdout?.on('data', chunk => { log += chunk.toString() })
-  runner.stderr?.on('data', chunk => { log += chunk.toString() })
-  return {
-    text: () => log,
-    sawCrashLadder: () => /trying the next enabled runtime/.test(log)
-      || /本地服务意外退出/.test(log)
-      || /The local service exited; restarting/.test(log),
-  }
-}
-
 // 1b. Toggling Smart-mode sources after the installed child is ready must
 //     respawn from the new set, not walk the crash ladder (which would reject
 //     PATH for the rest of the session and spend a retry).
 try {
   app = await launch('switch-ready', { DSH_DESKTOP_SKIP_PROBE: '1' })
-  const log = attachLog(app)
-  await app.firstWindow()
+  const log = logFor(app)
+  await firstWindow(app)
   await waitForStatus(app, s => s.runtimeSource === 'installed' && typeof s.childPid === 'number' && s.targetUrl !== '')
   await app.windows()[0].waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
   const switched = await evaluateStable(app, () => window.desktop.connection.setSmartRuntimes(['bundled']))
@@ -289,7 +368,7 @@ try {
   const back = await waitForStatus(app, s => s.runtimeSource === 'installed' && s.targetUrl !== '')
   check('PATH is still eligible after the toggle', back.runtimeSource === 'installed', back.runtimeSource)
 } finally {
-  await app?.close().catch(() => {})
+  await closeApp(app)
 }
 
 // 1c. The same toggle while the installed child is still booting must not
@@ -297,8 +376,8 @@ try {
 //     still false, which is exactly the crash-ladder's "give up on PATH" case.
 try {
   app = await launch('switch-boot', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_DELAY_MS: '4000' })
-  const log = attachLog(app)
-  await app.firstWindow()
+  const log = logFor(app)
+  await firstWindow(app)
   const spawnedDeadline = Date.now() + 15_000
   while (Date.now() < spawnedDeadline && !/dsh runtime: installed/.test(log.text())) {
     await new Promise(resolve => setTimeout(resolve, 50))
@@ -312,7 +391,7 @@ try {
   check('the booting child is replaced by the bundled runtime', bundled.runtimeSource === 'bundled', bundled.runtimeSource)
   check('a stop before readiness does not reject PATH', !log.sawCrashLadder(), log.text().match(/dsh runtime: \w+|trying the next|意外退出|exited; restarting/g)?.join(' → '))
 } finally {
-  await app?.close().catch(() => {})
+  await closeApp(app)
 }
 
 // 2. An installed dsh that cannot start falls back to the bundled runtime.
@@ -320,19 +399,16 @@ try {
 //    can be replaced faster than the status bridge can be polled.
 try {
   app = await launch('fallback', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_FAIL: '1' })
-  let log = ''
-  const runner = app.process()
-  runner.stdout?.on('data', chunk => { log += chunk.toString() })
-  runner.stderr?.on('data', chunk => { log += chunk.toString() })
-  await app.firstWindow()
+  const record = logFor(app)
+  await firstWindow(app)
   const fellBack = await waitForStatus(app, s => s.runtimeSource === 'bundled')
-  check('the failing installed runtime is tried first', /dsh runtime: installed/.test(log),
-    log.match(/dsh runtime: \w+/g)?.join(' → '))
+  check('the failing installed runtime is tried first', /dsh runtime: installed/.test(record.text()),
+    record.text().match(/dsh runtime: \w+/g)?.join(' → '))
   check('a failed installed runtime falls back to the bundled one',
-    /trying the next enabled runtime/.test(log) && fellBack.runtimeSource === 'bundled')
+    /trying the next enabled runtime/.test(record.text()) && fellBack.runtimeSource === 'bundled')
   check('the rejected runtime is no longer offered', fellBack.installedDshVersion === undefined, fellBack.installedDshVersion)
 } finally {
-  await app?.close().catch(() => {})
+  await closeApp(app)
 }
 
 // 3. With nothing on PATH — the state `npx @deepseek-ai/dsh web` leaves users
@@ -342,7 +418,7 @@ try {
   mkdirSync(home, { recursive: true })
   const cacheRoot = fixtureNpxCache(home, '9.9.9-npxfake')
   app = await launch('npx', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, { pathDsh: false })
-  await app.firstWindow()
+  await firstWindow(app)
   const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined)
   check('an npx-cached dsh is used when PATH has none', status.runtimeSource === 'npx', status.runtimeSource)
   check('the cached package\'s real version is reported',
@@ -356,7 +432,7 @@ try {
   await app.windows()[0].waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
   check('a cache entry that is not @deepseek-ai/dsh is rejected', true, 'decoy @deepseek-ai/dsh-root ignored')
 } finally {
-  await app?.close().catch(() => {})
+  await closeApp(app)
 }
 
 // 3b. A cache OLDER than the bundled runtime stays preferred — it is the
@@ -367,7 +443,7 @@ try {
   mkdirSync(home, { recursive: true })
   const cacheRoot = fixtureNpxCache(home, '0.0.1-npxold')
   app = await launch('npx-old', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, { pathDsh: false })
-  await app.firstWindow()
+  await firstWindow(app)
   const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined)
   check('an outdated npx cache is still preferred over the bundled runtime',
     status.runtimeSource === 'npx', status.runtimeSource)
@@ -376,7 +452,7 @@ try {
   check('and the lag behind the bundled runtime is flagged',
     status.npxCacheOutdated === true, status.npxCacheOutdated)
 } finally {
-  await app?.close().catch(() => {})
+  await closeApp(app)
 }
 
 // 4. Saving the default probe address must NOT pin it, and a pinned address
@@ -385,7 +461,7 @@ try {
   const probeUrl = 'http://127.0.0.1:59991'
   const settingsFile = join(checkHome, 'pin', 'desktop', 'settings.json')
   app = await launch('pin', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_PROBE_URL: probeUrl })
-  await app.firstWindow()
+  await firstWindow(app)
   await waitForStatus(app, s => s.mode === 'local' && s.targetUrl !== '')
 
   // The default probe address is what Smart mode already prefers; pinning it
@@ -424,7 +500,7 @@ try {
   check('and the address is kept for one-click return',
     recovered.savedServerUrl === dead && recovered.canSwitch === true, recovered.savedServerUrl)
 } finally {
-  await app?.close().catch(() => {})
+  await closeApp(app)
 }
 
 // 5. A live instance on the default port is offered to the connection surfaces.
@@ -443,7 +519,7 @@ try {
   // SKIP_PROBE keeps the client on its own runtime, which is exactly the state
   // where the address is worth offering: a live instance the client is not on.
   app = await launch('offer', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_PROBE_URL: probeOrigin })
-  await app.firstWindow()
+  await firstWindow(app)
   const ready = await waitForStatus(app, s => s.mode === 'local' && s.targetUrl !== '')
   const offered = await app.windows()[0].evaluate(() => window.desktop.connection.probeLocal())
   check('a live instance on the default port is offered', offered.url === probeOrigin, JSON.stringify(offered))
@@ -453,7 +529,7 @@ try {
   const gone = await app.windows()[0].evaluate(() => window.desktop.connection.probeLocal())
   check('nothing is offered once that instance is gone', gone.url === null, JSON.stringify(gone))
 } finally {
-  await app?.close().catch(() => {})
+  await closeApp(app)
   if (probeServer.listening) await new Promise(resolve => probeServer.close(resolve))
 }
 
