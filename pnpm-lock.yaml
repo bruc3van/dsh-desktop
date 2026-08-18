@@ -46,8 +46,8 @@ importers:
         specifier: 0.1.0-rc.7
         version: 0.1.0-rc.7(1b2f1dd106dd7ea95944a2758f4f935a)
       dsh-desktop-safe-market:
-        specifier: https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz
-        version: https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz(9693bc9202a3e1d1c6f81e9b6a22dd10)
+        specifier: https://github.com/bruc3van/dsh-desktop-safe-market/archive/c492cfc496de99ebc18d5f78e707c81013f564eb.tar.gz
+        version: https://github.com/bruc3van/dsh-desktop-safe-market/archive/c492cfc496de99ebc18d5f78e707c81013f564eb.tar.gz(9693bc9202a3e1d1c6f81e9b6a22dd10)
       pnpm:
         specifier: 11.16.0
         version: 11.16.0
@@ -3501,9 +3501,9 @@ packages:
     resolution: {integrity: sha512-ZmdL2rui+eB2YwhsWzjInR8LldtZHGDoQ1ugH85ppHKwpUHL7j7rN0Ti9NCnGiQbhaZ11FpR+7ao1dNsmduNUg==}
     engines: {node: '>=12'}
 
-  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz:
-    resolution: {integrity: sha512-z6InkjQ/mJtcHjlwqRaxywSE3FLajj7Pm4LfMELoDjJ1SCZ5Gqcx4AjOXtUMwSyK7WFIHEDBetfz4hUg723LEQ==, tarball: https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz}
-    version: 0.2.9
+  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/c492cfc496de99ebc18d5f78e707c81013f564eb.tar.gz:
+    resolution: {integrity: sha512-savwpxsT6fdSbxk5nzjjZagU8ndVsZr7DiPSs2CXJ3vuBBGDtWsgmuwJbF83XGoFkxyu+1MtjvcT+xPorHG5rQ==, tarball: https://github.com/bruc3van/dsh-desktop-safe-market/archive/c492cfc496de99ebc18d5f78e707c81013f564eb.tar.gz}
+    version: 0.2.11
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
       '@deepseek-ai/cordis-plugin-loader': '>=1.0.0'
@@ -8855,7 +8855,7 @@ snapshots:
 
   dotenv@16.4.5: {}
 
-  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/5b8afab30510ba60bc2a9d0d0b1b0d1f640e2f27.tar.gz(9693bc9202a3e1d1c6f81e9b6a22dd10):
+  dsh-desktop-safe-market@https://github.com/bruc3van/dsh-desktop-safe-market/archive/c492cfc496de99ebc18d5f78e707c81013f564eb.tar.gz(9693bc9202a3e1d1c6f81e9b6a22dd10):
     dependencies:
       yaml: 2.9.0
       zod: 4.4.3
