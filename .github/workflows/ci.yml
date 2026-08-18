@@ -90,9 +90,20 @@ jobs:
         run: pnpm run check:runtime-resolution
 
   app:
-    name: 应用契约检查 / Application contracts
-    runs-on: windows-latest
+    name: 应用契约检查 ${{ matrix.os }} / Application contracts ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # 两个平台都要：check:auto-fallback 里一处取样竞态在 Windows 上稳定通过、
+        # 在两台 macOS runner 上确定性失败，把 0.2.3 的发布拦了一次。只跑一个
+        # 平台的应用契约检查，等于把这类差异留给发布去发现。
+        include:
+          - os: windows-latest
+            runtime_target: win32-x64
+          - os: macos-15
+            runtime_target: darwin-arm64
 
     steps:
       - name: 检出 / Checkout
@@ -116,7 +127,7 @@ jobs:
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
         run: pnpm run prepare:runtime
         env:
-          DSH_RUNTIME_TARGET: win32-x64
+          DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
       - name: 验证 pnpm 与 Electron Node 耦合 / Verify pnpm engine against Electron Node
         run: pnpm run check:pnpm-engine

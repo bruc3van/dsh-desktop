@@ -111,6 +111,43 @@ const waitForStatus = async (app, predicate, timeoutMs) => {
   throw new Error('status condition timed out: ' + JSON.stringify(lastStatus) + (runtimeLog ? '\n--- log ---\n' + runtimeLog : ''))
 }
 
+/**
+ * Wait for the managed runtime to hold still, not merely to exist.
+ *
+ * A source change the client accepts is asynchronous: it stops the runtime it
+ * was serving from and re-resolves under the new preference, so the child pid
+ * changes a moment after the save returns. Every "is there a local runtime"
+ * predicate is already true of the *outgoing* child, so sampling at the first
+ * match records a pid that is about to be replaced — and a later assertion
+ * about a *refused* change then reports that replacement as damage the refusal
+ * did. macOS lost this race on both release runners while Windows happened to
+ * settle before the sample; the timing was never the contract.
+ */
+const waitForSettledLocalRuntime = async (app, timeoutMs, quietMs = 2_000) => {
+  const deadline = Date.now() + timeoutMs
+  let candidate
+  let stableSince = 0
+  let last
+  while (Date.now() < deadline) {
+    let status
+    try {
+      status = await app.windows()[0]?.evaluate(() => window.desktop?.connection.getStatus())
+    } catch { /* the window swaps documents while the runtime is replaced */ }
+    last = status
+    if (status?.mode !== 'local' || typeof status.childPid !== 'number' || status.targetUrl === '') {
+      candidate = undefined
+    } else if (status.childPid !== candidate) {
+      candidate = status.childPid
+      stableSince = Date.now()
+    } else if (Date.now() - stableSince >= quietMs) {
+      return { window: app.windows()[0], status }
+    }
+    await new Promise(resolve => setTimeout(resolve, 150))
+  }
+  throw new Error('the managed runtime never settled on one child pid: ' + JSON.stringify(last)
+    + (runtimeLog ? '\n--- log ---\n' + runtimeLog : ''))
+}
+
 let app
 let runtimeLog = ''
 try {
@@ -189,9 +226,9 @@ try {
   if (!pinnedLocal.saved) {
     throw new Error('pinning the managed runtime while the instance is gone was refused: ' + JSON.stringify(pinnedLocal))
   }
-  recovered = await waitForStatus(app,
-    status => status.mode === 'local' && typeof status.childPid === 'number' && status.targetUrl !== '',
-    60_000)
+  // The pin is what the assertions below take their baseline from, so it has to
+  // be the settled child rather than whichever one answers first.
+  recovered = await waitForSettledLocalRuntime(app, 60_000)
   window = recovered.window
   const localPid = recovered.status.childPid
   await window.waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
