@@ -46,6 +46,7 @@
     "check:error-surface": "node scripts/check-error-surface.mjs",
     "check:updater": "node scripts/check-updater.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
+    "smoke:dmg": "node scripts/smoke-dmg.mjs",
     "e2e": "node scripts/e2e.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "oxlint -c .oxlintrc.json src scripts"

@@ -156,3 +156,50 @@ jobs:
       - name: 验证连接失败界面 / Verify connection failure surface
         if: ${{ !cancelled() }}
         run: pnpm run check:error-surface
+
+  # 唯一一个真正打包的作业。Windows 侧早有等价门禁——release.yml 会静默装一遍
+  # NSIS 包、再对装出来的 exe 跑冒烟；macOS 侧此前什么都没有：smoke:package 跑的
+  # 是 electron-builder 留下的未打包 .app 目录，DMG 本身从没被挂载、拷出、启动过，
+  # 一个坏掉的 DMG 会照常发布。放在这里而不是直接进 release.yml：发布流水线只由
+  # tag 触发，没在 CI 跑过的门禁步骤等于拿发布当测试环境（0.2.3 已经这样烧掉三轮）。
+  package:
+    name: macOS 安装包冒烟 / macOS package smoke
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出 / Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: 安装 pnpm / Setup pnpm
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+
+      - name: 安装 Node.js / Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: 安装依赖 / Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建应用 / Build application
+        run: pnpm run build
+
+      - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
+        run: pnpm run prepare:runtime
+        env:
+          DSH_RUNTIME_TARGET: darwin-arm64
+
+      # 与发布同样的打包命令与签名设置，否则这里绿了也说明不了发布会绿。
+      - name: 生成 DMG / Package DMG
+        run: pnpm exec electron-builder --mac dmg --arm64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: 验证安装包内置运行时 / Smoke packaged runtime
+        run: pnpm run smoke:package
+
+      - name: 验证 DMG 装出来的应用 / Smoke the app installed from the DMG
+        if: ${{ !cancelled() }}
+        run: pnpm run smoke:dmg
