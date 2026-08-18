@@ -6,12 +6,13 @@
  * @module desktop/scripts/smoke-package
  */
 
-import { spawn, spawnSync } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE_DIR = join(APP_DIR, 'release')
@@ -281,6 +282,16 @@ try {
     ])
   }
   if (child.exitCode === null) child.kill('SIGKILL')
+  // kill() on Windows takes the Electron process alone. The dsh runtime it
+  // spawned survives as an orphan still holding this smoke's DSH_HOME, so the
+  // rm below can fail with EBUSY *after* every assertion already passed —
+  // a red release built from a green product. taskkill /T takes the tree, the
+  // same way check:auto-fallback stops the runtime it starts. A failure here
+  // is not worth reporting: the process is gone in the ordinary case, and the
+  // retrying rm covers what is left.
+  if (process.platform === 'win32' && child.pid !== undefined) {
+    await promisify(execFile)('taskkill', ['/pid', String(child.pid), '/T', '/F']).catch(() => {})
+  }
   // Chromium utility processes can release Cookies-journal a fraction after
   // the main Electron process exits on Windows. Node's recursive rm retry
   // handles that transient EBUSY without weakening any runtime assertion.

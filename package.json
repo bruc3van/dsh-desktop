@@ -26,6 +26,7 @@
     "check:dsh-cli": "node scripts/check-dsh-cli.mjs",
     "check:smart-runtimes": "node scripts/check-smart-runtimes.mjs",
     "check:identity": "node scripts/check-identity.mjs",
+    "check:release-artifacts": "node scripts/check-release-artifacts.mjs",
     "check:runtime-lock": "node scripts/check-runtime-lock.mjs",
     "check:restart": "node scripts/check-restart.mjs",
     "check:pnpm-engine": "node scripts/check-pnpm-engine.mjs",

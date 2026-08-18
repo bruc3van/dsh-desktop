@@ -25,6 +25,9 @@ import * as esbuild from 'esbuild'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const work = await mkdtemp(join(tmpdir(), 'dsh-desktop-restart-'))
+// On exit rather than at the end of the happy path: a thrown assertion used to
+// leave the fixture home behind on every red run.
+process.on('exit', () => { rmSync(work, { recursive: true, force: true }) })
 
 const bundle = join(work, 'runtime-lock.mjs')
 await esbuild.build({
@@ -108,4 +111,3 @@ if (decide({ verdict: 'unknown' }) !== 'leave') throw new Error('an unverifiable
 if (decide({ verdict: 'ours' }) !== 'stop') throw new Error('a verified survivor was not stopped')
 console.log('✓ only a live recorded child whose age matches the recorded spawn is stopped')
 
-rmSync(work, { recursive: true, force: true })

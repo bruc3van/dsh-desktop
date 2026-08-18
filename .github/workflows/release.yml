@@ -79,6 +79,13 @@ jobs:
       - name: 校验客户端身份指纹 / Verify client identity fingerprint
         run: pnpm run check:identity
 
+      # The download table, latest.json and electron-builder all encode the same
+      # filename convention. A partial drift between them still builds, still
+      # uploads, and still publishes — it just names files nobody built and
+      # drops a platform from the feed, which the updater reads as "up to date".
+      - name: 校验发布产物命名约定 / Verify release artifact naming
+        run: pnpm run check:release-artifacts
+
       - name: 类型检查 / Typecheck
         run: pnpm run typecheck
 

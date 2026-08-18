@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as esbuild from 'esbuild'
 import { _electron as electron } from 'playwright-core'
+import { artifactName, RELEASE_TARGETS, requiredPlatformKeys } from './release-artifacts.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const desktopVersion = JSON.parse(readFileSync(join(APP_DIR, 'package.json'), 'utf8')).version
@@ -56,14 +57,21 @@ if (releaseChanges !== '### 新增\n- fixture release change\n') {
 }
 console.log('✓ write-release-notes.mjs selects one version and explains every installer')
 
-const winBytes = Buffer.from('fake-win-installer')
-const macBytes = Buffer.from('fake-mac-installer')
-writeFileSync(join(artifacts, 'dsh-desktop-9.9.9-win-x64.exe'), winBytes)
-writeFileSync(join(artifacts, 'dsh-desktop-9.9.9-mac-arm64.dmg'), macBytes)
+// One fixture artifact per release target, built from the same table the feed
+// requires, so adding a matrix leg updates this fixture instead of silently
+// leaving it behind. Bytes differ per target so a swapped hash is visible.
+const fixtureBytes = new Map(RELEASE_TARGETS.map(target =>
+  [target.key, Buffer.from('fake-installer-' + target.key)]))
+const fixtureName = target => artifactName('9.9.9', target)
+for (const target of RELEASE_TARGETS) {
+  writeFileSync(join(artifacts, fixtureName(target)), fixtureBytes.get(target.key))
+}
 writeFileSync(
   join(artifacts, 'SHA256SUMS.txt'),
-  createHash('sha256').update(winBytes).digest('hex') + '  dsh-desktop-9.9.9-win-x64.exe\n'
-    + createHash('sha256').update(macBytes).digest('hex') + '  dsh-desktop-9.9.9-mac-arm64.dmg\n',
+  RELEASE_TARGETS
+    .map(target => createHash('sha256').update(fixtureBytes.get(target.key)).digest('hex')
+      + '  ' + fixtureName(target) + '\n')
+    .join(''),
 )
 
 const feedPath = join(artifacts, 'latest.json')
@@ -81,13 +89,42 @@ execFileSync(process.execPath, [
 const written = JSON.parse(readFileSync(feedPath, 'utf8'))
 if (written.version !== '9.9.9') throw new Error('feed version: ' + written.version)
 if (written.notes !== 'release body notes\n') throw new Error('notes-file not copied: ' + JSON.stringify(written.notes))
-if (written.platforms['win-x64']?.sha256 !== createHash('sha256').update(winBytes).digest('hex')) {
-  throw new Error('win-x64 sha256 mismatch in generated feed')
+for (const target of RELEASE_TARGETS) {
+  const entry = written.platforms[target.key]
+  const expectedHash = createHash('sha256').update(fixtureBytes.get(target.key)).digest('hex')
+  if (entry?.sha256 !== expectedHash) {
+    throw new Error(target.key + ' sha256 mismatch in generated feed: ' + JSON.stringify(entry?.sha256))
+  }
+  const expectedUrl = 'https://github.com/bruc3van/dsh-desktop/releases/download/v9.9.9/' + fixtureName(target)
+  if (entry?.url !== expectedUrl) throw new Error(target.key + ' url: ' + JSON.stringify(entry?.url))
 }
-if (written.platforms['mac-arm64']?.url !== 'https://github.com/bruc3van/dsh-desktop/releases/download/v9.9.9/dsh-desktop-9.9.9-mac-arm64.dmg') {
-  throw new Error('mac-arm64 url: ' + written.platforms['mac-arm64']?.url)
+console.log('✓ write-update-feed.mjs emits latest.json for ' + requiredPlatformKeys().join(', '))
+
+// The failure this guards is silent by construction: the updater reads a
+// missing platform key as "up to date", so an incomplete feed strands one
+// platform's users with no error anywhere. Drop each artifact in turn and
+// require the generator to refuse rather than publish a partial feed.
+for (const target of RELEASE_TARGETS) {
+  const partial = join(work, 'partial-' + target.key)
+  mkdirSync(partial, { recursive: true })
+  for (const other of RELEASE_TARGETS) {
+    if (other.key === target.key) continue
+    writeFileSync(join(partial, fixtureName(other)), fixtureBytes.get(other.key))
+  }
+  let refused = false
+  try {
+    execFileSync(process.execPath, [
+      join(APP_DIR, 'scripts', 'write-update-feed.mjs'),
+      '--dir', partial,
+      '--version', '9.9.9',
+      '--out', join(partial, 'latest.json'),
+    ], { stdio: 'pipe' })
+  } catch (error) {
+    refused = String(error.stderr ?? '').includes(target.key)
+  }
+  if (!refused) throw new Error('a feed missing ' + target.key + ' was written instead of refused')
 }
-console.log('✓ write-update-feed.mjs emits latest.json for win-x64 and mac-arm64')
+console.log('✓ write-update-feed.mjs refuses a feed that would strand a platform')
 console.log('✓ write-update-feed.mjs copies release notes from --notes-file')
 
 // Version ordering decides whether an offered build counts as newer, and the
@@ -251,6 +288,24 @@ if (currentKey === undefined) {
   throw new Error('check:updater does not cover ' + process.platform + '/' + process.arch)
 }
 
+// Every server this check binds is registered here and closed at the end.
+// A listening handle keeps Node's event loop alive on its own, so a server
+// that is merely dropped out of scope does not fail anything — it leaves the
+// process running after the last assertion has passed. In CI that reads as a
+// step that never finishes (the release job sat until its 45-minute timeout);
+// locally it leaves a stray node holding ports for as long as the shell lives.
+const servers = []
+const listenOn = async (server) => {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  servers.push(server)
+  const address = server.address()
+  if (typeof address !== 'object' || address === null) throw new Error('fixture server did not bind')
+  return address
+}
+
 // A redirected download is re-checked against the host allow-list on the
 // transport that reports the final url (Node's fetch does; Chromium's
 // net.fetch does not, and there the pinned SHA-256 is the whole check).
@@ -261,12 +316,7 @@ const redirectTarget = await (async () => {
     res.writeHead(200, { 'content-type': 'application/octet-stream' })
     res.end(payload)
   })
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (typeof address !== 'object' || address === null) throw new Error('redirect target did not bind')
+  const address = await listenOn(server)
   return 'http://127.0.0.1:' + String(address.port) + '/payload'
 })()
 const redirectAllowlistUpdater = async (startPath, targetUrl) => {
@@ -291,12 +341,7 @@ const redirectAllowlistUpdater = async (startPath, targetUrl) => {
     res.writeHead(404)
     res.end()
   })
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (typeof address !== 'object' || address === null) throw new Error('redirect server did not bind')
+  const address = await listenOn(server)
   const base = 'http://127.0.0.1:' + String(address.port)
   const baseOriginFor = (path) => base + path
   const updater = new DesktopUpdater({
@@ -442,12 +487,7 @@ const fixture = createServer((req, res) => {
   if (pageDelayMs > 0) setTimeout(sendPage, pageDelayMs)
   else sendPage()
 })
-await new Promise((resolve, reject) => {
-  fixture.once('error', reject)
-  fixture.listen(0, '127.0.0.1', resolve)
-})
-const address = fixture.address()
-if (typeof address !== 'object' || address === null) throw new Error('fixture server did not bind')
+const address = await listenOn(fixture)
 const origin = 'http://127.0.0.1:' + String(address.port)
 availableFeed.platforms[currentKey].url = origin + '/payload'
 currentFeed.platforms[currentKey].url = origin + '/payload'
@@ -659,6 +699,13 @@ try {
   await hang.app.close()
   console.log('✓ a stalled download times out and unlocks the updater')
 } finally {
-  await new Promise((resolve) => fixture.close(resolve))
-  rmSync(work, { recursive: true, force: true })
+  // closeAllConnections() before close(): the `/hang` route answers nothing by
+  // design, so close() alone would wait on a connection that never completes.
+  // rmSync retries because Chromium can release its profile files a moment
+  // after the last app.close() returns.
+  await Promise.all(servers.map(server => new Promise(resolve => {
+    server.closeAllConnections()
+    server.close(resolve)
+  })))
+  rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
 }

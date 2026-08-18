@@ -1,0 +1,139 @@
+# 每次推送与 PR 都跑一遍契约检查。
+#
+# 在此之前，仓库只有「打 tag 才触发」的发布流水线，于是 typecheck、lint 和全部
+# 契约检查第一次运行的时机就是发布本身。0.2.3 连续两次栽在这上面：一次是
+# check:pnpm-runtime 在 GitHub Windows runner 的 8.3 短路径上失败，一次是
+# check:updater 泄漏监听句柄、进程跑完断言后不退出，把发布任务挂到 45 分钟超时。
+# 两个 bug 都只可能由「真发一次版」发现——这个工作流就是来消除那种发现方式的。
+#
+# 因此 app 作业刻意与发布的构建作业保持同构（同样 prepare:runtime、同样在
+# windows-latest 上跑 Electron 检查），只是不打包。CI 绿而发布红的检查没有价值。
+name: 持续集成 / CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的新推送取代旧的：这里的反馈越快越好，与发布任务相反。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: 契约检查 ${{ matrix.os }} / Contracts ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows 不是冗余：今天那个短路径 bug 只在 Windows 上成立，而它所在的
+        # 脚本在 Linux 上跑一万次也是绿的。
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: 检出 / Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: 安装 pnpm / Setup pnpm
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+
+      - name: 安装 Node.js / Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: 安装依赖 / Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验客户端身份指纹 / Verify client identity fingerprint
+        run: pnpm run check:identity
+
+      - name: 校验发布产物命名约定 / Verify release artifact naming
+        run: pnpm run check:release-artifacts
+
+      - name: 类型检查 / Typecheck
+        run: pnpm run typecheck
+
+      - name: 代码检查 / Lint
+        run: pnpm run lint
+
+      - name: 构建主进程 / Build shell
+        run: pnpm run build
+
+      - name: 验证运行时环境隔离 / Verify runtime environment isolation
+        run: pnpm run check:runtime-env
+
+      - name: 验证 dsh 网关分类 / Verify dsh CLI gateway policy
+        run: pnpm run check:dsh-cli
+
+      - name: 验证智能连接来源契约 / Verify Smart-mode source preference
+        run: pnpm run check:smart-runtimes
+
+      - name: 验证内置插件接入 / Verify bundled plugin seat
+        run: pnpm run check:bundled-plugin
+
+      - name: 验证运行时锁契约 / Verify runtime lock contract
+        run: pnpm run check:runtime-lock
+
+      - name: 验证托盘重启杀进程表 / Verify tray-restart stop table
+        run: pnpm run check:restart
+
+      - name: 验证运行时解析契约 / Verify runtime resolution contract
+        run: pnpm run check:runtime-resolution
+
+  app:
+    name: 应用契约检查 / Application contracts
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出 / Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: 安装 pnpm / Setup pnpm
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+
+      - name: 安装 Node.js / Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: 安装依赖 / Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建应用 / Build application
+        run: pnpm run build
+
+      - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
+        run: pnpm run prepare:runtime
+        env:
+          DSH_RUNTIME_TARGET: win32-x64
+
+      - name: 验证 pnpm 与 Electron Node 耦合 / Verify pnpm engine against Electron Node
+        run: pnpm run check:pnpm-engine
+
+      # 以下四项此前只在发布时才跑，check:connection 与 check:installed-runtime
+      # 则从不在任何工作流里运行——733 行契约断言（含第三方跳转围堵）只靠人手动跑。
+      - name: 验证连接切换与跳转围堵 / Verify connection switching and redirect containment
+        run: pnpm run check:connection
+
+      - name: 验证已安装运行时解析 / Verify installed-runtime resolution
+        run: pnpm run check:installed-runtime
+
+      - name: 验证更新器契约 / Verify updater contract
+        run: pnpm run check:updater
+
+      - name: 验证智能模式回落恢复 / Verify smart-mode fallback recovery
+        run: pnpm run check:auto-fallback
+
+      - name: 验证连接失败界面 / Verify connection failure surface
+        run: pnpm run check:error-surface

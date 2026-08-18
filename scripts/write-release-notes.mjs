@@ -12,6 +12,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs'
+import { artifactName, RELEASE_TARGETS, targetForKey } from './release-artifacts.mjs'
 
 const args = parseArgs(process.argv.slice(2))
 const version = (args.version ?? '').replace(/^v/i, '')
@@ -24,6 +25,15 @@ if (version === '' || out === undefined) {
 }
 
 const changes = extractVersionSection(readFileSync(changelogPath, 'utf8'), version)
+// Rows and filenames come from the same table the update feed reads, so a
+// change to the release matrix cannot leave this page naming files that were
+// never built (or omitting one that was).
+const downloadRows = RELEASE_TARGETS
+  .map(target => '| ' + target.device + ' | `' + artifactName(version, target) + '` |')
+  .join('\n')
+const windowsTarget = targetForKey('win-x64')
+if (windowsTarget === undefined) throw new Error('release targets no longer include win-x64')
+const windowsInstaller = artifactName(version, windowsTarget)
 const body = `> **非官方项目 / Unofficial project：** 此桌面客户端由社区独立维护，并非 DeepSeek 官方产品，也不由 DeepSeek 背书或提供支持。
 
 ## 版本变更
@@ -36,9 +46,7 @@ ${changes}
 
 | 你的设备 | 下载文件 |
 |---|---|
-| Mac，芯片显示 Apple M 系列 | \`dsh-desktop-${version}-mac-arm64.dmg\` |
-| Mac，处理器显示 Intel | \`dsh-desktop-${version}-mac-x64.dmg\` |
-| Windows 64 位，Intel 或 AMD 处理器 | \`dsh-desktop-${version}-win-x64.exe\` |
+${downloadRows}
 
 不知道 Mac 属于哪一种时，打开「 → 关于本机」：显示“芯片 Apple M…”选择 \`arm64\`，显示“处理器 Intel”选择 \`x64\`。目前不提供 Linux 或 Windows ARM64 安装包。
 
@@ -52,7 +60,7 @@ ${changes}
 
 ### Windows
 
-1. 下载 \`dsh-desktop-${version}-win-x64.exe\`。
+1. 下载 \`${windowsInstaller}\`。
 2. 双击安装程序并按提示完成安装。
 3. 若 Microsoft Defender SmartScreen 拦截，请先确认文件来自本 Release；然后点击「更多信息 → 仍要运行」。
 
