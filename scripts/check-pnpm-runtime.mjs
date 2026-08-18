@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE_DIR = join(APP_DIR, 'release')
@@ -119,10 +119,17 @@ try {
     private: true,
   }, null, 2) + '\n')
 
+  // A relative `file:` spec, not pathToFileURL(fixtureDir).href: Node
+  // percent-encodes `~` as %7E, and pnpm resolves the URL path literally, so a
+  // work dir under an 8.3 short path (`C:\Users\RUNNER~1\...`, which is what
+  // os.tmpdir() returns on the GitHub Windows runner) makes it look for a
+  // directory named `RUNNER%7E1` and fail with ERR_PNPM_LINKED_PKG_DIR_NOT_FOUND.
+  // The relative form resolves against --dir with no URL round-trip, and is the
+  // shape a real lockfile carries for a local dependency anyway.
   const addRun = await runPnpm(
     [
       '--dir', projectDir,
-      'add', pathToFileURL(fixtureDir).href,
+      'add', 'file:../' + basename(fixtureDir),
       '--offline',
       '--store-dir', storeDir,
       '--ignore-scripts',
