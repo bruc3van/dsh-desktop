@@ -195,29 +195,76 @@ async function mainProcessState(app) {
 }
 
 /**
+ * How long Playwright may take to surface a window the main process already
+ * has. Past this, waiting out the full firstWindow timeout only burns CI
+ * minutes — the miss does not resolve later.
+ */
+const BLIND_ATTACH_GRACE_MS = 3_000
+/**
+ * Relaunches of a proven-healthy client that Playwright never attached to.
+ * macos-15 misses roughly one launch in three; a single retry still fails
+ * the job (this happened on npx-old: both attempts timed out with a live
+ * window). Six attempts is ~0.1% per scenario at that rate, and with the
+ * fail-fast below each miss costs ~3s rather than 30s.
+ */
+const BLIND_RELAUNCH_LIMIT = 6
+
+/**
  * Wait for the window, and report what the main process said when it never
  * comes. Playwright's own message stops at "Timeout 30000ms exceeded".
  *
  * `blind` on the thrown error means the main process answered with a live,
  * undestroyed window: the client is up and the harness simply never got the
  * page. Only openApp() acts on that distinction.
+ *
+ * When that case is already observable, fail as soon as the grace period
+ * elapses — do not sit on firstWindow's 30s timeout. Poll `app.windows()`
+ * as well: Playwright may attach a page without the `window` event this
+ * waiter is blocked on.
  */
 async function firstWindow(app, timeoutMs = 30_000) {
-  try {
-    return await app.firstWindow({ timeout: timeoutMs })
-  } catch (error) {
-    const record = logFor(app)
+  const started = Date.now()
+  const pending = app.firstWindow({ timeout: timeoutMs })
+  // If we throw early, the waiter is abandoned; swallow so it cannot
+  // surface as an unhandled rejection after closeApp() tears the process down.
+  pending.catch(() => {})
+
+  let liveSince
+  while (Date.now() - started < timeoutMs) {
+    const attached = app.windows()[0]
+    if (attached) return attached
+
     const state = await mainProcessState(app)
-    const failure = new Error([
-      'no window after ' + String(timeoutMs) + 'ms: ' + error.message,
-      state.detail,
-      'launch PATH: ' + (record?.path() ?? '(unrecorded)'),
-      'main process output:',
-      (record?.text() ?? '').trim() || '(nothing on stdout/stderr)',
-    ].join('\n'))
-    failure.blind = state.live
-    throw failure
+    if (state.live && app.windows().length === 0) {
+      liveSince ??= Date.now()
+      if (Date.now() - liveSince >= BLIND_ATTACH_GRACE_MS) {
+        throw windowWaitFailure(app, Date.now() - started, new Error('Playwright did not attach to a live window'), state)
+      }
+    } else {
+      liveSince = undefined
+    }
+    await new Promise(resolve => setTimeout(resolve, 200))
   }
+
+  try {
+    return await pending
+  } catch (error) {
+    throw windowWaitFailure(app, timeoutMs, error, await mainProcessState(app))
+  }
+}
+
+function windowWaitFailure(app, waitedMs, error, state) {
+  const record = logFor(app)
+  const failure = new Error([
+    'no window after ' + String(waitedMs) + 'ms: ' + error.message,
+    state.detail,
+    'playwright pages: ' + String(app.windows().length),
+    'launch PATH: ' + (record?.path() ?? '(unrecorded)'),
+    'main process output:',
+    (record?.text() ?? '').trim() || '(nothing on stdout/stderr)',
+  ].join('\n'))
+  failure.blind = state.live
+  return failure
 }
 
 /**
@@ -302,10 +349,10 @@ async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
 /**
  * Start a run and hand back its window.
  *
- * One relaunch, and only for the case the dump above can prove: the client is
- * ready with a live window, and Playwright never surfaced it as a page. That
- * has been seen on GitHub's macos-15 runners (playwright-core 1.62.1) roughly
- * one run in three, always on the launches where the runtime reaches readiness
+ * Relaunch only for the case the dump above can prove: the client is ready
+ * with a live window, and Playwright never surfaced it as a page. That has
+ * been seen on GitHub's macos-15 runners (playwright-core 1.62.1) roughly one
+ * launch in three, always on the launches where the runtime reaches readiness
  * soonest after the window is created; it has never reproduced locally, under
  * CPU load or with the target already live. Every assertion still runs against
  * the relaunched app, and the retry cannot hide a client that failed to open a
@@ -321,9 +368,9 @@ async function openApp(name, extraEnv = {}, options = {}) {
       return app
     } catch (error) {
       await closeApp(app)
-      if (error.blind !== true || attempt > 1) throw error
+      if (error.blind !== true || attempt >= BLIND_RELAUNCH_LIMIT) throw error
       console.warn('[check] ' + error.message)
-      console.warn('[check] the client was up with a live window and Playwright never attached; relaunching ' + name + ' once')
+      console.warn('[check] the client was up with a live window and Playwright never attached; relaunching ' + name + ' (attempt ' + String(attempt + 1) + ' of ' + String(BLIND_RELAUNCH_LIMIT) + ')')
     }
   }
 }
