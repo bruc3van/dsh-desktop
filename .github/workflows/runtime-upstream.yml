@@ -106,7 +106,7 @@ jobs:
           - [ ] 隐式契约：`dsh web: <url>` 就绪行、`POST /api/host.describe` 响应形状、`lib/bin.js` 入口路径、`--expose-internals` 是否仍需要
           - [ ] 隐式契约：`dsh` 子命令语法（`web` 别名、`plugin` 子命令、`--dump-config` 位置）是否仍与 `dsh-cli-policy.ts` 的分类一致
           - [ ] 隐式契约：pnpm 的 `engines.node` 是否仍被 Electron 的 Node 满足（`pnpm run check:pnpm-engine` 是红色构建兜底）
-          - [ ] 全量门禁：`build → prepare:runtime → check:picker → check:runtime-env → check:dsh-cli → check:smart-runtimes → check:runtime-resolution → check:bundled-plugin → check:runtime-lock → check:restart → check:pnpm-engine → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit`
+          - [ ] 全量门禁：`build → prepare:runtime → check:picker → check:runtime-env → check:runtime-spawn → check:dsh-cli → check:smart-runtimes → check:runtime-resolution → check:bundled-plugin → check:runtime-lock → check:restart → check:pnpm-engine → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit`
 
           — 本 issue 由 `.github/workflows/runtime-upstream.yml` 每日检查自动创建。
           EOF

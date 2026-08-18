@@ -18,6 +18,10 @@
  * itself. Every other child — the Agent's shells and their descendants — sees
  * the environment a normally installed `dsh` would give them.
  *
+ * The same boundary rewrites `pnpm` spawns onto the packaged `pnpm.mjs` (see
+ * `runtime-spawn.ts`). That is scoped to the pnpm command; Agent shells do
+ * not inherit `CI=true` from it.
+ *
  * Outside a packaged build the CLI runs on a real Node, the variable is absent,
  * and this module only forwards to the official entry.
  * @module dsh-desktop/runtime-launcher
@@ -25,62 +29,33 @@
 
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import {
+  PNPM_ENTRY_VARIABLE,
+  patchRuntimeSpawns,
+  type SpawnHost,
+} from './runtime-spawn.ts'
 
 /** The official CLI entry, passed by the main process (never on argv: the
  *  harness parses `process.argv.slice(2)` and must still see `web --port 0`). */
 const ENTRY_VARIABLE = 'DSH_DESKTOP_RUNTIME_ENTRY'
 const NODE_MODE = 'ELECTRON_RUN_AS_NODE'
 
-/** `(file, args?, options?)`, the shape spawn/spawnSync/fork share. */
-type SpawnLike = (...callArguments: unknown[]) => unknown
-interface SpawnHost { [name: string]: SpawnLike }
-interface SpawnOptions { env?: NodeJS.ProcessEnv }
-
-/**
- * Whether a spawn target is this process's own executable — under Electron's
- * Node mode that is the Electron binary, which needs the variable back or it
- * starts a second copy of the GUI application instead of running the script.
- */
-function isSelfExecutable(command: unknown): boolean {
-  if (typeof command !== 'string') return false
-  if (command === process.execPath) return true
-  // Windows paths differ only by case between a caller's spelling and ours.
-  return process.platform === 'win32' && command.toLowerCase() === process.execPath.toLowerCase()
-}
-
-/**
- * Merge the Node-mode variable into one call's options. An absent `env` means
- * "inherit", and the inherited environment no longer carries the variable, so
- * the ambient values are materialized here rather than left implicit.
- */
-function withNodeMode(options: unknown, value: string): SpawnOptions {
-  const base = typeof options === 'object' && options !== null ? options as SpawnOptions : {}
-  return { ...base, env: { ...base.env ?? process.env, [NODE_MODE]: value } }
-}
-
-/**
- * Wrap one spawn-family function so calls that target this executable carry the
- * variable. `args` is optional and positional: when it is not an array the
- * second parameter is the options object.
- */
-function patchSpawnLike(host: SpawnHost, name: string, value: string, always: boolean): void {
-  const original = host[name]
-  if (typeof original !== 'function') return
-  host[name] = function patched(this: unknown, ...callArguments: unknown[]): unknown {
-    if (always || isSelfExecutable(callArguments[0])) {
-      const index = Array.isArray(callArguments[1]) ? 2 : 1
-      callArguments[index] = withNodeMode(callArguments[index], value)
-    }
-    return original.apply(this, callArguments)
-  }
+function resolvePnpmEntry(runtimeEntry: string): string | undefined {
+  const fromEnv = process.env[PNPM_ENTRY_VARIABLE]
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv
+  // The `pnpm` shim already points the launcher at packaged `pnpm.mjs`.
+  if (/[/\\]pnpm\.mjs$/i.test(runtimeEntry)) return runtimeEntry
+  return undefined
 }
 
 const entry = process.env[ENTRY_VARIABLE]
 if (entry === undefined || entry === '') {
   throw new Error(ENTRY_VARIABLE + ' is required: the desktop client sets it to the bundled dsh entry')
 }
+const pnpmEntry = resolvePnpmEntry(entry)
 // The launcher's own coordinates are not part of the harness's environment.
 Reflect.deleteProperty(process.env, ENTRY_VARIABLE)
+Reflect.deleteProperty(process.env, PNPM_ENTRY_VARIABLE)
 
 const nodeMode = process.env[NODE_MODE]
 if (nodeMode !== undefined && nodeMode !== '') {
@@ -89,11 +64,7 @@ if (nodeMode !== undefined && nodeMode !== '') {
   // its ESM facade from the unpatched exports, and the harness's own
   // `import { spawn } from 'node:child_process'` would bind to the originals.
   const childProcess = createRequire(import.meta.url)('node:child_process') as SpawnHost
-  patchSpawnLike(childProcess, 'spawn', nodeMode, false)
-  patchSpawnLike(childProcess, 'spawnSync', nodeMode, false)
-  // fork() always runs a Node script on this executable, and it reaches the
-  // real spawn through a module-internal reference the patch above cannot see.
-  patchSpawnLike(childProcess, 'fork', nodeMode, true)
+  patchRuntimeSpawns(childProcess, nodeMode, process.execPath, process.platform, process.env, pnpmEntry)
 }
 
 await import(pathToFileURL(entry).href)

@@ -37,6 +37,15 @@ const workDir = await mkdtemp(join(tmpdir(), 'dsh-desktop-runtime-env-'))
 // what an ordinary child (an Agent shell) inherits, and what a child spawned on
 // this executable (the picker worker) inherits.
 const fixture = join(workDir, 'entry.mjs')
+const pnpmFixture = join(workDir, 'pnpm.mjs')
+await writeFile(pnpmFixture, `
+process.stdout.write(JSON.stringify({
+  marker: 'bundled-pnpm',
+  ci: process.env.CI ?? null,
+  argv: process.argv.slice(2),
+  nodeMode: process.env.ELECTRON_RUN_AS_NODE ?? null,
+}))
+`)
 await writeFile(fixture, `
 import { writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -50,14 +59,23 @@ const readVariable = (command, args) => {
 const plain = process.platform === 'win32'
   ? readVariable(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'echo %ELECTRON_RUN_AS_NODE%'])
   : readVariable('/bin/sh', ['-c', 'printf %s "$ELECTRON_RUN_AS_NODE"'])
+const pnpm = spawnSync('pnpm', ['dsh-desktop-probe'], {
+  encoding: 'utf8',
+  shell: process.platform === 'win32',
+  stdio: ['ignore', 'pipe', 'pipe'],
+})
+let pnpmChild = null
+try { pnpmChild = JSON.parse((pnpm.stdout ?? '').trim()) } catch { pnpmChild = { raw: (pnpm.stdout ?? '').trim(), status: pnpm.status } }
 
 console.log('RESULT ' + JSON.stringify({
   argv: process.argv.slice(2),
   ambient: process.env.ELECTRON_RUN_AS_NODE ?? null,
   entryVariable: process.env.DSH_DESKTOP_RUNTIME_ENTRY ?? null,
+  pnpmEntryVariable: process.env.DSH_DESKTOP_PNPM_ENTRY ?? null,
   // cmd.exe echoes the literal name when the variable is unset.
   plainChild: plain === '%ELECTRON_RUN_AS_NODE%' ? '' : plain,
   selfChild: readVariable(process.execPath, ['-e', 'process.stdout.write(process.env.ELECTRON_RUN_AS_NODE ?? "")']),
+  pnpmChild,
 }))
 `)
 
@@ -67,7 +85,12 @@ let fixtureRun = 0
 async function runEntry(entry, args, nodeMode) {
   fixtureRun += 1
   const marker = join(workDir, 'imported-' + String(fixtureRun) + '.marker')
-  const env = { ...process.env, DSH_DESKTOP_RUNTIME_ENTRY: fixture, DSH_DESKTOP_FIXTURE_MARKER: marker }
+  const env = {
+    ...process.env,
+    DSH_DESKTOP_RUNTIME_ENTRY: fixture,
+    DSH_DESKTOP_PNPM_ENTRY: pnpmFixture,
+    DSH_DESKTOP_FIXTURE_MARKER: marker,
+  }
   if (nodeMode === undefined) Reflect.deleteProperty(env, 'ELECTRON_RUN_AS_NODE')
   else env.ELECTRON_RUN_AS_NODE = nodeMode
   const child = spawn(EXECUTABLE, [entry, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -179,10 +202,21 @@ try {
     String(packagedLike.ambient))
   check('launcher entry variable not leaked to the harness', packagedLike.entryVariable === null,
     String(packagedLike.entryVariable))
+  check('pnpm entry variable not leaked to the harness', packagedLike.pnpmEntryVariable === null,
+    String(packagedLike.pnpmEntryVariable))
   check('Agent children do not inherit the Node-mode variable', packagedLike.plainChild === '',
     JSON.stringify(packagedLike.plainChild))
   check('process.execPath children still receive it', packagedLike.selfChild === '1',
     JSON.stringify(packagedLike.selfChild))
+  check('pnpm spawn is rewritten onto the packaged entry', packagedLike.pnpmChild?.marker === 'bundled-pnpm',
+    JSON.stringify(packagedLike.pnpmChild))
+  check('rewritten pnpm sees CI=true', packagedLike.pnpmChild?.ci === 'true',
+    JSON.stringify(packagedLike.pnpmChild))
+  check('rewritten pnpm keeps the original args',
+    JSON.stringify(packagedLike.pnpmChild?.argv) === JSON.stringify(['dsh-desktop-probe']),
+    JSON.stringify(packagedLike.pnpmChild?.argv))
+  check('rewritten pnpm still runs in Node mode', packagedLike.pnpmChild?.nodeMode === '1',
+    JSON.stringify(packagedLike.pnpmChild))
 
   const blocked = await runEntry(GATEWAY, ['web'], '1')
   check('gateway refuses `web` with exit 2', blocked.code === 2, String(blocked.code))
@@ -225,6 +259,9 @@ try {
     const plainNode = await runLauncher(undefined)
     check('unpatched pass-through on a real Node', plainNode.ambient === null && plainNode.selfChild === '',
       JSON.stringify(plainNode))
+    check('unpatched pass-through does not rewrite pnpm onto the fixture',
+      plainNode.pnpmChild?.marker !== 'bundled-pnpm',
+      JSON.stringify(plainNode.pnpmChild))
   }
 
   // Only meaningful once the closure is deployed (`pnpm run prepare:runtime`);

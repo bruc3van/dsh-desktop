@@ -101,6 +101,9 @@ jobs:
       - name: 验证运行时环境隔离 / Verify runtime environment isolation
         run: pnpm run check:runtime-env
 
+      - name: 验证 pnpm spawn 改写 / Verify pnpm spawn rewrite
+        run: pnpm run check:runtime-spawn
+
       - name: 验证 dsh 网关分类 / Verify dsh CLI gateway policy
         run: pnpm run check:dsh-cli
 
@@ -262,6 +265,9 @@ jobs:
 
       - name: 验证运行时环境隔离 / Verify runtime environment isolation
         run: pnpm run check:runtime-env
+
+      - name: 验证 pnpm spawn 改写 / Verify pnpm spawn rewrite
+        run: pnpm run check:runtime-spawn
 
       - name: 验证 dsh 网关分类 / Verify dsh CLI gateway policy
         run: pnpm run check:dsh-cli
