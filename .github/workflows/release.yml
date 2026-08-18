@@ -318,6 +318,14 @@ jobs:
             throw "Installed NSIS runtime smoke failed with code $LASTEXITCODE"
           }
 
+      # macOS 侧的等价门禁：挂载刚生成的 DMG，把 .app 拷出来再跑一遍冒烟。
+      # 此前 smoke:package 跑的是未打包的 .app 目录，DMG 本身从没被挂载过。
+      # 这一步先在 ci.yml 的 package 作业（macos-15 / arm64）上跑绿才进来；
+      # Intel 腿走同一个脚本，差别只是 runner 架构。
+      - name: 验证 macOS DMG 实际安装结果 / Smoke installed macOS runtime
+        if: runner.os == 'macOS'
+        run: pnpm run smoke:dmg
+
       # 只有本平台全部冒烟测试通过后，安装包才会进入草稿 Release。
       # Packages reach the draft release only after every smoke check passed.
       - name: 上传安装包到草稿 Release / Upload packages to draft release

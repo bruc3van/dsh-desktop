@@ -73,37 +73,53 @@ async function detach() {
   throw new Error('could not unmount ' + mountPoint)
 }
 
-let executable
+/** Everything that has to happen while the volume is mounted. */
+async function takeAppOutOfVolume() {
+  const entries = await readdir(mountPoint)
+  const bundle = entries.find(name => name.endsWith('.app'))
+  if (bundle === undefined) throw new Error('the DMG carries no .app: ' + entries.join(', '))
+  // The drag target. Without it the volume opens onto an app with nowhere to
+  // drop it, and the documented install gesture does not exist.
+  if (!entries.includes('Applications')) {
+    throw new Error('the DMG has no Applications link to drag onto: ' + entries.join(', '))
+  }
+  // ditto, not cp: it preserves the symlinks, permissions, and extended
+  // attributes an .app bundle is made of. A plain recursive copy strips the
+  // attributes the ad-hoc signature lives in, and the copy would then fail to
+  // launch for reasons the DMG is not guilty of.
+  await execFile('ditto', [join(mountPoint, bundle), join(staged, bundle)])
+  const copied = join(staged, bundle, 'Contents', 'MacOS', PRODUCT_NAME)
+  if (!existsSync(copied)) throw new Error('copied bundle has no executable: ' + copied)
+  // What Gatekeeper checks first. A signature that did not survive the round
+  // trip is exactly the "app is damaged" state electron-builder.yml's ad-hoc
+  // identity exists to avoid, and it is invisible in the unpacked directory.
+  await execFile('codesign', ['--verify', '--strict', join(staged, bundle)])
+  console.log('✓ mounted, copied out, and the bundle still verifies: ' + bundle)
+  return copied
+}
+
 try {
   await execFile('hdiutil', ['attach', dmg, '-nobrowse', '-readonly', '-mountpoint', mountPoint])
+  // Unmount always, but never let a detach failure replace the reason the copy
+  // failed: the mount is the cleanup, the copy is the finding.
+  let executable
+  let failure
   try {
-    const entries = await readdir(mountPoint)
-    const bundle = entries.find(name => name.endsWith('.app'))
-    if (bundle === undefined) throw new Error('the DMG carries no .app: ' + entries.join(', '))
-    // The drag target. Without it the volume opens onto an app with nowhere to
-    // drop it, and the documented install gesture does not exist.
-    if (!entries.includes('Applications')) {
-      throw new Error('the DMG has no Applications link to drag onto: ' + entries.join(', '))
-    }
-    // ditto, not cp: it preserves the symlinks, permissions, and extended
-    // attributes an .app bundle is made of. A plain recursive copy strips the
-    // attributes the ad-hoc signature lives in, and the copy would then fail
-    // to launch for reasons the DMG is not guilty of.
-    await execFile('ditto', [join(mountPoint, bundle), join(staged, bundle)])
-    executable = join(staged, bundle, 'Contents', 'MacOS', PRODUCT_NAME)
-    if (!existsSync(executable)) throw new Error('copied bundle has no executable: ' + executable)
-    // What Gatekeeper checks first. A signature that did not survive the round
-    // trip is exactly the "app is damaged" state electron-builder.yml's ad-hoc
-    // identity exists to avoid, and it is invisible in the unpacked directory.
-    await execFile('codesign', ['--verify', '--strict', join(staged, bundle)])
-    console.log('✓ mounted, copied out, and the bundle still verifies: ' + bundle)
-  } finally {
-    await detach()
+    executable = await takeAppOutOfVolume()
+  } catch (error) {
+    failure = error
   }
+  try {
+    await detach()
+  } catch (error) {
+    if (failure === undefined) failure = error
+    else console.warn('[smoke-dmg] and the volume would not unmount either: ' + error.message)
+  }
+  if (failure !== undefined) throw failure
 
-  // The same smoke the unpacked directory gets, against the copy that came out
-  // of the volume — a real system PATH is absent there too, so this asserts the
-  // bundled runtime, the login-shell PATH restore, and the shims.
+  // The same smoke the unpacked directory gets, now against the copy that came
+  // out of the volume: empty PATH, bundled runtime, login-shell PATH restore,
+  // and the shims.
   const smoke = spawn(process.execPath, [join(APP_DIR, 'scripts', 'smoke-package.mjs'), executable], {
     stdio: 'inherit',
   })
