@@ -7,7 +7,9 @@
 # 两个 bug 都只可能由「真发一次版」发现——这个工作流就是来消除那种发现方式的。
 #
 # 因此 app 作业刻意与发布的构建作业保持同构（同样 prepare:runtime、同样在
-# windows-latest 上跑 Electron 检查），只是不打包。CI 绿而发布红的检查没有价值。
+# windows-latest 上跑 Electron 检查），只是不打包；package 作业则真打一次 macOS
+# DMG，因为「装出来的应用能不能起来」只有打包之后才回答得了。CI 绿而发布红的
+# 检查没有价值。
 name: 持续集成 / CI
 
 on:
