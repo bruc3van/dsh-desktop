@@ -164,8 +164,13 @@ jobs:
   # 是 electron-builder 留下的未打包 .app 目录，DMG 本身从没被挂载、拷出、启动过，
   # 一个坏掉的 DMG 会照常发布。放在这里而不是直接进 release.yml：发布流水线只由
   # tag 触发，没在 CI 跑过的门禁步骤等于拿发布当测试环境（0.2.3 已经这样烧掉三轮）。
+  #
+  # PR 上不跑：它要真打一次包，与 app 作业抢同一批 macOS runner——有一轮把 app
+  # 作业压到排队 20 多分钟。PR 想要的是快反馈，而「装出来的应用能不能起来」在
+  # 合进 main 时拦住就够了，那仍然远早于打 tag 发布。
   package:
     name: macOS 安装包冒烟 / macOS package smoke
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: macos-15
     timeout-minutes: 45
 

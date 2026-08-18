@@ -320,10 +320,12 @@ jobs:
 
       # macOS 侧的等价门禁：挂载刚生成的 DMG，把 .app 拷出来再跑一遍冒烟。
       # 此前 smoke:package 跑的是未打包的 .app 目录，DMG 本身从没被挂载过。
-      # 这一步先在 ci.yml 的 package 作业（macos-15 / arm64）上跑绿才进来；
-      # Intel 腿走同一个脚本，差别只是 runner 架构。
+      #
+      # 只在 arm64 腿上跑，因为 ci.yml 的 package 作业只打 arm64 的包——脚本在
+      # Intel 上一次都没跑过，放开它就等于又拿发布当测试环境。要覆盖 Intel，
+      # 先给 ci.yml 加一条 macos-15-intel 的打包腿，绿了再把这里的条件放宽。
       - name: 验证 macOS DMG 实际安装结果 / Smoke installed macOS runtime
-        if: runner.os == 'macOS'
+        if: matrix.id == 'macos-arm64'
         run: pnpm run smoke:dmg
 
       # 只有本平台全部冒烟测试通过后，安装包才会进入草稿 Release。
