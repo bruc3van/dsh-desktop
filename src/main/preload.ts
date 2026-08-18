@@ -786,7 +786,7 @@ function injectEnhance(panel: Element): void {
       const result = await connection.setMarket(wanted)
       paintMarket(result.enabled)
       marketNoteEl.textContent = result.enabled
-        ? '已开启。重启客户端后，插件市场会接入当前运行时。'
+        ? '已开启。重启客户端后，安全市场会接入当前运行时。'
         : '已关闭并从 profile 中移除。当前会话里它仍然加载着，重启后消失。'
     } catch (error) {
       paintMarket(!wanted)

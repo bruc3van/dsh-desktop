@@ -11,7 +11,7 @@ DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里
 
 发布安装包内置固定版本的官方 `@deepseek-ai/dsh` 运行时；普通用户无需另外安装 Node.js、pnpm 或 `dsh` CLI。桌面外壳、安装包、连接增强与发布签名均由本项目独立负责，不属于官方运行时的一部分。桌面客户端与官方 `dsh` 使用各自独立的版本号；应用的连接设置页会同时显示两个版本号，便于排查兼容问题。
 
-![DeepSeek Harness Desktop 首页（深色主题）](docs/images/readme-home-dark.jpeg)
+![DeepSeek Harness Desktop 首页：窗口里就是官方 Web UI 本体](docs/images/dsh-desktop-home.png)
 
 ## 为什么值得使用
 
@@ -91,6 +91,8 @@ DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里
 
 连接设置把「智能」和「自定义」分成两种方式：智能模式下只显示四个来源，点选立即生效；选「自定义」后才会出现地址栏，右侧是「保存并连接」。点「智能」会立即切回，已填地址会保留。
 
+![官方设置弹窗里的「桌面设置」：当前连接与四个来源开关、安全市场开关，以及客户端和内置 dsh 的版本](docs/images/dsh-desktop-setting.png)
+
 连接状态按**谁启动了这个运行时**来描述，避免「本地」和「内置」混用：
 
 | 状态 | 含义 |
@@ -153,11 +155,11 @@ DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里
 
 ## 内置安全市场
 
-客户端把随安装包发布的[安全市场](https://github.com/bruc3van/dsh-desktop-safe-market)（`dsh-desktop-safe-market`）按官方 in-box bundle 的方式接入当前 profile：把插件复制到 `<DSH_HOME>/profiles/node_modules`、并往 profile 的 `dsh.profile.bundles` 里加一项——不写依赖、不改锁文件、不跑 pnpm、不联网；升级插件即升级客户端。**客户端启动的任何一种运行时都能用上**：内置的、你装在 PATH 上的 dsh、以及 `npx @deepseek-ai/dsh web` 留下的缓存。插件复制进 profile 而不是软链到闭包，它的 `@deepseek-ai/*` 依赖便向上解析到正在服务的那份运行时——和你用 `dsh plugin add` 装的插件走同一条路。设置里随之出现「插件市场」导航项，分两页：「插件」页上半是已安装面板（查看、停用/启用、卸载当前 profile 通过包安装的插件），下半是社区市场；「技能」页列出当前会话实际能解析到的技能。固定地址连接时客户端会撤回条目——那种运行时不由客户端启动（甚至可能不在本机），无从知道改动何时生效。复用本机 3080 上已在运行的实例则会保守地重新接入（只恢复名字，不换插件目录）：该实例正在服务这个 profile；它停止后客户端回落，并在下一次由自己启动运行时重新按版本门禁接入。
+客户端把随安装包发布的[安全市场](https://github.com/bruc3van/dsh-desktop-safe-market)（`dsh-desktop-safe-market`）按官方 in-box bundle 的方式接入当前 profile：把插件复制到 `<DSH_HOME>/profiles/node_modules`、并往 profile 的 `dsh.profile.bundles` 里加一项——不写依赖、不改锁文件、不跑 pnpm、不联网；升级插件即升级客户端。**客户端启动的任何一种运行时都能用上**：内置的、你装在 PATH 上的 dsh、以及 `npx @deepseek-ai/dsh web` 留下的缓存。插件复制进 profile 而不是软链到闭包，它的 `@deepseek-ai/*` 依赖便向上解析到正在服务的那份运行时——和你用 `dsh plugin add` 装的插件走同一条路。设置里随之出现「安全市场」导航项，分两页：「插件」页上半是已安装面板（查看、停用/启用、卸载当前 profile 通过包安装的插件，也包括装了却没在加载的），下半是社区市场；「技能」页列出当前会话实际能解析到的技能。固定地址连接时客户端会撤回条目——那种运行时不由客户端启动（甚至可能不在本机），无从知道改动何时生效。复用本机 3080 上已在运行的实例则会保守地重新接入（只恢复名字，不换插件目录）：该实例正在服务这个 profile；它停止后客户端回落，并在下一次由自己启动运行时重新按版本门禁接入。
 
 **不想要它**：连接设置里有「安全市场」开关，关掉就会立即移除市场插件，之后启动也不会再装回。就算客户端已经卸载了，市场自己的「已安装」面板也能把它卸载掉——官方 `dsh plugin` 命令不管这份插件，所以面板是最后的入口。
 
-![设置里的「插件市场」：按分类均衡发牌的精选目录，右上角显示市场自身版本](docs/images/marketplace.png)
+![设置里的「安全市场」：按分类均衡发牌的精选目录，右上角显示市场自身版本](docs/images/marketplace.png)
 
 市场有三个刻意的设计：
 
@@ -169,11 +171,11 @@ DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里
 
 目录里已经装过的插件会标出「已安装 vX.Y.Z」，按钮也随之变成「安全升级」——走的是同一套「先审查、再动手」的流程，只是提示词第一步先让 Agent 确认上游到底有没有新版本，没有就原样不动。已装插件的日常管理则在同一页顶部的已安装面板：
 
-![已安装面板：版本、运行状态，以及停用/启用与卸载](docs/images/marketplace-installed.png)
+![已安装面板：版本、启用状态，以及停用/启用与卸载](docs/images/marketplace-installed.png)
 
-「技能」页列出当前会话实际能解析到的技能。它按会话寻址，因为技能发现是随各个 Agent 预设分层的——从插件根上下文读只能看到全局层，会对着一堆技能报告「没有技能」：
+卸载不是从列表里划掉：它先停用插件，再在这个 profile 里执行与官方 `dsh plugin remove` 相同的移除，锁文件和 node_modules 一并清掉。装成了依赖、却没写进 `bundles` 因而当前不会加载的插件，面板也会单独列出并标明——你机器上装过什么，这里就看得见什么，也能就地卸掉。
 
-![技能页：当前会话能解析到的技能，含来源与调用策略](docs/images/marketplace-skills.png)
+「技能」页列出当前会话实际能解析到的技能，并标出每个技能的来源与调用策略。它按会话寻址，因为技能发现是随各个 Agent 预设分层的——从插件根上下文读只能看到全局层，会对着一堆技能报告「没有技能」。
 
 桌面端对这次接入与其他工程投入同样谨慎：接入失败可自愈——插件在加载期抛错会让**整棵插件树**启动失败、共用同一 profile 的 CLI 也会跟着起不来，因此失败即撤回并在本会话不再重试；插件目录缺失、或 `profiles/node_modules` 上已有非软链目录时不写 `bundles`，绝不写坏你的 profile；你自己装过该插件（作为 profile 依赖）且版本不低于内置时，客户端完全不插手；更旧的覆盖会改用闭包那份。运行时比客户端自带的 dsh 更旧时不接入——插件按自带的那版编译，更旧的运行时可能缺它需要的导出；更新的一律放行。插件自身还有一道自保：它的入口只经受保护的动态载入触达真正的实现，所以万一遇上不兼容的运行时，损失的只是市场本身。市场的完整设计（配置项、目录协议、安全边界与已知限制）见其[仓库](https://github.com/bruc3van/dsh-desktop-safe-market)。
 
@@ -205,7 +207,7 @@ DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里
 
 **Q：内置了插件市场吗？之后还有什么计划？**
 
-内置了：随安装包发布的[安全市场](https://github.com/bruc3van/dsh-desktop-safe-market)，设置里叫「插件市场」。它按官方 in-box bundle 的方式接入当前 profile（复制进 `profiles/node_modules` 并写入 `dsh.profile.bundles`），客户端启动的任一运行时都能用上；市场默认关闭、开启后才联网；固定地址连接时会撤回（该运行时不由客户端启动）；复用本机已在运行的实例则会保守地重新接入（只恢复条目、不换插件目录）。目录的每日自动采集 + 人工精选、以及「先审查、再安装」的完整流程见[内置安全市场](#内置安全市场)。官方 Web UI 自身的能力（技能、插件、交互等）仍随官方发版直接出现在窗口里。桌面外壳自身的后续工作见[开发指南](docs/development.zh.md#当前状态)与 [TODO](TODO.md)：macOS/Windows 签名与公证、系统通知、OS Keychain、语音输入，以及内置运行时的独立更新通道、运行中实例的周期探测提示等。
+内置了：随安装包发布的[安全市场](https://github.com/bruc3van/dsh-desktop-safe-market)，设置里叫「安全市场」。它按官方 in-box bundle 的方式接入当前 profile（复制进 `profiles/node_modules` 并写入 `dsh.profile.bundles`），客户端启动的任一运行时都能用上；市场默认关闭、开启后才联网；固定地址连接时会撤回（该运行时不由客户端启动）；复用本机已在运行的实例则会保守地重新接入（只恢复条目、不换插件目录）。目录的每日自动采集 + 人工精选、以及「先审查、再安装」的完整流程见[内置安全市场](#内置安全市场)。官方 Web UI 自身的能力（技能、插件、交互等）仍随官方发版直接出现在窗口里。桌面外壳自身的后续工作见[开发指南](docs/development.zh.md#当前状态)与 [TODO](TODO.md)：macOS/Windows 签名与公证、系统通知、OS Keychain、语音输入，以及内置运行时的独立更新通道、运行中实例的周期探测提示等。
 
 ## 参与开发
 
@@ -225,7 +227,7 @@ pnpm run dev
 **作者维护**
 
 - **[awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin)** — 用 30 秒为你的 DeepSeek Harness（DSH）找到合适的插件。这不是又一个仓库清单：GitHub 上所有打着 `dsh-plugin` 标签的仓库由脚本每天自动抓取，再经人工逐个核实——真插件进目录，蹭热度的进黑名单，每条剔除理由公开可查；并告诉你每个插件适合谁、从哪里开始。本客户端内置安全市场的目录数据即来源于它，详见[内置安全市场](#内置安全市场)。
-- **[dsh-desktop-safe-market](https://github.com/bruc3van/dsh-desktop-safe-market)** — 先审查再安装的 DSH 市场（review-before-install DSH marketplace）。本客户端随安装包内置的「插件市场」由它实现：目录每日自动采集 + 人工精选，「安全安装」把审查提示词交给 Agent、确认干净后再用官方命令安装。配置项、目录协议与已知限制见其仓库。
+- **[dsh-desktop-safe-market](https://github.com/bruc3van/dsh-desktop-safe-market)** — 先审查再安装的 DSH 市场（review-before-install DSH marketplace）。本客户端随安装包内置的「安全市场」由它实现：目录每日自动采集 + 人工精选，「安全安装」把审查提示词交给 Agent、确认干净后再用官方命令安装。配置项、目录协议与已知限制见其仓库。
 
 **官方仓库**
 

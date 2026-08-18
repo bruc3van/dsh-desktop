@@ -4997,10 +4997,10 @@ if (!gotLock) {
       // window happens to be pointed at it.
       if (caller.remote) {
         const confirmed = await confirmSensitiveAction(
-          enabled ? '安全市场？' : '移除内置插件市场？',
+          enabled ? '接入内置安全市场？' : '移除内置安全市场？',
           enabled
-            ? '当前页面来自远端来源，它请求让本客户端在下次启动时安全市场。'
-            : '当前页面来自远端来源，它请求移除内置插件市场：本机 profile 中的插件条目与复制的插件目录都会被删除。',
+            ? '当前页面来自远端来源，它请求让本客户端在下次启动时接入内置安全市场。'
+            : '当前页面来自远端来源，它请求移除内置安全市场：本机 profile 中的插件条目与复制的插件目录都会被删除。',
         )
         if (!confirmed) return { enabled: loadSettings().bundledMarketDisabled !== true }
       }
