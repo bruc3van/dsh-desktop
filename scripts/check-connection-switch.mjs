@@ -150,9 +150,10 @@ try {
   await window.locator('#dsh-desktop-tab').waitFor({ state: 'visible', timeout: 3_000 })
   await window.click('#dsh-desktop-tab')
   await window.locator('#dsh-desktop-enhance').waitFor({ state: 'visible', timeout: 3_000 })
-  if (await window.locator('#dsh-enhance-switch').textContent() !== '切换到智能模式'
-    || await window.locator('#dsh-enhance-url').inputValue() !== remoteOrigin) {
-    throw new Error('enhanced connection card did not expose the saved remote shortcut')
+  if (await window.locator('#dsh-enhance-mode-custom').getAttribute('aria-checked') !== 'true'
+    || await window.locator('#dsh-enhance-url').inputValue() !== remoteOrigin
+    || await window.locator('#dsh-enhance-custom').isHidden()) {
+    throw new Error('enhanced connection card did not expose the saved remote address')
   }
   if (await window.locator('#dsh-enhance-runtimes [data-smart-runtime]').count() !== 4) {
     throw new Error('enhanced connection card is missing Smart-mode source toggles')
@@ -160,9 +161,12 @@ try {
   const remoteSettingsPagePromise = app.waitForEvent('window')
   await window.evaluate(() => { window.desktop.openConnectionSettings() })
   const remoteSettingsPage = await remoteSettingsPagePromise
-  await remoteSettingsPage.waitForFunction(() => document.querySelector('#switch')?.hidden === false)
-  if (await remoteSettingsPage.locator('#switch').textContent() !== '切换到智能模式') {
-    throw new Error('pinned-address shortcut did not offer Smart mode')
+  await remoteSettingsPage.waitForFunction(() => document.querySelector('#mode-custom')?.classList.contains('primary'))
+  if (!await remoteSettingsPage.locator('#mode-custom').evaluate(el => el.classList.contains('primary'))) {
+    throw new Error('pinned address did not select Custom mode')
+  }
+  if (await remoteSettingsPage.locator('#url').inputValue() !== remoteOrigin) {
+    throw new Error('native connection page did not show the saved remote address')
   }
   if (await remoteSettingsPage.locator('[data-smart-runtime]').count() !== 4) {
     throw new Error('native connection page is missing Smart-mode source toggles')
@@ -218,10 +222,11 @@ try {
   }
   await remoteSettingsPage.reload()
   await remoteSettingsPage.waitForFunction(() => document.querySelector('#save')?.textContent === '保存并连接')
-  if (!await remoteSettingsPage.locator('#switch').isHidden()
+  if (!await remoteSettingsPage.locator('#mode-smart').evaluate(el => el.classList.contains('primary'))
     || await remoteSettingsPage.locator('#save').textContent() !== '保存并连接'
-    || await remoteSettingsPage.locator('#url').inputValue() !== remoteOrigin) {
-    throw new Error('Smart mode did not retain the address behind one clear save-and-connect action')
+    || await remoteSettingsPage.locator('#url').inputValue() !== remoteOrigin
+    || !await remoteSettingsPage.locator('#custom-block').isHidden()) {
+    throw new Error('Smart mode did not retain the address behind Custom, or still showed the address field')
   }
   await remoteSettingsPage.close()
   await new Promise(resolve => setTimeout(resolve, 100))
@@ -251,10 +256,10 @@ try {
 
   console.log('✓ legacy remote configuration remains active')
   console.log('✓ a cross-origin sub-frame redirect is not treated as a top-frame navigation')
-  console.log('✓ enhanced connection card shows the saved remote shortcut')
+  console.log('✓ enhanced connection card shows the saved remote address under Custom')
   console.log('✓ Smart-mode source toggles persist without leaving Connect mode')
-  console.log('✓ native settings shows the context-aware shortcut')
-  console.log('✓ shortcut switches to Smart mode without deleting the remote address')
+  console.log('✓ native settings selects Custom for a pinned address')
+  console.log('✓ switching to Smart mode keeps the remote address')
   console.log('✓ shortcut switches back to the saved remote origin')
   console.log('✓ saving an unchanged selection still reconnects the window')
 } finally {

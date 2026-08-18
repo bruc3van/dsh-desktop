@@ -60,9 +60,9 @@ const checkKeyHelpLink = async (name, locator) => {
 
 // The app must paint before the local runtime is ready, otherwise a Finder or
 // Dock launch appears to do nothing for several seconds.
-const loadingVisible = await window.locator('#loading-status').waitFor({ state: 'visible', timeout: 3000 })
+const loadingVisible = await window.locator('h1').waitFor({ state: 'visible', timeout: 3000 })
   .then(() => true, () => false)
-check('startup loading window', loadingVisible, '#loading-status')
+check('startup loading window', loadingVisible, 'h1')
 
 await window.waitForFunction(() => document.querySelector('#root')?.children.length > 0, null, { timeout: 60000 })
 await window.waitForTimeout(1500)
@@ -155,8 +155,11 @@ check('desktop connection card', enhancedCardVisible, '#dsh-desktop-enhance')
 const updateCardVisible = await settingsDialog.locator('#dsh-desktop-update').waitFor({ state: 'visible', timeout: 3_000 })
   .then(() => true, () => false)
 check('desktop update card', updateCardVisible, '#dsh-desktop-update')
-check('connection shortcut hidden without a saved remote address',
-  await settingsDialog.locator('#dsh-enhance-switch').isHidden(), '#dsh-enhance-switch')
+check('smart mode hides the custom address field',
+  await settingsDialog.locator('#dsh-enhance-custom').isHidden(), '#dsh-enhance-custom')
+check('smart mode is the default connection choice',
+  await settingsDialog.locator('#dsh-enhance-mode-smart').getAttribute('aria-checked') === 'true',
+  await settingsDialog.locator('#dsh-enhance-mode-smart').getAttribute('aria-checked'))
 
 // Exercise the official appearance control, rather than emulating an OS media
 // query: the UI owns its theme state and provides the tokens our card consumes.

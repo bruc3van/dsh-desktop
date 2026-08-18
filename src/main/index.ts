@@ -1711,7 +1711,6 @@ function loadingIconTag(): string {
 function loadingPageUrl(): string {
   const chinese = localeChinese()
   const title = chinese ? '正在启动 DeepSeek Harness' : 'Starting DeepSeek Harness'
-  const detail = chinese ? '正在准备本地服务…' : 'Preparing the local service…'
   const hint = chinese ? '首次启动通常需要 10–20 秒' : 'The first launch usually takes 10–20 seconds'
   // The only connection seat reachable while the Web UI itself cannot load:
   // the official settings dialog (and its enhanced 连接 block) needs a page.
@@ -1726,7 +1725,7 @@ function loadingPageUrl(): string {
     + '#loading-status{margin:0;color:#6e7480;font-size:14px;line-height:22px}.hint{margin:8px 0 0;color:#9aa0a6;font-size:12px;line-height:18px}'
     + '.activity{height:20px;margin:20px auto 0;display:flex;justify-content:center;align-items:center;gap:6px}'
     // An author rule beats the UA stylesheet, so [hidden] needs restating here.
-    + '.activity[hidden],.hint[hidden],.action[hidden]{display:none}'
+    + '.activity[hidden],.hint[hidden],.action[hidden],#loading-status[hidden]{display:none}'
     + '.action{margin:20px auto 0;display:block;font:inherit;font-size:13px;color:#0f1115;background:transparent;'
     + 'border:1px solid #d8d8d4;border-radius:28px;padding:7px 18px;cursor:pointer}'
     + '.action:hover{background:#f5f6f7}'
@@ -1737,7 +1736,7 @@ function loadingPageUrl(): string {
     + '.action{color:#f4f5f6;border-color:#3a3d42}.action:hover{background:#232529}}'
     + '@media(prefers-reduced-motion:reduce){.activity i{animation:none}.activity i:nth-child(2){opacity:.5}.activity i:nth-child(3){opacity:.8}}'
     + '</style></head><body><main>' + loadingIconTag()
-    + '<h1>' + title + '</h1><p id="loading-status">' + detail + '</p><p class="hint">' + hint + '</p>'
+    + '<h1>' + title + '</h1><p id="loading-status" hidden></p><p class="hint">' + hint + '</p>'
     + '<div class="activity" aria-hidden="true"><i></i><i></i><i></i></div>'
     + '<button class="action" id="loading-action" type="button" hidden>' + action + '</button>'
     + '</main></body></html>'
@@ -1773,8 +1772,9 @@ function scheduleLoadingHints(): void {
 }
 
 /**
- * Update the loading document's status line. The 'failed' state also withdraws
- * the activity indicator and the estimated-time hint: a launch that
+ * Update the loading document. Busy-path copy stays off the splash (title +
+ * hint + dots are enough); the 'failed' state reveals the status line and
+ * withdraws the activity indicator and estimated-time hint. A launch that
  * cannot proceed must not keep animating, nor keep promising progress. It
  * reveals the connection button instead — with no page, the official settings
  * dialog (which now owns the connection form) cannot be reached.
@@ -1789,6 +1789,7 @@ function updateLoadingStatus(chinese: string, english: string, state: 'busy' | '
   const failed = String(state === 'failed')
   void window.webContents.executeJavaScript(
     `document.getElementById('loading-status')?.replaceChildren(${JSON.stringify(message)});`
+    + `document.getElementById('loading-status')?.toggleAttribute('hidden', ${state !== 'failed'});`
     + `document.querySelector('.activity')?.toggleAttribute('hidden', ${failed});`
     + `document.querySelector('.hint')?.toggleAttribute('hidden', ${failed});`
     // The page's own CSP forbids inline script, so the click seat is bound
@@ -3462,12 +3463,12 @@ const SETTINGS_PAGE_SCRIPT = 'const $ = id => document.getElementById(id);'
   // to overlap: a client-spawned child was labelled 本地 even when it ran the
   // 内置 copy, and a reused instance the user started themselves got neither.
   + 'function sourceLabel(s){'
-  + 'if(s.mode==="probe")return "复用你已启动的 dsh";'
-  + 'if(s.mode==="connect")return "固定地址";'
+  + 'if(s.mode==="probe")return "本机已运行";'
+  + 'if(s.mode==="connect")return "自定义地址";'
   + 'const v=s.installedDshVersion?" v"+s.installedDshVersion:"";'
-  + 'return s.runtimeSource==="installed"?"客户端启动·本机安装的 dsh"+v'
-  + ':s.runtimeSource==="npx"?"客户端启动·npx 缓存的 dsh"+v'
-  + ':s.runtimeSource==="bundled"?"客户端启动·内置运行时":"客户端启动";}'
+  + 'return s.runtimeSource==="installed"?"客户端启动·本机已安装"+v'
+  + ':s.runtimeSource==="npx"?"客户端启动·npx 缓存"+v'
+  + ':s.runtimeSource==="bundled"?"客户端启动·客户端内置":"客户端启动";}'
   + 'async function refresh(){try{const s=await(await fetch("desktop/status")).json();'
   + 'const modeLabel=sourceLabel(s);'
   + '$("status").textContent=modeLabel+(s.childPid?" (PID "+s.childPid+")":"")+" → "+(s.targetUrl||"（未就绪）")+(s.lastError?" · "+s.lastError:"")'
@@ -3476,27 +3477,29 @@ const SETTINGS_PAGE_SCRIPT = 'const $ = id => document.getElementById(id);'
   + '$("versions").textContent="桌面客户端 v"+s.desktopVersion+" · 内置 dsh "+(s.dshVersion??"不可用")'
   + '+(s.installedDshVersion?" · 本机 dsh "+s.installedDshVersion:"");'
   + 'const c=await(await fetch("desktop/settings")).json();$("url").value=c.serverUrl??"";'
-  + 'paintRuntimes(c.smartRuntimes);'
-  // Saving both records and applies the address. The secondary action exists
-  // only while an address is pinned, where it has one unambiguous meaning.
-  + '$("switch").hidden=s.selectedMode!=="connect";$("switch").textContent="切换到智能模式";'
-  // A live official instance we are NOT already on: offer its address instead
-  // of making the user type it. Never overwrite a saved or typed value.
-  + 'if(!$("url").value){try{const p=await(await fetch("desktop/probe")).json();'
-  + 'if(p.url&&p.url!==s.targetUrl&&!$("url").value){$("url").value=p.url;'
-  + '$("note").textContent="检测到你已启动的 dsh。点击「保存并连接」即可使用；它停止时客户端会自动回落。"}}catch(e){}}'
+  + 'paintRuntimes(c.smartRuntimes);paintMode(s.selectedMode);'
   + 'renderUpdate(await(await fetch("desktop/update")).json());'
   + '}catch(e){$("status").textContent="状态不可用"}}'
-  + '$("save").onclick=async()=>{try{const r=await fetch("desktop/settings",{method:"POST",headers:{"content-type":"application/json"},'
-  + 'body:JSON.stringify({serverUrl:$("url").value.trim()})});const j=await r.json();'
+  + '$("save").onclick=async()=>{try{'
+  + 'const custom=$("mode-custom").classList.contains("primary");'
+  + 'if(custom&&!$("url").value.trim()){$("note").textContent="请先填写地址";return}'
+  + 'if(!custom){const s=await(await fetch("desktop/status")).json();'
+  + 'if(s.selectedMode==="connect"){const r=await fetch("desktop/switch",{method:"POST"});const j=await r.json();'
+  + '$("note").textContent=j.switched?"正在切换到智能模式…":("切换失败："+(j.error||"未知错误"));'
+  + 'if(j.switched)setTimeout(()=>window.close(),500);return}}'
+  + 'const r=await fetch("desktop/settings",{method:"POST",headers:{"content-type":"application/json"},'
+  + 'body:JSON.stringify({serverUrl:custom?$("url").value.trim():""})});const j=await r.json();'
   + '$("note").textContent=j.saved?(j.mode==="smart"?"正在连接（智能模式：该实例停止时自动回落）":"已保存，正在连接…")'
   + ':("保存失败："+(j.error||"未知错误"));'
   + 'if(j.saved)setTimeout(()=>window.close(),900)}catch(e){$("note").textContent="保存失败："+e.message}};'
-  + '$("switch").onclick=async()=>{try{$("switch").disabled=true;const r=await fetch("desktop/switch",{method:"POST"});const j=await r.json();'
-  + '$("note").textContent=j.switched?"正在切换…":("切换失败："+(j.error||"未知错误"));if(!j.switched)$("switch").disabled=false;'
-  + 'if(j.switched)setTimeout(()=>window.close(),500);'
-  + '}catch(e){$("note").textContent="切换失败："+e.message;$("switch").disabled=false}};'
   + 'const ALL_RUNTIMES=["probe","installed","npx","bundled"];'
+  + 'function paintMode(mode){const custom=mode==="connect";'
+  + '$("mode-smart").classList.toggle("primary",!custom);$("mode-custom").classList.toggle("primary",custom);'
+  + '$("smart-block").hidden=custom;$("custom-block").hidden=!custom}'
+  + '$("mode-smart").onclick=()=>paintMode("smart");'
+  + '$("mode-custom").onclick=()=>{paintMode("connect");'
+  + 'if(!$("url").value){void(async()=>{try{const p=await(await fetch("desktop/probe")).json();'
+  + 'if(p.url&&!$("url").value){$("url").value=p.url;$("note").textContent="检测到本机已有 Web UI，可直接保存并连接。"}}catch(e){}})()}};'
   + 'function paintRuntimes(ids){const on=new Set(ids&&ids.length?ids:ALL_RUNTIMES);'
   + 'for(const b of document.querySelectorAll("[data-smart-runtime]"))b.classList.toggle("primary",on.has(b.getAttribute("data-smart-runtime")))}'
   + 'async function saveRuntimes(ids){try{const r=await fetch("desktop/smart-runtimes",{method:"POST",headers:{"content-type":"application/json"},'
@@ -3509,6 +3512,10 @@ const SETTINGS_PAGE_SCRIPT = 'const $ = id => document.getElementById(id);'
   + 'const current=[...document.querySelectorAll("[data-smart-runtime].primary")].map(x=>x.getAttribute("data-smart-runtime"));'
   + 'const next=current.includes(id)?current.filter(x=>x!==id):current.concat(id);'
   + 'if(!next.length){$("runtime-note").textContent="至少保留一种来源";return}void saveRuntimes(next)};'
+  + 'const RUNTIME_NOTE="关掉的来源会跳过。至少保留一种。";'
+  + 'for(const b of document.querySelectorAll("[data-smart-runtime]")){const tip=b.getAttribute("data-tip")||"";'
+  + 'b.onmouseenter=b.onfocus=()=>{$("runtime-note").textContent=tip};'
+  + 'b.onmouseleave=b.onblur=()=>{if($("runtime-note").textContent===tip)$("runtime-note").textContent=RUNTIME_NOTE}};'
   // Any answer must put the button back; a fetch that throws would otherwise
   // leave it grey until the page is reopened.
   + '$("update-check").onclick=async()=>{try{$("update-check").disabled=true;const r=await fetch("desktop/update/check",{method:"POST"});renderUpdate((await r.json()).state)}'
@@ -3612,20 +3619,28 @@ function settingsPageHtml(): string {
     + '<div class="section">'
     + '<div class="section-title">连接<span class="badge">增强功能</span>'
     + '<div class="actions">'
-    + '<button id="switch" class="primary" hidden>切换连接</button>'
     + '<button id="save">保存并连接</button>'
     + '</div></div>'
     + '<p class="status-text" id="status">连接状态读取中…</p>'
-    + '<input id="url" placeholder="Web UI 地址，留空 = 智能（本机官方实例优先，否则本地启动）" spellcheck="false">'
-    + '<p class="note" id="note"></p>'
-    + '<p class="note" style="margin-top:14px">智能模式来源（点选开关，至少一种）</p>'
-    + '<div class="runtime-picks">'
-    + '<button type="button" data-smart-runtime="probe" class="primary">复用本机实例</button>'
-    + '<button type="button" data-smart-runtime="installed" class="primary">本机安装的 dsh</button>'
-    + '<button type="button" data-smart-runtime="npx" class="primary">npx 缓存</button>'
-    + '<button type="button" data-smart-runtime="bundled" class="primary">内置运行时</button>'
+    + '<div class="runtime-picks" role="radiogroup" aria-label="连接方式">'
+    + '<button type="button" id="mode-smart" class="primary">智能</button>'
+    + '<button type="button" id="mode-custom">自定义</button>'
     + '</div>'
-    + '<p class="note" id="runtime-note">只影响智能模式。勾选的来源按默认优先级依次尝试。</p>'
+    + '<div id="smart-block">'
+    + '<p class="note" style="margin-top:14px">可多选，按优先级依次尝试</p>'
+    + '<div class="runtime-picks">'
+    + '<button type="button" data-smart-runtime="probe" class="primary" data-tip="本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。" aria-description="本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。">本机已运行</button>'
+    + '<button type="button" data-smart-runtime="installed" class="primary" data-tip="用你 PATH 上自己安装的 dsh，由客户端在后台启动。" aria-description="用你 PATH 上自己安装的 dsh，由客户端在后台启动。">本机已安装</button>'
+    + '<button type="button" data-smart-runtime="npx" class="primary" data-tip="用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。" aria-description="用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。">npx 缓存</button>'
+    + '<button type="button" data-smart-runtime="bundled" class="primary" data-tip="用安装包自带的官方运行时，不用另装 Node 或 dsh。" aria-description="用安装包自带的官方运行时，不用另装 Node 或 dsh。">客户端内置</button>'
+    + '</div>'
+    + '<p class="note" id="runtime-note">关掉的来源会跳过。至少保留一种。</p>'
+    + '</div>'
+    + '<div id="custom-block" hidden>'
+    + '<input id="url" placeholder="例如 http://127.0.0.1:3080" spellcheck="false" style="margin-top:12px">'
+    + '<p class="note">直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。</p>'
+    + '</div>'
+    + '<p class="note" id="note"></p>'
     + '</div>'
     // Divider
     + '<hr class="divider">'
@@ -3951,8 +3966,8 @@ function refuseOccupiedProbeTarget(url: string): void {
       : 'An official Web UI is already answering at ' + url,
     url,
     hint: chinese
-      ? '关闭「复用本机实例」后，客户端不会再连接该实例，也不能在它仍运行时再启动本地运行时。请先退出该实例，然后重试。'
-      : 'With “Reuse a running instance” turned off, this client will not connect to that instance, and it will not start another runtime while it is still serving. Quit that instance, then retry.',
+      ? '关闭「本机已运行」后，客户端不会再连接该实例，也不能在它仍运行时再启动本地运行时。请先退出该实例，然后重试。'
+      : 'With “Already running” turned off, this client will not connect to that instance, and it will not start another runtime while it is still serving. Quit that instance, then retry.',
   })
 }
 
@@ -4735,9 +4750,9 @@ if (!gotLock) {
       // window happens to be pointed at it.
       if (caller.remote) {
         const confirmed = await confirmSensitiveAction(
-          enabled ? '接入内置插件市场？' : '移除内置插件市场？',
+          enabled ? '安全市场？' : '移除内置插件市场？',
           enabled
-            ? '当前页面来自远端来源，它请求让本客户端在下次启动时接入内置插件市场。'
+            ? '当前页面来自远端来源，它请求让本客户端在下次启动时安全市场。'
             : '当前页面来自远端来源，它请求移除内置插件市场：本机 profile 中的插件条目与复制的插件目录都会被删除。',
         )
         if (!confirmed) return { enabled: loadSettings().bundledMarketDisabled !== true }
@@ -4769,8 +4784,8 @@ if (!gotLock) {
         const confirmed = await confirmSensitiveAction(
           localeChinese() ? '当前页面请求更改智能连接来源' : 'The current page asked to change Smart-mode sources',
           (localeChinese()
-            ? '这会决定智能模式下尝试哪些运行时（复用本机实例、本机 dsh、npx 缓存、内置）。请求来自：'
-            : 'This chooses which runtimes Smart mode may try (a running instance, PATH, npx cache, bundled). Requested by: ')
+            ? '这会决定智能模式下尝试哪些来源（本机已运行、本机已安装、npx 缓存、客户端内置）。请求来自：'
+            : 'This chooses which sources Smart mode may try (already running, installed, npx cache, bundled). Requested by: ')
           + (currentTarget() ?? ''),
         )
         if (!confirmed) {
@@ -4806,8 +4821,8 @@ if (!gotLock) {
         const confirmed = await confirmSensitiveAction(
           localeChinese() ? '当前页面请求切换连接模式' : 'The current page asked to switch the connection mode',
           (localeChinese()
-            ? '这会让客户端在智能模式与固定地址之间切换。请求来自：'
-            : 'This flips the client between Smart mode and the pinned address. Requested by: ')
+            ? '这会让客户端在智能模式与自定义地址之间切换。请求来自：'
+            : 'This flips the client between Smart mode and a custom address. Requested by: ')
           + (currentTarget() ?? ''),
         )
         if (!confirmed) return { switched: false, error: localeChinese() ? '已取消' : 'Cancelled' }

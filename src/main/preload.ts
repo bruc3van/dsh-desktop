@@ -624,10 +624,21 @@ function injectEnhance(panel: Element): void {
       '#' + ENHANCE_ID + ' .dsh-enhance-switch{background:var(--dsw-alias-label-primary,#0F1115);border-color:var(--dsw-alias-label-primary,#0F1115);color:var(--dsw-alias-bg-layer-1,#fff)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-switch:hover{opacity:.88;background:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-note{margin:10px 0 0;font-size:13px;color:var(--dsw-alias-label-secondary,#6E7480)}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-marketRow{margin-top:12px}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-market{display:flex;align-items:center;gap:8px;font-size:13px;'
-        + 'color:var(--dsw-alias-label-primary,#0F1115);cursor:pointer}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-market input{cursor:pointer}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-marketBlock{margin:16px 0 0;padding:16px 0 0;'
+        + 'border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-marketRow{justify-content:space-between;gap:12px}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-marketLabel{font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#0F1115)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-toggle{position:relative;flex-shrink:0;width:40px;height:22px;padding:0;'
+        + 'border:none;border-radius:999px;background:var(--dsw-alias-border-l2,#D8D8D4);cursor:pointer;'
+        + 'transition:background .15s ease,opacity .15s ease}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-toggle[aria-checked="true"]{background:var(--dsw-alias-label-primary,#0F1115)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-toggle:disabled{cursor:default;opacity:.55}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-toggle-thumb{position:absolute;top:2px;left:2px;width:18px;height:18px;'
+        + 'border-radius:50%;background:var(--dsw-alias-bg-layer-1,#fff);pointer-events:none;'
+        + 'transition:transform .15s ease}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-toggle[aria-checked="true"] .dsh-enhance-toggle-thumb{transform:translateX(18px)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-modes{flex-wrap:wrap;margin:0 0 4px}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-smart[hidden],#' + ENHANCE_ID + ' .dsh-enhance-custom[hidden]{display:none}',
       '#' + ENHANCE_ID + ' .dsh-enhance-runtimes{flex-wrap:wrap;margin-top:8px}',
       '#' + ENHANCE_ID + ' .dsh-enhance-runtime{padding:5px 12px}',
       '#' + UPDATE_ID + '{margin:0;padding:16px 0;border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
@@ -661,38 +672,93 @@ function injectEnhance(panel: Element): void {
     document.head.appendChild(style)
   }
 
+  const runtimePick = (id: string, label: string, tip: string): string =>
+    '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="' + id
+    + '" data-tip="' + tip + '" aria-description="' + tip + '">' + label + '</button>'
+
   const block = document.createElement('div')
   block.id = ENHANCE_ID
   block.innerHTML =
     '<div class="dsh-enhance-title">连接'
     + '<div class="dsh-enhance-actions">'
-    + '<button class="dsh-enhance-button dsh-enhance-switch" id="dsh-enhance-switch" type="button" hidden>切换连接</button>'
     + '<button class="dsh-enhance-button" id="dsh-enhance-save" type="button">保存并连接</button>'
     + '</div></div>'
     + '<p class="dsh-enhance-status" id="dsh-enhance-status">连接状态读取中…</p>'
-    + '<div class="dsh-enhance-row">'
-    + '<input class="dsh-enhance-input" id="dsh-enhance-url" spellcheck="false" placeholder="Web UI 地址，留空 = 智能（本机官方实例优先，否则本地启动）">'
+    + '<div class="dsh-enhance-row dsh-enhance-modes" role="radiogroup" aria-label="连接方式">'
+    + '<button class="dsh-enhance-button dsh-enhance-switch" id="dsh-enhance-mode-smart" type="button" role="radio" aria-checked="true">智能</button>'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-mode-custom" type="button" role="radio" aria-checked="false">自定义</button>'
+    + '</div>'
+    + '<div class="dsh-enhance-smart" id="dsh-enhance-smart">'
+    + '<p class="dsh-enhance-note">可多选，按优先级依次尝试</p>'
+    + '<div class="dsh-enhance-row dsh-enhance-runtimes" id="dsh-enhance-runtimes">'
+    + runtimePick('probe', '本机已运行', '本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。')
+    + runtimePick('installed', '本机已安装', '用你 PATH 上自己安装的 dsh，由客户端在后台启动。')
+    + runtimePick('npx', 'npx 缓存', '用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。')
+    + runtimePick('bundled', '客户端内置', '用安装包自带的官方运行时，不用另装 Node 或 dsh。')
+    + '</div>'
+    + '<p class="dsh-enhance-note" id="dsh-enhance-runtimeNote">关掉的来源会跳过。至少保留一种。</p>'
+    + '</div>'
+    + '<div class="dsh-enhance-custom" id="dsh-enhance-custom" hidden>'
+    + '<div class="dsh-enhance-row" style="margin-top:10px">'
+    + '<input class="dsh-enhance-input" id="dsh-enhance-url" spellcheck="false" placeholder="例如 http://127.0.0.1:3080">'
+    + '</div>'
+    + '<p class="dsh-enhance-note">直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。</p>'
     + '</div>'
     + '<p class="dsh-enhance-note" id="dsh-enhance-note"></p>'
-    + '<p class="dsh-enhance-note">智能模式来源（点选开关，至少一种）</p>'
-    + '<div class="dsh-enhance-row dsh-enhance-runtimes" id="dsh-enhance-runtimes">'
-    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="probe">复用本机实例</button>'
-    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="installed">本机安装的 dsh</button>'
-    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="npx">npx 缓存</button>'
-    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" type="button" data-smart-runtime="bundled">内置运行时</button>'
-    + '</div>'
-    + '<p class="dsh-enhance-note" id="dsh-enhance-runtimeNote">只影响智能模式。勾选的来源按默认优先级依次尝试。</p>'
+    + '<div class="dsh-enhance-marketBlock">'
     + '<div class="dsh-enhance-row dsh-enhance-marketRow">'
-    + '<label class="dsh-enhance-market"><input type="checkbox" id="dsh-enhance-market"> 接入内置插件市场</label>'
+    + '<span class="dsh-enhance-marketLabel" id="dsh-enhance-marketLabel">安全市场</span>'
+    + '<button class="dsh-enhance-toggle" id="dsh-enhance-market" type="button" role="switch" aria-checked="false" aria-labelledby="dsh-enhance-marketLabel">'
+    + '<span class="dsh-enhance-toggle-thumb"></span></button>'
     + '</div>'
     + '<p class="dsh-enhance-note" id="dsh-enhance-marketNote"></p>'
+    + '</div>'
   const statusEl = block.querySelector('#dsh-enhance-status') as HTMLElement
   const urlEl = block.querySelector('#dsh-enhance-url') as HTMLInputElement
   const noteEl = block.querySelector('#dsh-enhance-note') as HTMLElement
-  const switchEl = block.querySelector('#dsh-enhance-switch') as HTMLButtonElement
+  const modeSmartEl = block.querySelector('#dsh-enhance-mode-smart') as HTMLButtonElement
+  const modeCustomEl = block.querySelector('#dsh-enhance-mode-custom') as HTMLButtonElement
+  const smartBlockEl = block.querySelector('#dsh-enhance-smart') as HTMLElement
+  const customBlockEl = block.querySelector('#dsh-enhance-custom') as HTMLElement
+  const runtimeNoteEl = block.querySelector('#dsh-enhance-runtimeNote') as HTMLElement
+  const runtimeDefaultNote = '关掉的来源会跳过。至少保留一种。'
+  const paintMode = (mode: 'smart' | 'connect'): void => {
+    const custom = mode === 'connect'
+    modeSmartEl.setAttribute('aria-checked', custom ? 'false' : 'true')
+    modeCustomEl.setAttribute('aria-checked', custom ? 'true' : 'false')
+    modeSmartEl.classList.toggle('dsh-enhance-switch', !custom)
+    modeCustomEl.classList.toggle('dsh-enhance-switch', custom)
+    smartBlockEl.hidden = custom
+    customBlockEl.hidden = !custom
+  }
+  modeSmartEl.addEventListener('click', () => { paintMode('smart') })
+  modeCustomEl.addEventListener('click', () => {
+    paintMode('connect')
+    if (urlEl.value !== '') return
+    void connection.probeLocal().then((probe) => {
+      if (probe.url === null || urlEl.value !== '') return
+      urlEl.value = probe.url
+      noteEl.textContent = '检测到本机已有 Web UI，可直接保存并连接。'
+    }).catch(() => { /* offering a live instance is optional */ })
+  })
   block.querySelector('#dsh-enhance-save')?.addEventListener('click', async () => {
     try {
-      const result = await connection.saveServerUrl(urlEl.value.trim())
+      const custom = modeCustomEl.getAttribute('aria-checked') === 'true'
+      if (custom && urlEl.value.trim() === '') {
+        noteEl.textContent = '请先填写地址'
+        return
+      }
+      if (!custom) {
+        const status = await connection.getStatus()
+        if (status.selectedMode === 'connect') {
+          const result = await connection.switchMode()
+          noteEl.textContent = result.switched
+            ? '正在切换到智能模式…'
+            : ('切换失败：' + (result.error ?? '未知错误'))
+          return
+        }
+      }
+      const result = await connection.saveServerUrl(custom ? urlEl.value.trim() : '')
       noteEl.textContent = result.saved
         ? (result.mode === 'smart' ? '正在连接（智能模式：该实例停止时自动回落）' : '已保存，正在连接…')
         : ('保存失败：' + (result.error ?? '未知错误'))
@@ -700,42 +766,33 @@ function injectEnhance(panel: Element): void {
       noteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
     }
   })
-  const marketEl = block.querySelector('#dsh-enhance-market') as HTMLInputElement
+  const marketEl = block.querySelector('#dsh-enhance-market') as HTMLButtonElement
   const marketNoteEl = block.querySelector('#dsh-enhance-marketNote') as HTMLElement
-  void connection.getMarket().then((state) => { marketEl.checked = state.enabled }, () => {
+  const paintMarket = (enabled: boolean): void => {
+    marketEl.setAttribute('aria-checked', enabled ? 'true' : 'false')
+  }
+  void connection.getMarket().then((state) => { paintMarket(state.enabled) }, () => {
     // The row is an enhancement; a bridge that will not answer just leaves it
-    // out rather than putting a checkbox nobody can trust in front of anyone.
-    ;(block.querySelector('.dsh-enhance-marketRow') as HTMLElement | null)?.remove()
+    // out rather than putting a switch nobody can trust in front of anyone.
+    ;(block.querySelector('.dsh-enhance-marketBlock') as HTMLElement | null)?.remove()
   })
-  marketEl.addEventListener('change', async () => {
-    const wanted = marketEl.checked
+  marketEl.addEventListener('click', async () => {
+    const wanted = marketEl.getAttribute('aria-checked') !== 'true'
     marketEl.disabled = true
     try {
       const result = await connection.setMarket(wanted)
-      marketEl.checked = result.enabled
+      paintMarket(result.enabled)
       marketNoteEl.textContent = result.enabled
         ? '已开启。重启客户端后，插件市场会接入当前运行时。'
         : '已关闭并从 profile 中移除。当前会话里它仍然加载着，重启后消失。'
     } catch (error) {
-      marketEl.checked = !wanted
+      paintMarket(!wanted)
       marketNoteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
     } finally {
       marketEl.disabled = false
     }
   })
-  switchEl.addEventListener('click', async () => {
-    switchEl.disabled = true
-    try {
-      const result = await connection.switchMode()
-      noteEl.textContent = result.switched ? '正在切换…' : ('切换失败：' + (result.error ?? '未知错误'))
-      if (!result.switched) switchEl.disabled = false
-    } catch (error) {
-      noteEl.textContent = '切换失败：' + (error instanceof Error ? error.message : String(error))
-      switchEl.disabled = false
-    }
-  })
   const runtimeButtons = [...block.querySelectorAll('[data-smart-runtime]')] as HTMLButtonElement[]
-  const runtimeNoteEl = block.querySelector('#dsh-enhance-runtimeNote') as HTMLElement
   const allRuntimes: Array<'probe' | 'installed' | 'npx' | 'bundled'> = ['probe', 'installed', 'npx', 'bundled']
   const paintRuntimes = (ids: Array<'probe' | 'installed' | 'npx' | 'bundled'> | undefined): void => {
     const on = new Set(ids !== undefined && ids.length > 0 ? ids : allRuntimes)
@@ -768,19 +825,28 @@ function injectEnhance(panel: Element): void {
         runtimeNoteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
       })
     })
+    const tip = button.getAttribute('data-tip') ?? ''
+    button.addEventListener('mouseenter', () => { runtimeNoteEl.textContent = tip })
+    button.addEventListener('focus', () => { runtimeNoteEl.textContent = tip })
+    button.addEventListener('mouseleave', () => {
+      if (runtimeNoteEl.textContent === tip) runtimeNoteEl.textContent = runtimeDefaultNote
+    })
+    button.addEventListener('blur', () => {
+      if (runtimeNoteEl.textContent === tip) runtimeNoteEl.textContent = runtimeDefaultNote
+    })
   }
   void connection.getStatus().then((status) => {
     // Named by WHO started the runtime, then which dsh it is — "本地"/"内置"
     // used to overlap, and a reused instance the user started got neither.
     const version = status.installedDshVersion === undefined ? '' : ' v' + status.installedDshVersion
     const startedByClient = status.runtimeSource === 'installed'
-      ? '客户端启动·本机安装的 dsh' + version
+      ? '客户端启动·本机已安装' + version
       : status.runtimeSource === 'npx'
-        ? '客户端启动·npx 缓存的 dsh' + version
-        : status.runtimeSource === 'bundled' ? '客户端启动·内置运行时' : '客户端启动'
+        ? '客户端启动·npx 缓存' + version
+        : status.runtimeSource === 'bundled' ? '客户端启动·客户端内置' : '客户端启动'
     const modeLabel = status.mode === 'probe'
-      ? '复用你已启动的 dsh'
-      : status.mode === 'connect' ? '固定地址' : startedByClient
+      ? '本机已运行'
+      : status.mode === 'connect' ? '自定义地址' : startedByClient
     statusEl.textContent = modeLabel + ' → ' + (status.targetUrl || '（未就绪）')
       + (status.childPid !== undefined ? ' · PID ' + String(status.childPid) : '')
       + (status.lastError !== undefined ? ' · ' + status.lastError : '')
@@ -789,17 +855,8 @@ function injectEnhance(panel: Element): void {
         ? ' · npx 缓存低于内置' + (status.dshVersion === null ? '' : ' v' + status.dshVersion) + '，重新运行 npx 可更新'
         : '')
     urlEl.value = status.savedServerUrl
-    switchEl.hidden = status.selectedMode !== 'connect'
-    switchEl.textContent = '切换到智能模式'
+    paintMode(status.selectedMode)
     paintRuntimes(status.smartRuntimes)
-    // Nothing saved: offer a live official instance on the default port, so
-    // switching to it is one click. Never overwrite a value already in the box.
-    if (status.savedServerUrl !== '') return
-    void connection.probeLocal().then((probe) => {
-      if (probe.url === null || probe.url === status.targetUrl || urlEl.value !== '') return
-      urlEl.value = probe.url
-      noteEl.textContent = '检测到你已启动的 dsh。点击「保存并连接」即可使用；它停止时客户端会自动回落。'
-    }).catch(() => { /* the offer is a convenience; its absence is not an error */ })
   }).catch(() => { statusEl.textContent = '连接状态不可用' })
   panel.appendChild(block)
 }
