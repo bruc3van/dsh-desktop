@@ -1,9 +1,11 @@
 /**
  * Smart-mode recovery integration check. Turning reuse off while a probed
- * instance is still answering must refuse a local spawn (two writers on one
- * DSH_HOME) and leave that instance running. When the instance later
- * disappears, the desktop starts its managed runtime; that child is then
- * killed once and must be relaunched within the bounded recovery budget.
+ * instance is still answering must be refused (this client never kills a
+ * user-started process). The same refusal applies when reuse is already off
+ * and a managed source (installed / npx / bundled) would spawn beside that
+ * instance. When the instance later disappears, the desktop starts its
+ * managed runtime; that child is then killed once and must be relaunched
+ * within the bounded recovery budget.
  */
 
 import { execFile, execFileSync } from 'node:child_process'
@@ -127,32 +129,41 @@ try {
   }
 
   // Reuse is a connection source, not a license to kill. Turning it off while
-  // the fixture is still answering must refuse a local spawn (two writers on
-  // one DSH_HOME) and leave the external instance running.
+  // the fixture is still answering must be refused — otherwise the window
+  // lands on the occupancy surface with no way to stop the user's process.
   const disabled = await window.evaluate(() => window.desktop.connection.setSmartRuntimes(['bundled']))
-  if (!disabled.saved || JSON.stringify(disabled.smartRuntimes) !== JSON.stringify(['bundled'])) {
-    throw new Error('disabling reuse was not saved: ' + JSON.stringify(disabled))
+  if (disabled.saved) {
+    throw new Error('disabling reuse while the instance is live was accepted: ' + JSON.stringify(disabled))
   }
-  await window.waitForSelector('#error-retry', { timeout: 20_000 })
-  const blockedTitle = await window.locator('h1').innerText()
-  if (!/占用会话数据|already using this session data/.test(blockedTitle)) {
-    throw new Error('occupancy refusal did not show the expected title: ' + blockedTitle)
+  if (JSON.stringify(disabled.smartRuntimes) === JSON.stringify(['bundled'])) {
+    throw new Error('the refused save still dropped reuse: ' + JSON.stringify(disabled))
   }
-  const blocked = await window.evaluate(() => window.desktop.connection.getStatus())
-  if (blocked.mode === 'probe' || typeof blocked.childPid === 'number') {
-    throw new Error('occupancy refusal started a local runtime or stayed on the probed instance: ' + JSON.stringify(blocked))
+  const stillProbed = await window.evaluate(() => window.desktop.connection.getStatus())
+  if (stillProbed.mode !== 'probe' || stillProbed.targetUrl !== probeOrigin) {
+    throw new Error('refusing the toggle left the probed instance: ' + JSON.stringify(stillProbed))
   }
-  if (/dsh runtime:/.test(runtimeLog)) {
-    throw new Error('occupancy refusal still spawned a local runtime: ' + runtimeLog)
+  if (await window.title() !== 'Probed Harness Fixture') {
+    throw new Error('refusing the toggle replaced the probed page: ' + await window.title())
   }
   if (!probeServer.listening) {
-    throw new Error('occupancy refusal stopped the external instance')
+    throw new Error('refusing the toggle stopped the external instance')
   }
   const stillAnswering = await fetch(probeOrigin + '/api/host.describe', { method: 'POST' })
   if (!stillAnswering.ok) {
-    throw new Error('occupancy refusal left the external instance unresponsive')
+    throw new Error('refusing the toggle left the external instance unresponsive')
   }
-  console.log('✓ disabling reuse while a probed instance is live refuses a local spawn and leaves the instance running')
+  console.log('✓ disabling reuse while a probed instance is live is refused and leaves the instance running')
+
+  const keepReuse = await window.evaluate(() =>
+    window.desktop.connection.setSmartRuntimes(['probe', 'bundled']))
+  if (!keepReuse.saved || !keepReuse.smartRuntimes.includes('probe')) {
+    throw new Error('toggling managed sources while reuse stays on was refused: ' + JSON.stringify(keepReuse))
+  }
+  window = (await waitForStatus(app, status => status.mode === 'probe' && status.targetUrl === probeOrigin, 20_000)).window
+  if (await window.title() !== 'Probed Harness Fixture') {
+    throw new Error('toggling managed sources left the probed page: ' + await window.title())
+  }
+  console.log('✓ toggling installed/npx/bundled while reuse stays on is allowed')
 
   const restored = await window.evaluate(() =>
     window.desktop.connection.setSmartRuntimes(['probe', 'installed', 'npx', 'bundled']))
@@ -174,13 +185,110 @@ try {
   const firstChildPid = recovered.status.childPid
   console.log('✓ unavailable probed instance fell back to the managed local runtime (PID ' + String(firstChildPid) + ')')
 
-  if (process.platform === 'win32') {
-    await promisify(execFile)('taskkill', ['/pid', String(firstChildPid), '/T', '/F']).catch(() => {})
-  } else {
-    process.kill(firstChildPid, 'SIGKILL')
+  const pinnedLocal = await window.evaluate(() => window.desktop.connection.setSmartRuntimes(['bundled']))
+  if (!pinnedLocal.saved) {
+    throw new Error('pinning the managed runtime while the instance is gone was refused: ' + JSON.stringify(pinnedLocal))
   }
   recovered = await waitForStatus(app,
-    status => status.mode === 'local' && typeof status.childPid === 'number' && status.childPid !== firstChildPid && status.targetUrl !== '',
+    status => status.mode === 'local' && typeof status.childPid === 'number' && status.targetUrl !== '',
+    60_000)
+  window = recovered.window
+  const localPid = recovered.status.childPid
+  await window.waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
+
+  const probePort = Number(new URL(probeOrigin).port)
+  await new Promise((resolve, reject) => {
+    const onError = (error) => {
+      probeServer.off('listening', onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      probeServer.off('error', onError)
+      resolve()
+    }
+    probeServer.once('error', onError)
+    probeServer.once('listening', onListening)
+    probeServer.listen(probePort, '127.0.0.1')
+  })
+  const occupiedWhileLocal = await window.evaluate(() =>
+    window.desktop.connection.setSmartRuntimes(['npx', 'bundled']))
+  if (occupiedWhileLocal.saved) {
+    throw new Error('changing managed sources while a user instance occupies was accepted: ' + JSON.stringify(occupiedWhileLocal))
+  }
+  const stillLocal = await window.evaluate(() => window.desktop.connection.getStatus())
+  if (stillLocal.mode !== 'local' || stillLocal.childPid !== localPid) {
+    throw new Error('refusing a managed-source change left the local runtime: ' + JSON.stringify(stillLocal))
+  }
+  if (await window.title() !== 'Installed Harness Fixture') {
+    throw new Error('refusing a managed-source change replaced the local page: ' + await window.title())
+  }
+  console.log('✓ changing installed/npx/bundled while a user instance occupies is refused')
+
+  const asSmart = await window.evaluate((url) => window.desktop.connection.saveServerUrl(url), probeOrigin)
+  if (asSmart.saved) {
+    throw new Error('saving the probe-equivalent origin while occupied was accepted: ' + JSON.stringify(asSmart))
+  }
+  const stillLocalAfterSave = await window.evaluate(() => window.desktop.connection.getStatus())
+  if (stillLocalAfterSave.mode !== 'local' || stillLocalAfterSave.childPid !== localPid) {
+    throw new Error('refusing a probe-equivalent save left the local runtime: ' + JSON.stringify(stillLocalAfterSave))
+  }
+  console.log('✓ saving the probe-equivalent origin while occupied is refused')
+
+  const customServer = createServer((req, res) => {
+    if (req.url === '/api/host.describe' && req.method === 'POST') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ result: { ok: true, value: { version: '0.1.0-rc.6', cwd: '/', attachedSessions: 0, canOpenPath: false } } }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    res.end('<!doctype html><title>Custom Harness Fixture</title><p>custom fixture</p>')
+  })
+  await new Promise((resolve, reject) => {
+    customServer.once('error', reject)
+    customServer.listen(0, '127.0.0.1', resolve)
+  })
+  const customAddress = customServer.address()
+  if (typeof customAddress !== 'object' || customAddress === null) throw new Error('custom fixture did not bind')
+  const customOrigin = 'http://127.0.0.1:' + String(customAddress.port)
+  const pinnedCustom = await window.evaluate((url) => window.desktop.connection.saveServerUrl(url), customOrigin)
+  if (!pinnedCustom.saved || pinnedCustom.mode !== 'connect') {
+    throw new Error('pinning a custom loopback was refused: ' + JSON.stringify(pinnedCustom))
+  }
+  window = (await waitForStatus(app, status => status.mode === 'connect' && status.targetUrl === customOrigin, 20_000)).window
+  const switchOccupied = await window.evaluate(() => window.desktop.connection.switchMode())
+  if (switchOccupied.switched) {
+    throw new Error('switching to Smart while reuse is off and a loopback instance is live was accepted: ' + JSON.stringify(switchOccupied))
+  }
+  window = (await waitForStatus(app, status => status.mode === 'connect' && status.targetUrl === customOrigin, 20_000)).window
+  console.log('✓ switching to Smart while reuse is off and a loopback instance occupies is refused')
+
+  const enableReuse = await window.evaluate(() =>
+    window.desktop.connection.setSmartRuntimes(['probe', 'bundled']))
+  if (!enableReuse.saved || !enableReuse.smartRuntimes.includes('probe')) {
+    throw new Error('re-enabling reuse in Connect mode was refused: ' + JSON.stringify(enableReuse))
+  }
+  const backToSmart = await window.evaluate(() => window.desktop.connection.switchMode())
+  if (!backToSmart.switched || backToSmart.mode !== 'smart') {
+    throw new Error('switching to Smart with reuse on was refused: ' + JSON.stringify(backToSmart))
+  }
+  window = (await waitForStatus(app, status => status.mode === 'probe' && status.targetUrl === probeOrigin, 20_000)).window
+  await new Promise((resolve, reject) => customServer.close(error => error ? reject(error) : resolve()))
+  await new Promise((resolve, reject) => probeServer.close(error => error ? reject(error) : resolve()))
+  await window.reload().catch(() => {})
+  recovered = await waitForStatus(app,
+    status => status.mode === 'local' && typeof status.childPid === 'number' && status.targetUrl !== '',
+    60_000)
+  window = recovered.window
+  const recoveryPid = recovered.status.childPid
+  await window.waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
+
+  if (process.platform === 'win32') {
+    await promisify(execFile)('taskkill', ['/pid', String(recoveryPid), '/T', '/F']).catch(() => {})
+  } else {
+    process.kill(recoveryPid, 'SIGKILL')
+  }
+  recovered = await waitForStatus(app,
+    status => status.mode === 'local' && typeof status.childPid === 'number' && status.childPid !== recoveryPid && status.targetUrl !== '',
     60_000)
   await recovered.window.waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
   console.log('✓ exited managed runtime relaunched with a new PID (' + String(recovered.status.childPid) + ')')

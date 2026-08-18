@@ -679,10 +679,7 @@ function injectEnhance(panel: Element): void {
   const block = document.createElement('div')
   block.id = ENHANCE_ID
   block.innerHTML =
-    '<div class="dsh-enhance-title">连接'
-    + '<div class="dsh-enhance-actions">'
-    + '<button class="dsh-enhance-button" id="dsh-enhance-save" type="button">保存并连接</button>'
-    + '</div></div>'
+    '<div class="dsh-enhance-title">连接</div>'
     + '<p class="dsh-enhance-status" id="dsh-enhance-status">连接状态读取中…</p>'
     + '<div class="dsh-enhance-row dsh-enhance-modes" role="radiogroup" aria-label="连接方式">'
     + '<button class="dsh-enhance-button dsh-enhance-switch" id="dsh-enhance-mode-smart" type="button" role="radio" aria-checked="true">智能</button>'
@@ -701,6 +698,7 @@ function injectEnhance(panel: Element): void {
     + '<div class="dsh-enhance-custom" id="dsh-enhance-custom" hidden>'
     + '<div class="dsh-enhance-row" style="margin-top:10px">'
     + '<input class="dsh-enhance-input" id="dsh-enhance-url" spellcheck="false" placeholder="例如 http://127.0.0.1:3080">'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-save" type="button">保存并连接</button>'
     + '</div>'
     + '<p class="dsh-enhance-note">直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。</p>'
     + '</div>'
@@ -731,7 +729,23 @@ function injectEnhance(panel: Element): void {
     smartBlockEl.hidden = custom
     customBlockEl.hidden = !custom
   }
-  modeSmartEl.addEventListener('click', () => { paintMode('smart') })
+  modeSmartEl.addEventListener('click', async () => {
+    paintMode('smart')
+    try {
+      const status = await connection.getStatus()
+      if (status.selectedMode !== 'connect') return
+      const result = await connection.switchMode()
+      if (!result.switched) {
+        paintMode('connect')
+        noteEl.textContent = '切换失败：' + (result.error ?? '未知错误')
+        return
+      }
+      noteEl.textContent = '正在切换到智能模式…'
+    } catch (error) {
+      paintMode('connect')
+      noteEl.textContent = '切换失败：' + (error instanceof Error ? error.message : String(error))
+    }
+  })
   modeCustomEl.addEventListener('click', () => {
     paintMode('connect')
     if (urlEl.value !== '') return
@@ -743,22 +757,11 @@ function injectEnhance(panel: Element): void {
   })
   block.querySelector('#dsh-enhance-save')?.addEventListener('click', async () => {
     try {
-      const custom = modeCustomEl.getAttribute('aria-checked') === 'true'
-      if (custom && urlEl.value.trim() === '') {
+      if (urlEl.value.trim() === '') {
         noteEl.textContent = '请先填写地址'
         return
       }
-      if (!custom) {
-        const status = await connection.getStatus()
-        if (status.selectedMode === 'connect') {
-          const result = await connection.switchMode()
-          noteEl.textContent = result.switched
-            ? '正在切换到智能模式…'
-            : ('切换失败：' + (result.error ?? '未知错误'))
-          return
-        }
-      }
-      const result = await connection.saveServerUrl(custom ? urlEl.value.trim() : '')
+      const result = await connection.saveServerUrl(urlEl.value.trim())
       noteEl.textContent = result.saved
         ? (result.mode === 'smart' ? '正在连接（智能模式：该实例停止时自动回落）' : '已保存，正在连接…')
         : ('保存失败：' + (result.error ?? '未知错误'))

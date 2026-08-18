@@ -221,9 +221,8 @@ try {
     throw new Error('Smart switch did not preserve the remote origin: ' + JSON.stringify(smartSettings))
   }
   await remoteSettingsPage.reload()
-  await remoteSettingsPage.waitForFunction(() => document.querySelector('#save')?.textContent === '保存并连接')
+  await remoteSettingsPage.waitForFunction(() => document.querySelector('#mode-smart')?.classList.contains('primary'))
   if (!await remoteSettingsPage.locator('#mode-smart').evaluate(el => el.classList.contains('primary'))
-    || await remoteSettingsPage.locator('#save').textContent() !== '保存并连接'
     || await remoteSettingsPage.locator('#url').inputValue() !== remoteOrigin
     || !await remoteSettingsPage.locator('#custom-block').isHidden()) {
     throw new Error('Smart mode did not retain the address behind Custom, or still showed the address field')

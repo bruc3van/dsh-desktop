@@ -2131,6 +2131,8 @@ function paintWindowBackgrounds(): void {
   const dark = effectiveWindowDark()
   applyWindowBackground(mainWindow, dark)
   applyWindowBackground(settingsWindow, dark)
+  applyWindowBackground(updatePromptWindow, dark)
+  applyWindowBackground(clientNoticeWindow, dark)
 }
 
 function refreshOsPrefersDark(): void {
@@ -3099,6 +3101,7 @@ async function confirmSensitiveAction(message: string, detail: string): Promise<
 }
 
 let updatePromptWindow: BrowserWindow | null = null
+let clientNoticeWindow: BrowserWindow | null = null
 
 /**
  * The update prompt is one of the client's own surfaces, so it uses the same
@@ -3481,14 +3484,9 @@ const SETTINGS_PAGE_SCRIPT = 'const $ = id => document.getElementById(id);'
   + 'renderUpdate(await(await fetch("desktop/update")).json());'
   + '}catch(e){$("status").textContent="状态不可用"}}'
   + '$("save").onclick=async()=>{try{'
-  + 'const custom=$("mode-custom").classList.contains("primary");'
-  + 'if(custom&&!$("url").value.trim()){$("note").textContent="请先填写地址";return}'
-  + 'if(!custom){const s=await(await fetch("desktop/status")).json();'
-  + 'if(s.selectedMode==="connect"){const r=await fetch("desktop/switch",{method:"POST"});const j=await r.json();'
-  + '$("note").textContent=j.switched?"正在切换到智能模式…":("切换失败："+(j.error||"未知错误"));'
-  + 'if(j.switched)setTimeout(()=>window.close(),500);return}}'
+  + 'if(!$("url").value.trim()){$("note").textContent="请先填写地址";return}'
   + 'const r=await fetch("desktop/settings",{method:"POST",headers:{"content-type":"application/json"},'
-  + 'body:JSON.stringify({serverUrl:custom?$("url").value.trim():""})});const j=await r.json();'
+  + 'body:JSON.stringify({serverUrl:$("url").value.trim()})});const j=await r.json();'
   + '$("note").textContent=j.saved?(j.mode==="smart"?"正在连接（智能模式：该实例停止时自动回落）":"已保存，正在连接…")'
   + ':("保存失败："+(j.error||"未知错误"));'
   + 'if(j.saved)setTimeout(()=>window.close(),900)}catch(e){$("note").textContent="保存失败："+e.message}};'
@@ -3496,7 +3494,12 @@ const SETTINGS_PAGE_SCRIPT = 'const $ = id => document.getElementById(id);'
   + 'function paintMode(mode){const custom=mode==="connect";'
   + '$("mode-smart").classList.toggle("primary",!custom);$("mode-custom").classList.toggle("primary",custom);'
   + '$("smart-block").hidden=custom;$("custom-block").hidden=!custom}'
-  + '$("mode-smart").onclick=()=>paintMode("smart");'
+  + '$("mode-smart").onclick=async()=>{paintMode("smart");'
+  + 'try{const s=await(await fetch("desktop/status")).json();if(s.selectedMode!=="connect")return;'
+  + 'const r=await fetch("desktop/switch",{method:"POST"});const j=await r.json();'
+  + 'if(!j.switched){paintMode("connect");$("note").textContent="切换失败："+(j.error||"未知错误");return}'
+  + '$("note").textContent="正在切换到智能模式…";setTimeout(()=>window.close(),500)}'
+  + 'catch(e){paintMode("connect");$("note").textContent="切换失败："+e.message}};'
   + '$("mode-custom").onclick=()=>{paintMode("connect");'
   + 'if(!$("url").value){void(async()=>{try{const p=await(await fetch("desktop/probe")).json();'
   + 'if(p.url&&!$("url").value){$("url").value=p.url;$("note").textContent="检测到本机已有 Web UI，可直接保存并连接。"}}catch(e){}})()}};'
@@ -3573,6 +3576,8 @@ function settingsPageHtml(): string {
     // Action buttons
     + '.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}'
     + '.runtime-picks{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}'
+    + '.custom-row{display:flex;gap:8px;align-items:center;margin-top:12px}'
+    + '.custom-row input{flex:1;min-width:0;width:auto;margin:0}'
     + 'button{white-space:nowrap;font-weight:400;background:transparent;border:1px solid #d8d8d4;border-radius:28px;padding:6px 18px;font-size:13px;font-family:inherit;color:#0f1115;cursor:pointer;transition:background .15s ease,opacity .15s ease}'
     + 'button:hover{background:#f5f6f7}'
     + 'button:disabled{cursor:default;opacity:.5}'
@@ -3617,10 +3622,7 @@ function settingsPageHtml(): string {
     + '<div class="header">' + icon + '<h1 class="page-title">连接设置</h1></div>'
     // Connection section
     + '<div class="section">'
-    + '<div class="section-title">连接<span class="badge">增强功能</span>'
-    + '<div class="actions">'
-    + '<button id="save">保存并连接</button>'
-    + '</div></div>'
+    + '<div class="section-title">连接<span class="badge">增强功能</span></div>'
     + '<p class="status-text" id="status">连接状态读取中…</p>'
     + '<div class="runtime-picks" role="radiogroup" aria-label="连接方式">'
     + '<button type="button" id="mode-smart" class="primary">智能</button>'
@@ -3637,7 +3639,10 @@ function settingsPageHtml(): string {
     + '<p class="note" id="runtime-note">关掉的来源会跳过。至少保留一种。</p>'
     + '</div>'
     + '<div id="custom-block" hidden>'
-    + '<input id="url" placeholder="例如 http://127.0.0.1:3080" spellcheck="false" style="margin-top:12px">'
+    + '<div class="custom-row">'
+    + '<input id="url" placeholder="例如 http://127.0.0.1:3080" spellcheck="false">'
+    + '<button id="save">保存并连接</button>'
+    + '</div>'
     + '<p class="note">直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。</p>'
     + '</div>'
     + '<p class="note" id="note"></p>'
@@ -3966,8 +3971,8 @@ function refuseOccupiedProbeTarget(url: string): void {
       : 'An official Web UI is already answering at ' + url,
     url,
     hint: chinese
-      ? '关闭「本机已运行」后，客户端不会再连接该实例，也不能在它仍运行时再启动本地运行时。请先退出该实例，然后重试。'
-      : 'With “Already running” turned off, this client will not connect to that instance, and it will not start another runtime while it is still serving. Quit that instance, then retry.',
+      ? '智能模式当前不会复用该实例，也不能在它仍占用会话数据时另起本机已安装、npx 或内置运行时。请先在启动它的终端里退出，然后重试。'
+      : 'Smart mode will not reuse that instance, and it will not start an installed, npx, or bundled runtime while it occupies the session data. Quit it in the terminal that started it, then retry.',
   })
 }
 
@@ -4046,11 +4051,194 @@ function applyConnectionSettings(settings: ClientSettings, force = false): void 
 }
 
 /**
+ * True when `url` is the managed child this process is serving — never a
+ * user-started instance. Client-started runtimes bind `--port 0`, so they
+ * almost never sit on the probe list; this still guards a patch-port
+ * collision, so toggling installed / npx / bundled is not mistaken for
+ * occupancy of a process we can already stop.
+ */
+function isOwnManagedOrigin(url: string): boolean {
+  if (probeConnected) return false
+  if (webUi?.pid() === undefined) return false
+  const own = childTarget
+  return own !== undefined && appOrigin(own) === appOrigin(url)
+}
+
+/**
+ * A user-started harness still answering on this machine, if the next Smart
+ * resolve would try to spawn beside it. Probe/reuse being enabled is the
+ * way through: the client will connect to that instance instead of starting
+ * another writer. Installed / npx / bundled are the spawn rungs — turning
+ * those while reuse is off hits the same wall as turning reuse off itself.
+ * This client never kills a process it did not start.
+ */
+async function instanceOccupyingLocalSpawn(ids: readonly SmartRuntimeId[]): Promise<string | undefined> {
+  if (devFlag('DSH_DESKTOP_SKIP_PROBE')) return undefined
+  if (smartRuntimeEnabled(ids, 'probe')) return undefined
+  const probed = await probeSmartTargets()
+  if (probed !== undefined && !isOwnManagedOrigin(probed)) return probed
+  const target = currentTarget()
+  if (target === undefined || !originIsLoopback(target)) return undefined
+  if (isOwnManagedOrigin(target)) return undefined
+  if (!probeConnected && !usesConfiguredServer(loadSettings())) return undefined
+  return await probeWebUi(target)
+}
+
+/**
+ * A one-button notice in the same visual language as connection settings and
+ * the update prompt. Native message boxes stay reserved for confirmations a
+ * remote page must not be able to draw or dismiss.
+ */
+function clientNoticePageUrl(copy: {
+  heading: string
+  hint: string
+  addressLabel: string
+  address: string
+  action: string
+}): string {
+  const chinese = localeChinese()
+  const html = '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
+    + '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">'
+    + '<meta name="color-scheme" content="light dark"><title>' + escapeHtml(copy.heading) + '</title><style>'
+    + ':root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}'
+    + '*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#fff;color:#0f1115;font-size:14px;line-height:1.6}'
+    + 'main{min-height:100vh;padding:28px 28px 22px;display:flex;flex-direction:column}'
+    + '.intro{display:flex;align-items:flex-start;gap:14px}'
+    + '.mark{width:40px;height:40px;flex:0 0 auto;border-radius:10px;box-shadow:0 8px 22px rgba(15,17,21,.12)}'
+    + '.heading{min-width:0}h1{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.01em}'
+    + '.hint{margin:8px 0 0;color:#6e7480;font-size:13px;line-height:20px}'
+    + '.facts{margin:18px 0 0;padding:12px 14px;border:1px solid #ebeef2;border-radius:12px;background:#fafbfc}'
+    + '.fact{display:flex;gap:12px;font-size:13px;line-height:20px}'
+    + 'dt{flex:0 0 auto;min-width:' + (chinese ? '32px' : '58px') + ';margin:0;color:#9aa0a6}'
+    + 'dd{margin:0;min-width:0;color:#0f1115;word-break:break-all}'
+    + '.footer{margin-top:auto;padding-top:22px}.divider{border:0;border-top:1px solid #ebeef2;margin:0 -28px 16px}'
+    + '.actions{display:flex;justify-content:flex-end}'
+    + '.button{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;text-decoration:none;font:inherit;font-size:13px;line-height:20px;'
+    + 'border:1px solid #0f1115;border-radius:28px;padding:7px 18px;color:#fff;background:#0f1115;outline:none;transition:opacity .15s ease,box-shadow .15s ease}'
+    + '.button:hover{opacity:.88}.button:focus-visible{box-shadow:0 0 0 3px rgba(15,17,21,.14)}'
+    + '@media(prefers-color-scheme:dark){body{background:#17181a;color:#f4f5f6}.mark{box-shadow:0 8px 22px rgba(0,0,0,.32)}'
+    + '.hint{color:#aeb3bb}.facts{border-color:#2c2e33;background:#1e1f22}dt{color:#818791}dd{color:#f4f5f6}'
+    + '.divider{border-color:#2c2e33}.button{background:#f4f5f6;border-color:#f4f5f6;color:#17181a}'
+    + '.button:focus-visible{box-shadow:0 0 0 3px rgba(244,245,246,.18)}}'
+    + '@media(prefers-reduced-motion:reduce){*{transition:none!important}}'
+    + '</style></head><body><main><div class="intro">' + loadingIconTag()
+    + '<div class="heading"><h1>' + escapeHtml(copy.heading) + '</h1>'
+    + '<p class="hint">' + escapeHtml(copy.hint) + '</p></div></div>'
+    + '<dl class="facts"><div class="fact"><dt>' + escapeHtml(copy.addressLabel) + '</dt>'
+    + '<dd>' + escapeHtml(copy.address) + '</dd></div></dl>'
+    + '<div class="footer"><hr class="divider"><div class="actions">'
+    + '<a id="notice-dismiss" class="button" href="dsh-notice-action:dismiss" target="_blank">' + escapeHtml(copy.action) + '</a>'
+    + '</div></div></main></body></html>'
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(html)
+}
+
+function showClientNotice(copy: {
+  heading: string
+  hint: string
+  addressLabel: string
+  address: string
+  action: string
+}): void {
+  const pageUrl = clientNoticePageUrl(copy)
+  if (clientNoticeWindow !== null && !clientNoticeWindow.isDestroyed()) {
+    void clientNoticeWindow.loadURL(pageUrl).catch(() => { clientNoticeWindow?.close() })
+    clientNoticeWindow.focus()
+    return
+  }
+  const owner = settingsWindow !== null && !settingsWindow.isDestroyed()
+    ? settingsWindow
+    : (mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow : null)
+  const notice = new BrowserWindow({
+    width: 440,
+    height: 320,
+    minWidth: 400,
+    minHeight: 240,
+    maxWidth: 520,
+    title: localeChinese() ? '连接' : 'Connection',
+    icon: WINDOW_ICON_PNG,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    autoHideMenuBar: true,
+    backgroundColor: windowBackgroundColor(),
+    show: false,
+    ...(owner !== null ? { parent: owner, modal: true } : {}),
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  })
+  clientNoticeWindow = notice
+  const fitToContent = (): void => {
+    const measure = '(() => {'
+      + 'const main=document.querySelector("main");if(!(main instanceof HTMLElement))return 300;'
+      + 'document.body.style.minHeight="0";main.style.minHeight="0";'
+      + 'const height=Math.ceil(main.getBoundingClientRect().height);'
+      + 'document.body.style.removeProperty("min-height");main.style.removeProperty("min-height");return height})()'
+    void notice.webContents.executeJavaScript(measure, true)
+      .then((height: unknown) => {
+        if (notice.isDestroyed() || typeof height !== 'number') return
+        const width = notice.getContentSize()[0] ?? 440
+        notice.setContentSize(width, Math.max(240, Math.min(420, height)))
+      })
+      .catch(() => {})
+      .finally(() => { if (!notice.isDestroyed()) notice.show() })
+  }
+  notice.webContents.on('did-finish-load', fitToContent)
+  notice.on('closed', () => { if (clientNoticeWindow === notice) clientNoticeWindow = null })
+  notice.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') notice.close()
+  })
+  const dismiss = (targetUrl: string): boolean => {
+    if (!targetUrl.startsWith('dsh-notice-action:')) return false
+    notice.close()
+    return true
+  }
+  notice.webContents.setWindowOpenHandler(({ url }) => {
+    dismiss(url)
+    return { action: 'deny' }
+  })
+  notice.webContents.on('will-navigate', (event, targetUrl) => {
+    if (targetUrl.startsWith('data:')) return
+    event.preventDefault()
+    dismiss(targetUrl)
+  })
+  void notice.loadURL(pageUrl).catch(() => { notice.close() })
+}
+
+/**
+ * Warn before a settings change that would only land on the occupancy
+ * surface: this client never terminates the user's process.
+ */
+function warnOccupiedUserInstance(url: string): void {
+  const chinese = localeChinese()
+  showClientNotice({
+    heading: chinese ? '请先退出本机官方实例' : 'Quit the running instance first',
+    hint: chinese
+      ? '现在排除来源或切到智能模式后，客户端不会再连接这个实例，也不能在它占用会话数据时另起一份。请先在启动它的终端里退出（Ctrl+C），然后再试。客户端不能替你结束这个进程。'
+      : 'Changing sources or switching to Smart mode would disconnect from this instance, and this client cannot start another runtime while it occupies the session data. Quit it in the terminal that started it (Ctrl+C), then try again. This client will not terminate that process.',
+    addressLabel: chinese ? '地址' : 'Address',
+    address: url,
+    action: chinese ? '知道了' : 'OK',
+  })
+}
+
+async function refuseOccupiedLocalSpawn(ids: readonly SmartRuntimeId[]): Promise<string | undefined> {
+  const occupied = await instanceOccupyingLocalSpawn(ids)
+  if (occupied === undefined) return undefined
+  warnOccupiedUserInstance(occupied)
+  return occupied
+}
+
+/**
  * Persist which Smart-mode sources are live. In Smart mode the change is
  * applied immediately (the current child is stopped so the next spawn is
- * chosen from the new set). Turning reuse off does not terminate a
- * user-started instance; `resolveRuntime` refuses a local spawn while that
- * instance still answers. Pinned-address mode only records the preference.
+ * chosen from the new set). A change that would spawn beside a user-started
+ * instance is refused — the occupancy surface is not a substitute for
+ * quitting it. Client-started runtimes (installed / npx / bundled) are
+ * stopped by this client; only a process it did not start blocks the save.
+ * Pinned-address mode only records the preference.
  *
  * The stop must not run the recovery ladder: unlike `connectTo`, this stays
  * in Smart mode (`configuredTarget` stays unset), so a child exit would
@@ -4058,13 +4246,30 @@ function applyConnectionSettings(settings: ClientSettings, force = false): void 
  * when the child had not become ready, or spending a retry and showing
  * "本地服务意外退出" when it had.
  */
-function persistSmartRuntimes(ids: SmartRuntimeId[]): { saved: true; smartRuntimes: SmartRuntimeId[] } {
+async function persistSmartRuntimes(ids: SmartRuntimeId[]): Promise<{
+  saved: boolean
+  smartRuntimes: SmartRuntimeId[]
+  error?: string
+}> {
+  const previous = enabledSmartRuntimes()
+  const settings = loadSettings()
+  if (!usesConfiguredServer(settings)) {
+    const occupied = await refuseOccupiedLocalSpawn(ids)
+    if (occupied !== undefined) {
+      return {
+        saved: false,
+        smartRuntimes: previous,
+        error: localeChinese()
+          ? '请先退出本机已运行的实例，再排除或切换来源'
+          : 'Quit the running instance before changing sources',
+      }
+    }
+  }
   pathInstalledDshRejected = false
   npxInstalledDshRejected = false
   webUi?.clearFatalError()
   patchSettings({ smartRuntimes: ids })
-  const settings = loadSettings()
-  if (usesConfiguredServer(settings)) return { saved: true, smartRuntimes: ids }
+  if (usesConfiguredServer(loadSettings())) return { saved: true, smartRuntimes: ids }
   const epoch = ++smartRuntimeApply
   replacingLocalRuntime = true
   // Drop in-flight probe/spawn/launchWindow from the previous resolve so a
@@ -4081,11 +4286,11 @@ function persistSmartRuntimes(ids: SmartRuntimeId[]): { saved: true; smartRuntim
   return { saved: true, smartRuntimes: ids }
 }
 
-function requestSmartRuntimesSave(value: unknown): {
+async function requestSmartRuntimesSave(value: unknown): Promise<{
   saved: boolean
   smartRuntimes: SmartRuntimeId[]
   error?: string
-} {
+}> {
   const parsed = validateSmartRuntimes(value)
   if (parsed === undefined) {
     return {
@@ -4184,16 +4389,36 @@ async function requestServerUrlSave(serverUrl: unknown, remoteCaller: boolean): 
     )
     if (!confirmed) return cancelled
   }
+  if (explicit === undefined || isSmartProbeEquivalent(explicit)) {
+    const occupied = await refuseOccupiedLocalSpawn(enabledSmartRuntimes())
+    if (occupied !== undefined) {
+      return {
+        saved: false,
+        error: chinese ? '请先退出本机已运行的实例，再切换到智能模式' : 'Quit the running instance before switching to Smart mode',
+      }
+    }
+  }
   return saveServerUrlAndReconnect(serverUrl)
 }
 
 /** Toggle between Smart local selection and the saved fixed origin. */
-function switchConnectionMode(): { switched: boolean; mode?: 'smart' | 'connect'; error?: string } {
+async function switchConnectionMode(): Promise<{ switched: boolean; mode?: 'smart' | 'connect'; error?: string }> {
   try {
     const current = loadSettings()
     const explicit = normalizeServerUrl(current.serverUrl)
     if (explicit === undefined) return { switched: false, error: '请先保存 Web UI 地址' }
     const mode = usesConfiguredServer(current) ? 'smart' : 'connect'
+    if (mode === 'smart') {
+      const occupied = await refuseOccupiedLocalSpawn(enabledSmartRuntimes())
+      if (occupied !== undefined) {
+        return {
+          switched: false,
+          error: localeChinese()
+            ? '请先退出本机已运行的实例，再切换到智能模式'
+            : 'Quit the running instance before switching to Smart mode',
+        }
+      }
+    }
     patchSettings({ serverUrl: explicit, connectionMode: mode })
     applyConnectionSettings(loadSettings(), true)
     return { switched: true, mode }
@@ -4458,22 +4683,28 @@ function startSettingsServer(): Promise<number> {
       })
       req.on('end', () => {
         if (bodyTooLarge) return
-        try {
-          const parsed = JSON.parse(body) as { smartRuntimes?: unknown }
-          const result = requestSmartRuntimesSave(parsed.smartRuntimes)
-          res.writeHead(result.saved ? 200 : 400, { 'content-type': 'application/json; charset=utf-8' })
-          res.end(JSON.stringify(result))
-        } catch (error) {
-          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
-          res.end(JSON.stringify({ saved: false, error: error instanceof Error ? error.message : String(error) }))
-        }
+        void (async () => {
+          try {
+            const parsed = JSON.parse(body) as { smartRuntimes?: unknown }
+            const result = await requestSmartRuntimesSave(parsed.smartRuntimes)
+            res.writeHead(result.saved ? 200 : 400, { 'content-type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify(result))
+          } catch (error) {
+            res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify({ saved: false, error: error instanceof Error ? error.message : String(error) }))
+          }
+        })()
       })
       return
     }
     if (pathname === '/desktop/switch' && req.method === 'POST') {
-      const result = switchConnectionMode()
-      res.writeHead(result.switched ? 200 : 400, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify(result))
+      void switchConnectionMode().then((result) => {
+        res.writeHead(result.switched ? 200 : 400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify(result))
+      }, (error: unknown) => {
+        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ switched: false, error: error instanceof Error ? error.message : String(error) }))
+      })
       return
     }
     if (pathname === '/' || pathname === '/desktop/settings.html') {
