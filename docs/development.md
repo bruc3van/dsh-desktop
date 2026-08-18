@@ -46,6 +46,7 @@ pnpm run lint           # source and script linting
 pnpm run check:updater  # verify in-app update check, hash, and dismiss
 pnpm run audit          # boot and browser-surface smoke test
 pnpm run smoke:package  # prove the packaged app uses its bundled dsh runtime
+pnpm run smoke:dmg      # mount the macOS DMG, copy the .app out, and smoke that copy
 pnpm run shot           # refresh screenshots in shots/
 pnpm run shot:readme    # refresh the privacy-safe README screenshots
 pnpm run e2e            # send a real prompt and verify the streamed response

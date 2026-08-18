@@ -163,14 +163,18 @@ function logFor(app) {
 
 /**
  * What the main process itself says about its state. A window that never
- * arrives has three different causes that look identical from outside — the
- * process quit, `whenReady` never resolved, or a window exists that Playwright
- * never saw as a page — and only the process can tell them apart.
+ * arrives has three causes that look identical from outside — the process
+ * quit, `whenReady` never resolved, or a window exists that Playwright never
+ * surfaced as a page — and only the process can tell them apart. `live` is the
+ * third case: the client did its job and the harness lost sight of it.
  */
 async function mainProcessState(app) {
   const runner = app.process()
   if (runner.exitCode !== null || runner.signalCode !== null) {
-    return 'electron exited (code ' + String(runner.exitCode) + ' / signal ' + String(runner.signalCode) + ')'
+    return {
+      live: false,
+      detail: 'electron exited (code ' + String(runner.exitCode) + ' / signal ' + String(runner.signalCode) + ')',
+    }
   }
   try {
     const state = await app.evaluate(({ app: electronApp, BrowserWindow }) => ({
@@ -181,28 +185,38 @@ async function mainProcessState(app) {
         url: window.webContents.getURL(),
       })),
     }))
-    return 'electron alive: ' + JSON.stringify(state)
+    return {
+      live: state.ready && state.windows.some(window => !window.destroyed),
+      detail: 'electron alive: ' + JSON.stringify(state),
+    }
   } catch (error) {
-    return 'electron alive, but the main process would not answer: ' + error.message
+    return { live: false, detail: 'electron alive, but the main process would not answer: ' + error.message }
   }
 }
 
 /**
  * Wait for the window, and report what the main process said when it never
  * comes. Playwright's own message stops at "Timeout 30000ms exceeded".
+ *
+ * `blind` on the thrown error means the main process answered with a live,
+ * undestroyed window: the client is up and the harness simply never got the
+ * page. Only openApp() acts on that distinction.
  */
 async function firstWindow(app, timeoutMs = 30_000) {
   try {
     return await app.firstWindow({ timeout: timeoutMs })
   } catch (error) {
     const record = logFor(app)
-    throw new Error([
+    const state = await mainProcessState(app)
+    const failure = new Error([
       'no window after ' + String(timeoutMs) + 'ms: ' + error.message,
-      await mainProcessState(app),
+      state.detail,
       'launch PATH: ' + (record?.path() ?? '(unrecorded)'),
       'main process output:',
       (record?.text() ?? '').trim() || '(nothing on stdout/stderr)',
     ].join('\n'))
+    failure.blind = state.live
+    throw failure
   }
 }
 
@@ -214,12 +228,21 @@ async function firstWindow(app, timeoutMs = 30_000) {
  */
 async function closeApp(app) {
   if (app === undefined) return
-  const runner = app.process()
-  const closed = app.close().then(() => true, () => true)
+  // Every scenario closes through the same module-level `app`, so this is also
+  // handed the PREVIOUS run's handle whenever a scenario throws before its own
+  // assignment lands. Playwright disposes a closed application, and both
+  // close() and process() throw on the disposed object — a teardown that let
+  // that through would replace the real failure with a TypeError.
+  let closed
+  try {
+    closed = app.close().then(() => true, () => true)
+  } catch {
+    return
+  }
   const timedOut = new Promise(resolve => { setTimeout(() => { resolve(false) }, 15_000).unref() })
   if (await Promise.race([closed, timedOut])) return
   console.warn('[check] the app did not close within 15s; killing it')
-  try { runner.kill('SIGKILL') } catch { /* already gone */ }
+  try { app.process().kill('SIGKILL') } catch { /* already gone */ }
 }
 
 /** One Electron run against its own homes, with the fixture ahead on PATH. */
@@ -277,6 +300,35 @@ async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
 }
 
 /**
+ * Start a run and hand back its window.
+ *
+ * One relaunch, and only for the case the dump above can prove: the client is
+ * ready with a live window, and Playwright never surfaced it as a page. That
+ * has been seen on GitHub's macos-15 runners (playwright-core 1.62.1) roughly
+ * one run in three, always on the launches where the runtime reaches readiness
+ * soonest after the window is created; it has never reproduced locally, under
+ * CPU load or with the target already live. Every assertion still runs against
+ * the relaunched app, and the retry cannot hide a client that failed to open a
+ * window — that failure reports `live: false` and is raised on the first try.
+ */
+async function openApp(name, extraEnv = {}, options = {}) {
+  for (let attempt = 1; ; attempt++) {
+    // The same homes deliberately: a scenario that reads its own settings file
+    // back would otherwise be pointed at a directory the retry did not write.
+    const app = await launch(name, extraEnv, options)
+    try {
+      await firstWindow(app)
+      return app
+    } catch (error) {
+      await closeApp(app)
+      if (error.blind !== true || attempt > 1) throw error
+      console.warn('[check] ' + error.message)
+      console.warn('[check] the client was up with a live window and Playwright never attached; relaunching ' + name + ' once')
+    }
+  }
+}
+
+/**
  * Evaluate in the main window, tolerating a navigation in flight. Saving an
  * address reconnects, so the context a call lands in can be torn down under it.
  */
@@ -323,8 +375,7 @@ function alive(pid) {
 let app
 let startedPid
 try {
-  app = await launch('prefer', { DSH_DESKTOP_SKIP_PROBE: '1' })
-  await firstWindow(app)
+  app = await openApp('prefer', { DSH_DESKTOP_SKIP_PROBE: '1' })
   const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined)
   check('installed dsh is preferred over the bundled runtime', status.runtimeSource === 'installed', status.runtimeSource)
   check('the detected version is reported', status.installedDshVersion === FIXTURE_VERSION, status.installedDshVersion)
@@ -351,9 +402,8 @@ if (startedPid !== undefined) {
 //     respawn from the new set, not walk the crash ladder (which would reject
 //     PATH for the rest of the session and spend a retry).
 try {
-  app = await launch('switch-ready', { DSH_DESKTOP_SKIP_PROBE: '1' })
+  app = await openApp('switch-ready', { DSH_DESKTOP_SKIP_PROBE: '1' })
   const log = logFor(app)
-  await firstWindow(app)
   await waitForStatus(app, s => s.runtimeSource === 'installed' && typeof s.childPid === 'number' && s.targetUrl !== '')
   await app.windows()[0].waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
   const switched = await evaluateStable(app, () => window.desktop.connection.setSmartRuntimes(['bundled']))
@@ -375,9 +425,8 @@ try {
 //     mark PATH rejected — lastSource is already `installed` and wasReady is
 //     still false, which is exactly the crash-ladder's "give up on PATH" case.
 try {
-  app = await launch('switch-boot', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_DELAY_MS: '4000' })
+  app = await openApp('switch-boot', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_DELAY_MS: '4000' })
   const log = logFor(app)
-  await firstWindow(app)
   const spawnedDeadline = Date.now() + 15_000
   while (Date.now() < spawnedDeadline && !/dsh runtime: installed/.test(log.text())) {
     await new Promise(resolve => setTimeout(resolve, 50))
@@ -398,9 +447,8 @@ try {
 //    The switch is asserted from the main process's own log: a failing runtime
 //    can be replaced faster than the status bridge can be polled.
 try {
-  app = await launch('fallback', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_FAIL: '1' })
+  app = await openApp('fallback', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_FAIL: '1' })
   const record = logFor(app)
-  await firstWindow(app)
   const fellBack = await waitForStatus(app, s => s.runtimeSource === 'bundled')
   check('the failing installed runtime is tried first', /dsh runtime: installed/.test(record.text()),
     record.text().match(/dsh runtime: \w+/g)?.join(' → '))
@@ -417,8 +465,7 @@ try {
   const home = join(checkHome, 'npx')
   mkdirSync(home, { recursive: true })
   const cacheRoot = fixtureNpxCache(home, '9.9.9-npxfake')
-  app = await launch('npx', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, { pathDsh: false })
-  await firstWindow(app)
+  app = await openApp('npx', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, { pathDsh: false })
   const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined)
   check('an npx-cached dsh is used when PATH has none', status.runtimeSource === 'npx', status.runtimeSource)
   check('the cached package\'s real version is reported',
@@ -442,8 +489,7 @@ try {
   const home = join(checkHome, 'npx-old')
   mkdirSync(home, { recursive: true })
   const cacheRoot = fixtureNpxCache(home, '0.0.1-npxold')
-  app = await launch('npx-old', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, { pathDsh: false })
-  await firstWindow(app)
+  app = await openApp('npx-old', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, { pathDsh: false })
   const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined)
   check('an outdated npx cache is still preferred over the bundled runtime',
     status.runtimeSource === 'npx', status.runtimeSource)
@@ -460,8 +506,7 @@ try {
 try {
   const probeUrl = 'http://127.0.0.1:59991'
   const settingsFile = join(checkHome, 'pin', 'desktop', 'settings.json')
-  app = await launch('pin', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_PROBE_URL: probeUrl })
-  await firstWindow(app)
+  app = await openApp('pin', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_PROBE_URL: probeUrl })
   await waitForStatus(app, s => s.mode === 'local' && s.targetUrl !== '')
 
   // The default probe address is what Smart mode already prefers; pinning it
@@ -518,8 +563,7 @@ const probeOrigin = 'http://127.0.0.1:' + String(probeServer.address().port)
 try {
   // SKIP_PROBE keeps the client on its own runtime, which is exactly the state
   // where the address is worth offering: a live instance the client is not on.
-  app = await launch('offer', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_PROBE_URL: probeOrigin })
-  await firstWindow(app)
+  app = await openApp('offer', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_PROBE_URL: probeOrigin })
   const ready = await waitForStatus(app, s => s.mode === 'local' && s.targetUrl !== '')
   const offered = await app.windows()[0].evaluate(() => window.desktop.connection.probeLocal())
   check('a live instance on the default port is offered', offered.url === probeOrigin, JSON.stringify(offered))

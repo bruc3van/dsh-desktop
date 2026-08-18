@@ -46,6 +46,7 @@ pnpm run lint           # 检查源码与脚本
 pnpm run check:updater  # 验证应用内更新检查、哈希校验与忽略版本
 pnpm run audit          # 启动与浏览器界面冒烟验证
 pnpm run smoke:package  # 验证打包应用确实使用内置 dsh 运行时
+pnpm run smoke:dmg      # 挂载 macOS DMG、拷出 .app，再对它跑上面那套冒烟
 pnpm run shot           # 更新 shots/ 中的截图
 pnpm run shot:readme    # 更新 README 使用的隐私安全截图
 pnpm run e2e            # 发送真实请求并验证流式回复
