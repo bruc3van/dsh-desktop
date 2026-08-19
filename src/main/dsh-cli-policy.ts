@@ -23,7 +23,7 @@ export type DshInvocationDecision =
  * matching the official CLI so an Agent reading the failure can quote it.
  */
 export const DSH_CLI_BLOCKED_MESSAGE = [
-  'dsh: this `dsh` comes from DeepSeek Harness Desktop, which is already running',
+  'dsh: this `dsh` comes from DSH Desktop, which is already running',
   'this profile in its own window — booting a second instance would share the',
   'same DSH_HOME. Use the app window instead.',
   'Available here: dsh plugin --profile <name> ..., dsh --profile <name>',

@@ -55,7 +55,7 @@ ${downloadRows}
 ### macOS
 
 1. 下载对应芯片的 \`.dmg\` 并打开。
-2. 将 **DeepSeek Harness Desktop** 拖入「应用程序」。
+2. 将 **DSH Desktop** 拖入「应用程序」。
 3. 从「应用程序」打开。若系统阻止启动，前往「系统设置 → 隐私与安全性」，确认应用名称后点击「仍要打开」。
 
 ### Windows

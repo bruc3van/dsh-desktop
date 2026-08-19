@@ -163,13 +163,13 @@ jobs:
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
-              --title "DeepSeek Harness Desktop $RELEASE_TAG" \
+              --title "DSH Desktop $RELEASE_TAG" \
               --notes-file release-notes.md
             echo "Release $RELEASE_TAG 已存在，正文已刷新 / already exists; notes refreshed"
             exit 0
           fi
 
-          FLAGS=(--draft --verify-tag --title "DeepSeek Harness Desktop $RELEASE_TAG" --notes-file release-notes.md)
+          FLAGS=(--draft --verify-tag --title "DSH Desktop $RELEASE_TAG" --notes-file release-notes.md)
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             FLAGS+=(--prerelease)
           fi
@@ -321,7 +321,7 @@ jobs:
             throw "NSIS installer exited with code $($install.ExitCode)"
           }
 
-          $executable = Join-Path $installDir 'DeepSeek Harness Desktop.exe'
+          $executable = Join-Path $installDir 'DSH Desktop.exe'
           if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
             throw "Installed executable not found: $executable"
           }

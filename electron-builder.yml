@@ -1,5 +1,5 @@
 appId: io.github.bruc3van.dsh-desktop
-productName: DeepSeek Harness Desktop
+productName: DSH Desktop
 copyright: Copyright © 2026 bruc3van
 
 directories:
@@ -82,7 +82,7 @@ mac:
       The Harness Agent needs project files stored on network volumes.
 
 dmg:
-  title: DeepSeek Harness Desktop ${version}
+  title: DSH Desktop ${version}
   writeUpdateInfo: false
 
 win:

@@ -323,7 +323,7 @@ jobs:
             throw "NSIS installer exited with code $($install.ExitCode)"
           }
 
-          $executable = Join-Path $installDir 'DeepSeek Harness Desktop.exe'
+          $executable = Join-Path $installDir 'DSH Desktop.exe'
           if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
             throw "Installed executable not found: $executable"
           }

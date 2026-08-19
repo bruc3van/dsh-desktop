@@ -25,7 +25,7 @@ import { promisify } from 'node:util'
 const execFile = promisify(execFileCallback)
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE_DIR = join(APP_DIR, 'release')
-const PRODUCT_NAME = 'DeepSeek Harness Desktop'
+const PRODUCT_NAME = 'DSH Desktop'
 
 if (process.platform !== 'darwin') {
   console.error('smoke-dmg is macOS-only: a DMG can only be mounted where hdiutil exists')

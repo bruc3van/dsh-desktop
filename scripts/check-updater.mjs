@@ -565,7 +565,7 @@ const fixture = createServer((req, res) => {
       + '.fixtureHeader{border-color:#2c2e33}.navList{background:#1b1c1f;border-color:#2c2e33}.navList button{color:#aeb3bb}'
       + '.navList button:hover{background:#232529;color:#f4f5f6}.navList button.active{background:#2c2e33;color:#f4f5f6}.officialPanel p{color:#aeb3bb}}'
       + '</style></head><body><div class="fixtureDialog" role="dialog" aria-label="设置">'
-      + '<div class="fixtureHeader"><h1>设置</h1><span>DeepSeek Harness Desktop</span></div>'
+      + '<div class="fixtureHeader"><h1>设置</h1><span>DSH Desktop</span></div>'
       + '<div class="content"><div class="navList">'
       + '<button class="active" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">'
       + '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.36.72.66 1 .3.28.68.42 1.1.4H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"></path></svg>'

@@ -16,7 +16,7 @@ import { promisify } from 'node:util'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE_DIR = join(APP_DIR, 'release')
-const PRODUCT_NAME = 'DeepSeek Harness Desktop'
+const PRODUCT_NAME = 'DSH Desktop'
 // A freshly installed Windows build starts cold: thousands of bundled runtime
 // files are still being scanned on first touch, so its first launch is far
 // slower than the already-warm unpacked directory this also runs against.
@@ -77,7 +77,7 @@ async function assertLocalePacks(packagedExecutable) {
     return
   }
   if (process.platform === 'darwin') {
-    // executable = <app>/Contents/MacOS/DeepSeek Harness Desktop
+    // executable = <app>/Contents/MacOS/DSH Desktop
     const contents = join(dirname(packagedExecutable), '..')
     const resources = join(contents, 'Resources')
     // electron-builder keeps the .lproj shells for the wanted languages here;

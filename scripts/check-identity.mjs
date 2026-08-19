@@ -31,7 +31,7 @@ const EXPECTED = {
   name: 'dsh-desktop',
   main: '.build/main.mjs',
   appId: 'io.github.bruc3van.dsh-desktop',
-  productName: 'DeepSeek Harness Desktop',
+  productName: 'DSH Desktop',
 }
 
 /**
