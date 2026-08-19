@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as esbuild from 'esbuild'
 import { _electron as electron } from 'playwright-core'
+import { sanitizedElectronEnv } from './lib/electron-env.mjs'
 import { artifactName, RELEASE_TARGETS, requiredPlatformKeys } from './release-artifacts.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
@@ -143,7 +144,7 @@ await esbuild.build({
   outfile: updaterBundle,
   logLevel: 'silent',
 })
-const { compareVersions, describeFetchError, safeDownloadFileName, DesktopUpdater } =
+const { compareVersions, describeFetchError, manualCheckAnswer, safeDownloadFileName, DesktopUpdater } =
   await import(pathToFileURL(updaterBundle).href)
 const orderings = [
   // Numeric prerelease identifiers rank by value: the string comparison this
@@ -168,6 +169,94 @@ for (const [left, right, expected] of orderings) {
   }
 }
 console.log('✓ compareVersions orders core, release-over-prerelease, and numeric prerelease ranks')
+
+// The release matrix builds macOS and Windows. `platformKey` still answers for
+// Linux, so a source-built Linux client asks a feed that has nothing for it —
+// and used to be told it was up to date, which is the one answer that is both
+// wrong and unactionable. The three cases below are the whole rule: a platform
+// the feed does not carry, the same feed on a platform it does, and a feed
+// that is simply not newer (up to date whatever the platform).
+const matrixFeed = {
+  version: '99.0.0',
+  platforms: {
+    'mac-arm64': { url: 'https://example.invalid/dsh-desktop-99.0.0-mac-arm64.dmg' },
+    'win-x64': { url: 'https://example.invalid/dsh-desktop-99.0.0-win-x64.exe' },
+  },
+}
+const feedOnlyUpdater = (platform, arch, feed = matrixFeed, currentVersion = '0.0.1') => new DesktopUpdater({
+  fetchImpl: () => Promise.resolve(new Response(JSON.stringify(feed), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })),
+  currentVersion,
+  feedUrl: 'https://example.invalid/latest.json',
+  platform,
+  arch,
+  packaged: true,
+  downloadDir: work,
+  loadPersistence: () => ({}),
+  savePersistence: () => {},
+  dryRun: true,
+})
+const unbuiltPlatform = feedOnlyUpdater('linux', 'x64')
+const unbuiltResult = await unbuiltPlatform.check()
+if (unbuiltResult.hasUpdate || unbuiltPlatform.getState().phase !== 'unsupportedPlatform') {
+  throw new Error('a platform the feed does not carry must not read as up to date: '
+    + JSON.stringify({ unbuiltResult, phase: unbuiltPlatform.getState().phase }))
+}
+const builtPlatform = feedOnlyUpdater('darwin', 'arm64')
+const builtResult = await builtPlatform.check()
+if (!builtResult.hasUpdate || builtPlatform.getState().phase !== 'available') {
+  throw new Error('the same feed must still offer the update where it is built: '
+    + JSON.stringify({ builtResult, phase: builtPlatform.getState().phase }))
+}
+const notNewer = feedOnlyUpdater('linux', 'x64', matrixFeed, '99.0.0')
+const notNewerResult = await notNewer.check()
+if (notNewerResult.hasUpdate || notNewer.getState().phase !== 'upToDate') {
+  throw new Error('a feed that is not newer is up to date on any platform: '
+    + JSON.stringify({ notNewerResult, phase: notNewer.getState().phase }))
+}
+console.log('✓ a platform with no installer in the feed is reported as such, not as up to date')
+
+// The dialog behind "Check for Updates…" is the only surface that turns a
+// phase into a decision, and it is where `unsupportedPlatform` first went
+// wrong: every phase that was not an error read as "you are on the latest
+// version". The compiler now refuses a phase this function does not answer,
+// and the table below pins WHICH answer, so the next phase cannot be waved
+// through by folding it into the harmless one.
+const dialogAnswers = {
+  available: 'available',
+  unsupportedPlatform: 'unsupportedPlatform',
+  error: 'failed',
+  upToDate: 'upToDate',
+  idle: 'upToDate',
+  checking: 'upToDate',
+  downloading: 'upToDate',
+  installing: 'upToDate',
+  restartRequired: 'upToDate',
+}
+for (const [phase, expected] of Object.entries(dialogAnswers)) {
+  const actual = manualCheckAnswer(phase)
+  if (actual !== expected) {
+    throw new Error('manualCheckAnswer(' + phase + ') = ' + String(actual) + ', expected ' + expected)
+  }
+}
+// A phase nobody listed above would be tested by nothing, so the union itself
+// decides what this table has to cover.
+const updaterSource = readFileSync(join(APP_DIR, 'src', 'main', 'updater.ts'), 'utf8')
+const unionBody = updaterSource.slice(
+  updaterSource.indexOf('export type UpdaterPhase'),
+  updaterSource.indexOf('export type ManualCheckAnswer'),
+)
+const declaredPhases = [...unionBody.matchAll(/^\s*\|\s*'([A-Za-z]+)'/gm)].map(match => match[1])
+if (declaredPhases.length < 8) throw new Error('could not read UpdaterPhase: ' + JSON.stringify(declaredPhases))
+const untested = declaredPhases.filter(phase => !(phase in dialogAnswers))
+const stale = Object.keys(dialogAnswers).filter(phase => !declaredPhases.includes(phase))
+if (untested.length > 0 || stale.length > 0) {
+  throw new Error('the manual-check answer table and UpdaterPhase disagree: '
+    + JSON.stringify({ untested, stale }))
+}
+console.log('✓ the manual-check dialog answers every updater phase, and names them apart')
 
 // A transport failure arrives as a bare "fetch failed"; the reason a person can
 // act on sits on `cause`, which is what a Windows download failure reported.
@@ -497,8 +586,11 @@ hangFeed.platforms[currentKey].url = origin + '/hang'
 redirectFeed.platforms[currentKey].url = origin + '/redirect-payload'
 
 const launchApp = async (home, extraEnv = {}, options = {}) => {
-  const electronEnv = { ...process.env, ...extraEnv }
-  Reflect.deleteProperty(electronEnv, 'ELECTRON_RUN_AS_NODE')
+  // `extraEnv` is applied after the strip, so a caller's knob still lands —
+  // but an ambient one does not. That matters most for the prompt run below,
+  // which deliberately leaves DSH_DESKTOP_SKIP_UPDATE_PROMPT unset: inherited
+  // from the shell it would have failed the check for the wrong reason.
+  const electronEnv = sanitizedElectronEnv(extraEnv)
   electronEnv.DSH_HOME = join(home, 'dsh')
   electronEnv.DSH_DESKTOP_HOME = join(home, 'desktop')
   electronEnv.DSH_DESKTOP_SKIP_PROBE = '1'

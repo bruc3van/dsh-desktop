@@ -25,7 +25,43 @@ export type UpdaterPhase =
   | 'installing'
   | 'restartRequired'
   | 'upToDate'
+  // A release newer than this one exists, but it ships no installer for this
+  // platform (today: any Linux build, which is source-only). Distinct from
+  // upToDate on purpose — telling that user they are current is a lie the
+  // client would repeat at every check.
+  | 'unsupportedPlatform'
   | 'error'
+
+/** What a finished manual check has to tell the person who asked for it. */
+export type ManualCheckAnswer = 'available' | 'upToDate' | 'unsupportedPlatform' | 'failed'
+
+/**
+ * Three surfaces render an update state — the injected card, the native
+ * settings page, and the tray/menu dialog — but only the dialog turns the
+ * phase into a decision rather than a line of text, and it is the one that
+ * quietly answered "you are on the latest version" to a machine the release
+ * had no installer for.
+ *
+ * An exhaustive switch on purpose: a phase added later does not compile until
+ * an answer is chosen for it here, which a chain of `===` comparisons could
+ * never enforce. The busy phases cannot be seen by a caller that already
+ * answered them before checking, and idle/checking cannot outlive the check —
+ * they map to the harmless answer rather than pretending to be unreachable.
+ */
+export function manualCheckAnswer(phase: UpdaterPhase): ManualCheckAnswer {
+  switch (phase) {
+    case 'available': return 'available'
+    case 'unsupportedPlatform': return 'unsupportedPlatform'
+    case 'error': return 'failed'
+    case 'idle':
+    case 'checking':
+    case 'upToDate':
+    case 'downloading':
+    case 'installing':
+    case 'restartRequired':
+      return 'upToDate'
+  }
+}
 
 export interface UpdateInfo {
   currentVersion: string
@@ -441,18 +477,23 @@ export class DesktopUpdater {
     try {
       const feed = await this.loadFeed()
       const key = platformKey(this.options.platform, this.options.arch)
-      if (key === undefined) {
+      const platform = key === undefined ? undefined : pickFeedPlatform(feed, key)
+      // Two different answers used to share this branch. "Nothing newer
+      // exists" is up to date; "something newer exists, but not for this
+      // machine" is not — the release matrix builds macOS and Windows, so a
+      // Linux (or any unlisted) build would otherwise be told it was current
+      // by a feed that never had anything to offer it.
+      if (compareVersions(feed.version, this.options.currentVersion) <= 0) {
         this.info = null
         this.dismissed = false
         this.setPhase('upToDate')
         this.markChecked()
         return { hasUpdate: false }
       }
-      const platform = pickFeedPlatform(feed, key)
-      if (platform === undefined || compareVersions(feed.version, this.options.currentVersion) <= 0) {
+      if (key === undefined || platform === undefined) {
         this.info = null
         this.dismissed = false
-        this.setPhase('upToDate')
+        this.setPhase('unsupportedPlatform')
         this.markChecked()
         return { hasUpdate: false }
       }

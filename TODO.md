@@ -6,7 +6,7 @@
 - [x] 单独展示客户端内置 dsh 版本：设置页「桌面客户端 v… · 内置 dsh … · 本机 dsh …」（`bundledDshVersion()`）。
 - [ ] 通过 `host.describe` 响应提取并展示当前连接实例的实际 dsh 版本；`probeWebUi()` 目前只检查 `result.ok` 就丢弃了响应其余字段（含版本信息）。
 - [ ] 当前实例版本与内置版本不一致时给出非阻断提示，并说明只要 API 兼容即可继续使用。
-- [ ] 当其他端口存在独立 dsh 进程、客户端准备以同一个 `DSH_HOME` 启动内置实例时，评估并提示并发运行风险（目前端口探测只针对默认地址 `127.0.0.1:3080`）。shim 网关收窄了 Agent 侧的触发面（经 shim 执行 `dsh web` / `dsh --profile …` 会被拦截），但没有关闭该问题：用户自装的 dsh、直接执行客户端 exe、以及客户端自己的启动路径都不经过网关。
+- [ ] 当其他端口存在独立 dsh 进程、客户端准备以同一个 `DSH_HOME` 启动内置实例时，评估并提示并发运行风险（端口探测已不止默认地址：`webProbeOrigins()` 会把 profile 补丁层里写的 `port:` 一并加入探测，最多 16 个；仍探不到的是只用 `--port` 命令行启动、没写进补丁层的实例）。shim 网关收窄了 Agent 侧的触发面（经 shim 执行 `dsh web` / `dsh --profile …` 会被拦截），但没有关闭该问题：用户自装的 dsh、直接执行客户端 exe、以及客户端自己的启动路径都不经过网关。
 - [x] 共存回归测试主体场景：只安装 npx/npm 包、默认端口实例正在运行、PATH 本机安装优先、启动失败自动回退、固定地址切换（`scripts/check-installed-runtime.mjs`、`check-connection-switch.mjs`、`check-auto-fallback.mjs`）。
 - [ ] 补充共存回归测试缺失场景：其他端口实例正在运行、实例版本与内置版本不一致。
 

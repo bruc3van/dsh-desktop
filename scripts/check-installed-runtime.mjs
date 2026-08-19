@@ -24,6 +24,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { _electron as electron } from 'playwright-core'
+import { inheritedValue, sanitizedElectronEnv } from './lib/electron-env.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const FIXTURE = join(APP_DIR, 'scripts', 'fixtures', 'fake-dsh.mjs')
@@ -297,34 +298,18 @@ async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
   const home = join(checkHome, name)
   mkdirSync(join(home, 'desktop'), { recursive: true })
   writeFileSync(join(home, 'desktop', 'settings.json'), JSON.stringify({ connectionMode: 'smart' }, null, 2) + '\n')
-  // Spreading process.env drops the case-insensitivity Windows env vars have:
-  // the system spells the search path `Path`, so a literal `PATH` override
+  // The shared sanitizer drops ELECTRON_RUN_AS_NODE and every DSH_DESKTOP_* /
+  // DSH_FIXTURE_* knob — a leftover diagnostic from a previous packaged run
+  // must not skip PATH detection or pin a command this check did not ask for.
+  // PATH and the npm cache go on top of it, because this check owns both:
+  // spreading process.env drops the case-insensitivity Windows env vars have
+  // (the system spells the search path `Path`, so a literal `PATH` override
   // would leave the inherited `Path` beside it and libuv's case-insensitive
-  // deduplication could keep either. Strip every casing first, then set one.
-  const env = {}
-  let inheritedPath = ''
-  for (const [key, value] of Object.entries(process.env)) {
-    const upper = key.toUpperCase()
-    if (upper === 'ELECTRON_RUN_AS_NODE') continue
-    if (upper === 'PATH') {
-      inheritedPath = value ?? ''
-      continue
-    }
-    // Same Windows casing trap as PATH: the host may already spell this
-    // `NPM_CONFIG_CACHE`, so a literal `npm_config_cache` override would
-    // leave both in the object and libuv's case-insensitive dedup could
-    // keep the inherited one. Strip every casing; callers that need a
-    // cache set it once below.
-    if (upper === 'NPM_CONFIG_CACHE') continue
-    // A leftover diagnostic from a previous packaged run must not skip PATH
-    // detection or pin a command this check did not ask for.
-    if (upper === 'DSH_DESKTOP_SKIP_INSTALLED_DSH') continue
-    if (upper === 'DSH_DESKTOP_DSH') continue
-    if (upper === 'DSH_FIXTURE_FAIL') continue
-    if (upper === 'DSH_FIXTURE_DELAY_MS') continue
-    env[key] = value
-  }
-  Object.assign(env, extraEnv)
+  // deduplication could keep either), and the same trap applies to
+  // `npm_config_cache` vs `NPM_CONFIG_CACHE`. Strip every casing here, then
+  // set exactly one spelling below.
+  const inheritedPath = inheritedValue('PATH')
+  const env = sanitizedElectronEnv(extraEnv, ['PATH', 'NPM_CONFIG_CACHE'])
   env.DSH_HOME = join(home, 'dsh')
   env.DSH_DESKTOP_HOME = join(home, 'desktop')
   // Without the fixture dir the run has no `dsh` on PATH at all — the state

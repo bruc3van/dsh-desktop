@@ -137,6 +137,15 @@ jobs:
         env:
           DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
+      # contracts 腿也跑这个脚本，但那里没有闭包：它只验 launcher 自身的打补丁
+      # 契约，闭包 execPath 扫描那一段会静默跳过。于是「上游 dsh 新增了未经审计的
+      # process.execPath 调用」在 PR 上无人拦截，一路绿到 release build 才红。
+      # REQUIRE_RUNTIME_CLOSURE 保证这里跑的是带闭包的那一版，不是同一次静默跳过。
+      - name: 验证运行时环境隔离（含闭包扫描） / Verify runtime isolation and closure spawn sites
+        run: pnpm run check:runtime-env
+        env:
+          DSH_DESKTOP_REQUIRE_RUNTIME_CLOSURE: "1"
+
       - name: 验证 pnpm 与 Electron Node 耦合 / Verify pnpm engine against Electron Node
         run: pnpm run check:pnpm-engine
 
@@ -210,6 +219,14 @@ jobs:
         run: pnpm exec electron-builder --mac dmg --arm64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # release.yml 三条腿都在 electron-builder 之后跑这一步，Windows 侧的 CI 腿
+      # 也跑；此前只有 macOS 的 CI 腿没跑，于是 CI 与发布在这里不同构。smoke:package
+      # 覆盖的是「pnpm.mjs 在、artifacts 已 prune、shim 报得出版本」，唯独没有
+      # check:pnpm-runtime 那次离线 `pnpm add` tarball 安装——真正会栽的那一段。
+      - name: 验证打包产物中的 pnpm / Verify packaged pnpm
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: pnpm run check:pnpm-runtime
 
       # 打包成功才验证——打包本身failed时后面全是「找不到产物」的噪声；打包成功
       # 之后则彼此不遮蔽，一次运行看全。

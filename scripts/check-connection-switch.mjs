@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
+import { sanitizedElectronEnv } from './lib/electron-env.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const checkHome = await mkdtemp(join(tmpdir(), 'dsh-desktop-connection-'))
@@ -92,14 +93,15 @@ const remoteOrigin = 'http://127.0.0.1:' + String(address.port)
 // Legacy documents had only serverUrl. They must still boot in Pinned address mode.
 writeFileSync(join(desktopHome, 'settings.json'), JSON.stringify({ serverUrl: remoteOrigin }, null, 2) + '\n')
 
-const electronEnv = { ...process.env }
-Reflect.deleteProperty(electronEnv, 'ELECTRON_RUN_AS_NODE')
+// Every DSH_DESKTOP_* knob is stripped, not just the two this check used to
+// name: an inherited DSH_DESKTOP_DSH would pin a runtime this check never
+// chose, and the probe URL below is the whole point of the fixture.
+const electronEnv = sanitizedElectronEnv()
 electronEnv.DSH_HOME = join(checkHome, 'dsh')
 electronEnv.DSH_DESKTOP_HOME = desktopHome
 // Keep Smart mode deterministic without booting the full bundled runtime:
 // this same live fixture is both the legacy pinned target and Smart's probe.
 electronEnv.DSH_DESKTOP_PROBE_URL = remoteOrigin
-Reflect.deleteProperty(electronEnv, 'DSH_DESKTOP_SKIP_PROBE')
 electronEnv.DSH_DESKTOP_SKIP_INSTALLED_DSH = '1'
 
 /** Poll through document swaps until the connection state settles. */

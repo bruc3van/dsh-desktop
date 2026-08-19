@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
+import { sanitizedElectronEnv } from './lib/electron-env.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const checkHome = await mkdtemp(join(tmpdir(), 'dsh-desktop-error-surface-'))
@@ -37,8 +38,7 @@ const origin = 'http://127.0.0.1:' + String(address.port)
 writeFileSync(join(desktopHome, 'settings.json'),
   JSON.stringify({ serverUrl: origin, connectionMode: 'connect' }, null, 2) + '\n')
 
-const electronEnv = { ...process.env }
-Reflect.deleteProperty(electronEnv, 'ELECTRON_RUN_AS_NODE')
+const electronEnv = sanitizedElectronEnv()
 electronEnv.DSH_HOME = join(checkHome, 'dsh')
 electronEnv.DSH_DESKTOP_HOME = desktopHome
 electronEnv.DSH_DESKTOP_SKIP_PROBE = '1'
@@ -97,8 +97,11 @@ try {
   // official dialog's enhanced 连接 block.
   await window.locator('#error-settings').click()
   const settings = await app.waitForEvent('window', { timeout: 10_000 }).catch(() => null)
+  // Either spelling of the title: the connection page follows the client
+  // locale, and the runner's locale is not this check's business.
+  const settingsTitle = settings === null ? null : await settings.locator('.page-title').innerText()
   check('the settings seat opens the connection window',
-    settings !== null && (await settings.locator('.page-title').innerText()) === '连接设置')
+    settingsTitle === '连接设置' || settingsTitle === 'Connection settings', String(settingsTitle))
   // A download that cannot reach the release assets host leaves the manual page
   // as the only way forward, so the update section carries a link to it.
   const releasesHref = settings === null

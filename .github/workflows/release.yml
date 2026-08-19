@@ -265,6 +265,11 @@ jobs:
 
       - name: 验证运行时环境隔离 / Verify runtime environment isolation
         run: pnpm run check:runtime-env
+        env:
+          # 这一步在 prepare:runtime 之后，闭包一定在场；缺席即是环境出了问题，
+          # 而不是「这条腿没有闭包可扫」——静默跳过正是它要防的那种绿。
+          # validate 作业里的同名步骤没有闭包，那里的跳过是有意的。
+          DSH_DESKTOP_REQUIRE_RUNTIME_CLOSURE: "1"
 
       - name: 验证 pnpm spawn 改写 / Verify pnpm spawn rewrite
         run: pnpm run check:runtime-spawn

@@ -78,7 +78,8 @@ interface UpdateInfo {
 }
 
 interface UpdateState {
-  phase: 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'restartRequired' | 'upToDate' | 'error'
+  phase: 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'restartRequired' | 'upToDate'
+    | 'unsupportedPlatform' | 'error'
   currentVersion: string
   info: UpdateInfo | null
   progress: { total: number; downloaded: number; percent: number } | null
@@ -872,6 +873,7 @@ function updateCopy(english: boolean): {
   dismiss: string
   releases: string
   upToDate: string
+  unsupported: string
   found: string
   preparing: string
   downloading: string
@@ -895,6 +897,7 @@ function updateCopy(english: boolean): {
       dismiss: 'Remind me later',
       releases: 'Open the releases page to download manually',
       upToDate: 'You are on the latest version',
+      unsupported: 'A newer version exists, but this release ships no installer for this platform',
       found: 'New version available',
       preparing: 'Preparing the download…',
       downloading: 'Downloading',
@@ -918,6 +921,7 @@ function updateCopy(english: boolean): {
     dismiss: '稍后提醒',
     releases: '打开 GitHub 发布页手动下载',
     upToDate: '已是最新版本',
+    unsupported: '已有更新版本，但该版本没有发布本平台的安装包',
     found: '发现新版本',
     preparing: '正在准备下载…',
     downloading: '下载中',
@@ -993,6 +997,9 @@ function paintUpdateCard(state: UpdateState, english: boolean): void {
   let line = ''
   if (state.phase === 'checking') line = copy.checking
   else if (state.phase === 'upToDate') line = copy.upToDate
+  // Not an error and not up to date: the releases link beside this line is the
+  // only way forward, so the line says why rather than reporting a failure.
+  else if (state.phase === 'unsupportedPlatform') line = copy.unsupported
   else if (state.phase === 'available' && state.info !== null) line = copy.found + ' v' + state.info.availableVersion
   else if (state.phase === 'downloading') {
     // A download with no percentage still has to look alive, so the byte

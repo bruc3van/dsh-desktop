@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { _electron as electron } from 'playwright-core'
+import { sanitizedElectronEnv } from './lib/electron-env.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RUNTIME_FIXTURE = join(APP_DIR, 'scripts', 'fixtures', 'fake-dsh.mjs')
@@ -78,18 +79,9 @@ function systemNode() {
   throw new Error('check-auto-fallback needs a system Node; PATH currently resolves to the desktop Electron binary')
 }
 
-const electronEnv = {}
-for (const [key, value] of Object.entries(process.env)) {
-  const upper = key.toUpperCase()
-  if (upper === 'ELECTRON_RUN_AS_NODE') continue
-  if (upper === 'DSH_DESKTOP_SKIP_INSTALLED_DSH') continue
-  if (upper === 'DSH_DESKTOP_DSH') continue
-  if (upper === 'DSH_DESKTOP_SKIP_PROBE') continue
-  if (upper === 'DSH_DESKTOP_NODE') continue
-  if (upper === 'DSH_FIXTURE_FAIL') continue
-  if (upper === 'DSH_FIXTURE_DELAY_MS') continue
-  electronEnv[key] = value
-}
+// This roster now lives in one place; every check that launches the client
+// strips the same set, so a knob added upstream is covered everywhere at once.
+const electronEnv = sanitizedElectronEnv()
 electronEnv.DSH_HOME = join(checkHome, 'dsh')
 electronEnv.DSH_DESKTOP_HOME = desktopHome
 electronEnv.DSH_DESKTOP_PROBE_URL = probeOrigin

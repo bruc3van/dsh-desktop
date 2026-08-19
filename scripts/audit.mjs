@@ -109,12 +109,19 @@ const settingsErrors = []
 settingsPage.on('console', message => {
   if (message.type() === 'error') settingsErrors.push(message.text())
 })
-await settingsPage.waitForFunction(() => (document.querySelector('#versions')?.textContent ?? '').includes('桌面客户端 v'))
+// The version line is bilingual, so wait for either spelling of its prefix.
+await settingsPage.waitForFunction(() => {
+  const text = document.querySelector('#versions')?.textContent ?? ''
+  return text.includes('桌面客户端 v') || text.includes('Desktop client v')
+})
 const settingsUrl = new URL(settingsPage.url())
 check('private settings path', settingsUrl.pathname.length >= 49, settingsUrl.pathname)
 check('settings script executed', settingsErrors.length === 0, settingsErrors.join('; '))
 const versionText = await settingsPage.locator('#versions').textContent() ?? ''
-check('independent version display', versionText.includes('桌面客户端 v' + desktopVersion) && versionText.includes('内置 dsh ' + dshVersion), versionText)
+check('independent version display',
+  (versionText.includes('桌面客户端 v' + desktopVersion) || versionText.includes('Desktop client v' + desktopVersion))
+  && (versionText.includes('内置 dsh ' + dshVersion) || versionText.includes('bundled dsh ' + dshVersion)),
+  versionText)
 const publicSettingsResponse = await fetch(settingsUrl.origin + '/desktop/settings')
 check('public settings path rejected', publicSettingsResponse.status === 404, String(publicSettingsResponse.status))
 // DNS rebinding: a name that resolves to 127.0.0.1 reaches this server under

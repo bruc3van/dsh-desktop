@@ -264,14 +264,21 @@ try {
       JSON.stringify(plainNode.pnpmChild))
   }
 
-  // Only meaningful once the closure is deployed (`pnpm run prepare:runtime`);
-  // the release job runs that first, so a runtime upgrade cannot slip past.
+  // Only meaningful once the closure is deployed (`pnpm run prepare:runtime`).
+  // Skipping it silently is how an unaudited upstream execPath call reaches
+  // main: the legs that run this check without the closure still go green.
+  // Every job that HAS run prepare:runtime therefore sets
+  // DSH_DESKTOP_REQUIRE_RUNTIME_CLOSURE=1, which turns the skip into a failure
+  // — so "the scan ran" stops being something you have to read the log to know.
   const runtimeModules = join(APP_DIR, '.runtime', 'node_modules')
   if (existsSync(join(runtimeModules, '@deepseek-ai'))) {
     const { offenders, sites } = await scanRuntimeExecPathSites(runtimeModules)
     check('bundled runtime respawns process.execPath only through patched APIs',
       offenders.length === 0, offenders.join(' | ') + ' (audit these sites, then extend AUDITED_INDIRECT)')
     if (offenders.length === 0) console.log('  (' + String(sites) + ' process.execPath sites scanned in the bundled closure)')
+  } else if (process.env.DSH_DESKTOP_REQUIRE_RUNTIME_CLOSURE === '1') {
+    check('bundled closure is present for the execPath scan', false,
+      join(runtimeModules, '@deepseek-ai') + ' is missing; run `pnpm run prepare:runtime` before this check')
   } else {
     console.log('  (bundled closure absent — run `pnpm run prepare:runtime` to also check its spawn sites)')
   }

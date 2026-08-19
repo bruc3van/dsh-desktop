@@ -30,6 +30,7 @@ import {
   DesktopUpdater,
   RELEASES_PAGE_URL,
   compareVersions,
+  manualCheckAnswer,
   defaultGithubApiUrl,
   defaultUpdateFeedUrl,
   describeFetchError,
@@ -1074,6 +1075,11 @@ interface WebUiGeneration {
   ready: Promise<string>
   /** Whether THIS generation reached readiness before it exited. */
   readyReported: boolean
+  /**
+   * Set the moment `stop()` decides to end this generation. Its exit is then
+   * an outcome the client asked for, not a crash — see `reportExit`.
+   */
+  stopped: boolean
 }
 
 /**
@@ -1201,7 +1207,7 @@ class WebUiManager {
       resolveReady = resolve
       rejectReady = reject
     })
-    const gen: WebUiGeneration = { child, ready, readyReported: false }
+    const gen: WebUiGeneration = { child, ready, readyReported: false, stopped: false }
     let exitReported = false
     let readinessProbeStarted = false
 
@@ -1219,7 +1225,8 @@ class WebUiManager {
     const reportExit = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (exitReported) return
       exitReported = true
-      if (this.generation === gen) {
+      const current = this.generation === gen
+      if (current) {
         this.generation = undefined
         // Every way this child ends passes through here, so the record never
         // outlives it — except the one case it exists for, where this process
@@ -1229,6 +1236,16 @@ class WebUiManager {
         // already written.
         clearRuntimeLock(childHome())
       }
+      // The same two cases the clear above guards against must not reach the
+      // recovery ladder either. A child that outlives its grace window makes
+      // `stop()` resolve on the timeout instead of on the exit event, so its
+      // real exit arrives AFTER whoever ordered the stop has already moved on
+      // and cleared the flags (`replacingLocalRuntime`, `quitting`) that tell
+      // `onExit` this was deliberate. Reported as a crash it would spend a
+      // relaunch, paint "本地服务意外退出", and — if the replaced child had not
+      // reached readiness — reject its own source for the rest of the session.
+      // Whoever called `stop()` owns what happens next; nothing here does.
+      if (gen.stopped || !current) return
       this.onExit({ wasReady: gen.readyReported, code, signal, retryable: true })
     }
 
@@ -1298,6 +1315,10 @@ class WebUiManager {
     if (this.stopping !== undefined) return this.stopping
     const gen = this.generation
     if (gen === undefined || gen.child.exitCode !== null) return
+    // Before the first kill, not after the ladder: both rungs below can resolve
+    // on their 3s timeout with the child still alive, and the exit that finally
+    // arrives has to find this already set.
+    gen.stopped = true
     const stopping = (async (): Promise<void> => {
       if (process.platform === 'win32') {
         const pid = gen.child.pid
@@ -3056,6 +3077,9 @@ function watchLocalePreference(): void {
 function updateDialogCopy(): {
   found: string
   latest: string
+  unsupported: string
+  unsupportedDetail: string
+  releases: string
   later: string
   ignore: string
   install: string
@@ -3073,6 +3097,9 @@ function updateDialogCopy(): {
       ignore: '忽略此版本',
       install: '下载并安装',
       failed: '检查更新失败',
+      unsupported: '已有更新版本，但没有本平台的安装包',
+      unsupportedDetail: '这次发布没有为本平台构建安装包。发布页可以确认该版本覆盖了哪些平台。',
+      releases: '打开发布页',
       checking: '正在检查更新…',
       downloading: '正在下载新版本…',
       installing: '正在启动安装程序…',
@@ -3086,6 +3113,9 @@ function updateDialogCopy(): {
     ignore: 'Skip this version',
     install: 'Download and install',
     failed: 'Could not check for updates',
+    unsupported: 'A newer version exists, but not for this platform',
+    unsupportedDetail: 'That release was not built for this platform. The releases page shows which platforms it covers.',
+    releases: 'Open the releases page',
     checking: 'Checking for updates…',
     downloading: 'Downloading the new version…',
     installing: 'Starting the installer…',
@@ -3289,19 +3319,31 @@ async function handleManualUpdateCheck(prompt: boolean): Promise<void> {
     return
   }
   const state = desktopUpdater.getState()
+  // Three answers here, not two. "Nothing newer exists" and "something newer
+  // exists that this platform has no installer for" are both hasUpdate:false,
+  // and telling the second one it is up to date is precisely the lie
+  // `unsupportedPlatform` was added to stop — on this dialog as much as on the
+  // settings page. It is also the only answer with somewhere to go, so it is
+  // the only one that offers a second button.
+  const answer = manualCheckAnswer(state.phase)
+  const unsupported = answer === 'unsupportedPlatform'
   const options: Electron.MessageBoxOptions = {
-    type: state.phase === 'error' ? 'error' : 'info',
+    type: answer === 'failed' ? 'error' : 'info',
     title: 'DeepSeek Harness Desktop',
-    message: state.phase === 'error' ? copy.failed : copy.latest,
+    message: answer === 'failed' ? copy.failed : unsupported ? copy.unsupported : copy.latest,
     ...state.error !== null && { detail: state.error },
-    buttons: ['OK'],
+    ...unsupported && { detail: copy.unsupportedDetail, defaultId: 0, cancelId: 1 },
+    buttons: unsupported ? [copy.releases, 'OK'] : ['OK'],
   }
   const owner = mainWindow
-  if (owner === null || owner.isDestroyed()) {
-    void dialog.showMessageBox(options)
-    return
-  }
-  void dialog.showMessageBox(owner, options)
+  const answered = owner === null || owner.isDestroyed()
+    ? dialog.showMessageBox(options)
+    : dialog.showMessageBox(owner, options)
+  // The page opens in the system browser, so this process is done either way;
+  // a dialog dismissed by the platform itself simply answers nothing.
+  void answered.then(({ response }) => {
+    if (unsupported && response === 0) openExternal(RELEASES_PAGE_URL)
+  }, () => {})
 }
 
 /**
@@ -3447,108 +3489,125 @@ function writeJson(res: import('node:http').ServerResponse, status: number, body
   res.end(JSON.stringify(body))
 }
 
-/** Behavior for the loopback connection-settings page, served under the same origin. */
-const SETTINGS_PAGE_SCRIPT = 'const $ = id => document.getElementById(id);'
-  + 'let shownNotes="";'
-  + 'function renderUpdate(u){if(!u)return;'
-  + 'const busy=u.phase==="checking"||u.phase==="downloading"||u.phase==="installing";'
-  + '$("update-check").disabled=busy;$("update-install").disabled=busy;'
-  // A refused install keeps the offer (and the button) on screen, so the
-  // error phase counts as an offer too — same rule as the injected card.
-  + 'const has=(u.phase==="available"||u.phase==="error")&&u.info;$("update-install").hidden=!has||busy;'
-  + '$("update-dismiss").hidden=!has||u.dismissed||busy;'
-  + 'let line="";'
-  + 'if(u.phase==="checking")line="正在检查…";'
-  + 'else if(u.phase==="upToDate")line="已是最新版本";'
-  + 'else if(u.phase==="available"&&u.info)line="发现 v"+u.info.availableVersion;'
-  + 'else if(u.phase==="downloading")line="下载中 "+((u.progress&&u.progress.percent)||0)+"%"'
-  + '+(u.progress&&u.progress.downloaded?" · "+(u.progress.downloaded/1048576).toFixed(1)'
-  + '+(u.progress.total?"/"+(u.progress.total/1048576).toFixed(1):"")+" MB":"");'
-  + 'else if(u.phase==="installing")line="正在启动安装程序";'
-  + 'else if(u.phase==="restartRequired")line="请安装后重新打开";'
-  // The reason, not the phase, decides: a refusal publishes only a reason.
-  + 'const failed=u.phase==="error"||u.error;'
-  + 'if(failed)line="更新失败："+(u.error||"未知错误");'
-  + '$("update-status").textContent=line;$("update-status").hidden=!line;'
-  + '$("update-status").classList.toggle("error",!!failed);'
-  + 'const bar=$("update-bar");bar.hidden=u.phase!=="downloading";'
-  + 'if(!bar.hidden)bar.firstElementChild.style.width=((u.progress&&u.progress.percent)||0)+"%";'
-  // notesHtml is rendered in the main process from the release Markdown.
-  // Rebuilding it would reset the box's scroll position and drop any
-  // selection, and this runs several times a second while downloading.
-  + 'const notes=u.notesHtml||"";$("update-notes").hidden=!notes;'
-  + 'if(notes!==shownNotes){shownNotes=notes;$("update-notes").innerHTML=notes}}'
-  // Named by WHO started the runtime, then which dsh it is. "本地"/"内置" used
-  // to overlap: a client-spawned child was labelled 本地 even when it ran the
-  // 内置 copy, and a reused instance the user started themselves got neither.
-  + 'function sourceLabel(s){'
-  + 'if(s.mode==="probe")return "本机已运行";'
-  + 'if(s.mode==="connect")return "自定义地址";'
-  + 'const v=s.installedDshVersion?" v"+s.installedDshVersion:"";'
-  + 'return s.runtimeSource==="installed"?"客户端启动·本机已安装"+v'
-  + ':s.runtimeSource==="npx"?"客户端启动·npx 缓存"+v'
-  + ':s.runtimeSource==="bundled"?"客户端启动·客户端内置":"客户端启动";}'
-  + 'async function refresh(){try{const s=await(await fetch("desktop/status")).json();'
-  + 'const modeLabel=sourceLabel(s);'
-  + '$("status").textContent=modeLabel+(s.childPid?" (PID "+s.childPid+")":"")+" → "+(s.targetUrl||"（未就绪）")+(s.lastError?" · "+s.lastError:"")'
-  // Non-blocking: the cache stays in use; re-running npx is how it updates.
-  + '+(s.mode==="local"&&s.npxCacheOutdated?" · npx 缓存低于内置"+(s.dshVersion?" v"+s.dshVersion:"")+"，重新运行 npx 可更新":"");'
-  + '$("versions").textContent="桌面客户端 v"+s.desktopVersion+" · 内置 dsh "+(s.dshVersion??"不可用")'
-  + '+(s.installedDshVersion?" · 本机 dsh "+s.installedDshVersion:"");'
-  + 'const c=await(await fetch("desktop/settings")).json();$("url").value=c.serverUrl??"";'
-  + 'paintRuntimes(c.smartRuntimes);paintMode(s.selectedMode);'
-  + 'renderUpdate(await(await fetch("desktop/update")).json());'
-  + '}catch(e){$("status").textContent="状态不可用"}}'
-  + '$("save").onclick=async()=>{try{'
-  + 'if(!$("url").value.trim()){$("note").textContent="请先填写地址";return}'
-  + 'const r=await fetch("desktop/settings",{method:"POST",headers:{"content-type":"application/json"},'
-  + 'body:JSON.stringify({serverUrl:$("url").value.trim()})});const j=await r.json();'
-  + '$("note").textContent=j.saved?(j.mode==="smart"?"正在连接（智能模式：该实例停止时自动回落）":"已保存，正在连接…")'
-  + ':("保存失败："+(j.error||"未知错误"));'
-  + 'if(j.saved)setTimeout(()=>window.close(),900)}catch(e){$("note").textContent="保存失败："+e.message}};'
-  + 'const ALL_RUNTIMES=["probe","installed","npx","bundled"];'
-  + 'function paintMode(mode){const custom=mode==="connect";'
-  + '$("mode-smart").classList.toggle("primary",!custom);$("mode-custom").classList.toggle("primary",custom);'
-  + '$("smart-block").hidden=custom;$("custom-block").hidden=!custom}'
-  + '$("mode-smart").onclick=async()=>{paintMode("smart");'
-  + 'try{const s=await(await fetch("desktop/status")).json();if(s.selectedMode!=="connect")return;'
-  + 'const r=await fetch("desktop/switch",{method:"POST"});const j=await r.json();'
-  + 'if(!j.switched){paintMode("connect");$("note").textContent="切换失败："+(j.error||"未知错误");return}'
-  + '$("note").textContent="正在切换到智能模式…";setTimeout(()=>window.close(),500)}'
-  + 'catch(e){paintMode("connect");$("note").textContent="切换失败："+e.message}};'
-  + '$("mode-custom").onclick=()=>{paintMode("connect");'
-  + 'if(!$("url").value){void(async()=>{try{const p=await(await fetch("desktop/probe")).json();'
-  + 'if(p.url&&!$("url").value){$("url").value=p.url;$("note").textContent="检测到本机已有 Web UI，可直接保存并连接。"}}catch(e){}})()}};'
-  + 'function paintRuntimes(ids){const on=new Set(ids&&ids.length?ids:ALL_RUNTIMES);'
-  + 'for(const b of document.querySelectorAll("[data-smart-runtime]"))b.classList.toggle("primary",on.has(b.getAttribute("data-smart-runtime")))}'
-  + 'async function saveRuntimes(ids){try{const r=await fetch("desktop/smart-runtimes",{method:"POST",headers:{"content-type":"application/json"},'
-  + 'body:JSON.stringify({smartRuntimes:ids})});const j=await r.json();'
-  + 'if(j.saved){paintRuntimes(j.smartRuntimes);$("runtime-note").textContent="已更新智能连接来源"}'
-  + 'else{$("runtime-note").textContent="保存失败："+(j.error||"至少保留一种来源");paintRuntimes(j.smartRuntimes||ALL_RUNTIMES)}}'
-  + 'catch(e){$("runtime-note").textContent="保存失败："+e.message}}'
-  + 'for(const b of document.querySelectorAll("[data-smart-runtime]"))b.onclick=()=>{'
-  + 'const id=b.getAttribute("data-smart-runtime");'
-  + 'const current=[...document.querySelectorAll("[data-smart-runtime].primary")].map(x=>x.getAttribute("data-smart-runtime"));'
-  + 'const next=current.includes(id)?current.filter(x=>x!==id):current.concat(id);'
-  + 'if(!next.length){$("runtime-note").textContent="至少保留一种来源";return}void saveRuntimes(next)};'
-  + 'const RUNTIME_NOTE="关掉的来源会跳过。至少保留一种。";'
-  + 'for(const b of document.querySelectorAll("[data-smart-runtime]")){const tip=b.getAttribute("data-tip")||"";'
-  + 'b.onmouseenter=b.onfocus=()=>{$("runtime-note").textContent=tip};'
-  + 'b.onmouseleave=b.onblur=()=>{if($("runtime-note").textContent===tip)$("runtime-note").textContent=RUNTIME_NOTE}};'
-  // Any answer must put the button back; a fetch that throws would otherwise
-  // leave it grey until the page is reopened.
-  + '$("update-check").onclick=async()=>{try{$("update-check").disabled=true;const r=await fetch("desktop/update/check",{method:"POST"});renderUpdate((await r.json()).state)}'
-  + 'catch(e){$("update-check").disabled=false;$("update-status").hidden=false;$("update-status").classList.add("error");$("update-status").textContent="检查失败："+e.message}};'
-  // The install answers only when the download is done, so the page says what
-  // it is doing now, and puts the button back for any answer that never began.
-  + '$("update-install").onclick=async()=>{const fail=t=>{$("update-install").disabled=false;'
-  + '$("update-status").hidden=false;$("update-status").classList.add("error");$("update-status").textContent="安装失败："+t};'
-  + 'try{$("update-install").disabled=true;$("update-status").hidden=false;$("update-status").textContent="正在准备下载…";'
-  + 'const r=await fetch("desktop/update/install",{method:"POST"});const j=await r.json();if(j.state)renderUpdate(j.state);'
-  + 'if(!j.started)fail(j.error||"未知错误")}catch(e){fail(e.message)}};'
-  + '$("update-dismiss").onclick=async()=>{await fetch("desktop/update/dismiss",{method:"POST"});renderUpdate(await(await fetch("desktop/update")).json())};'
-  + 'refresh();'
-  + 'setInterval(async()=>{try{const u=await(await fetch("desktop/update")).json();if(u.phase==="downloading"||u.phase==="installing")renderUpdate(u)}catch(e){}},400);'
+/**
+ * Behavior for the loopback connection-settings page, served under the same
+ * origin. Built per request rather than kept in a const: the page follows the
+ * client locale, which is not known at module load and can change while the
+ * client runs (the Web UI's own language switch). `settings.js` is served
+ * no-cache, so a reopened page picks the new language up.
+ *
+ * `t()` emits a complete JS string literal, quotes included, so a translated
+ * value sits exactly where the Chinese literal used to.
+ */
+function settingsPageScript(): string {
+  const chinese = localeChinese()
+  const t = (zh: string, en: string): string => JSON.stringify(chinese ? zh : en)
+  return 'const $ = id => document.getElementById(id);'
+    + 'let shownNotes="";'
+    + 'function renderUpdate(u){if(!u)return;'
+    + 'const busy=u.phase==="checking"||u.phase==="downloading"||u.phase==="installing";'
+    + '$("update-check").disabled=busy;$("update-install").disabled=busy;'
+    // A refused install keeps the offer (and the button) on screen, so the
+    // error phase counts as an offer too — same rule as the injected card.
+    + 'const has=(u.phase==="available"||u.phase==="error")&&u.info;$("update-install").hidden=!has||busy;'
+    + '$("update-dismiss").hidden=!has||u.dismissed||busy;'
+    + 'let line="";'
+    + 'if(u.phase==="checking")line=' + t('正在检查…', 'Checking…') + ';'
+    + 'else if(u.phase==="upToDate")line=' + t('已是最新版本', 'Up to date') + ';'
+    // Neither current nor offerable: the releases link in this section header
+    // is the way forward, so the line explains instead of claiming success.
+    + 'else if(u.phase==="unsupportedPlatform")line='
+    + t('已有更新版本，但该版本没有发布本平台的安装包', 'A newer version exists, but this release ships no installer for this platform') + ';'
+    + 'else if(u.phase==="available"&&u.info)line=' + t('发现 v', 'Found v') + '+u.info.availableVersion;'
+    + 'else if(u.phase==="downloading")line=' + t('下载中 ', 'Downloading ') + '+((u.progress&&u.progress.percent)||0)+"%"'
+    + '+(u.progress&&u.progress.downloaded?" · "+(u.progress.downloaded/1048576).toFixed(1)'
+    + '+(u.progress.total?"/"+(u.progress.total/1048576).toFixed(1):"")+" MB":"");'
+    + 'else if(u.phase==="installing")line=' + t('正在启动安装程序', 'Starting the installer') + ';'
+    + 'else if(u.phase==="restartRequired")line=' + t('请安装后重新打开', 'Install it, then reopen') + ';'
+    // The reason, not the phase, decides: a refusal publishes only a reason.
+    + 'const failed=u.phase==="error"||u.error;'
+    + 'if(failed)line=' + t('更新失败：', 'Update failed: ') + '+(u.error||' + t('未知错误', 'unknown error') + ');'
+    + '$("update-status").textContent=line;$("update-status").hidden=!line;'
+    + '$("update-status").classList.toggle("error",!!failed);'
+    + 'const bar=$("update-bar");bar.hidden=u.phase!=="downloading";'
+    + 'if(!bar.hidden)bar.firstElementChild.style.width=((u.progress&&u.progress.percent)||0)+"%";'
+    // notesHtml is rendered in the main process from the release Markdown.
+    // Rebuilding it would reset the box's scroll position and drop any
+    // selection, and this runs several times a second while downloading.
+    + 'const notes=u.notesHtml||"";$("update-notes").hidden=!notes;'
+    + 'if(notes!==shownNotes){shownNotes=notes;$("update-notes").innerHTML=notes}}'
+    // Named by WHO started the runtime, then which dsh it is. "本地"/"内置" used
+    // to overlap: a client-spawned child was labelled 本地 even when it ran the
+    // 内置 copy, and a reused instance the user started themselves got neither.
+    + 'function sourceLabel(s){'
+    + 'if(s.mode==="probe")return ' + t('本机已运行', 'Already running') + ';'
+    + 'if(s.mode==="connect")return ' + t('自定义地址', 'Custom address') + ';'
+    + 'const v=s.installedDshVersion?" v"+s.installedDshVersion:"";'
+    + 'return s.runtimeSource==="installed"?' + t('客户端启动·本机已安装', 'Client-started · installed') + '+v'
+    + ':s.runtimeSource==="npx"?' + t('客户端启动·npx 缓存', 'Client-started · npx cache') + '+v'
+    + ':s.runtimeSource==="bundled"?' + t('客户端启动·客户端内置', 'Client-started · bundled') + ':' + t('客户端启动', 'Client-started') + ';}'
+    + 'async function refresh(){try{const s=await(await fetch("desktop/status")).json();'
+    + 'const modeLabel=sourceLabel(s);'
+    + '$("status").textContent=modeLabel+(s.childPid?" (PID "+s.childPid+")":"")+" → "+(s.targetUrl||' + t('（未就绪）', '(not ready)') + ')+(s.lastError?" · "+s.lastError:"")'
+    // Non-blocking: the cache stays in use; re-running npx is how it updates.
+    + '+(s.mode==="local"&&s.npxCacheOutdated?' + t(' · npx 缓存低于内置', ' · npx cache is older than the bundled runtime') + '+(s.dshVersion?" v"+s.dshVersion:"")+' + t('，重新运行 npx 可更新', '; re-run npx to update it') + ':"");'
+    + '$("versions").textContent=' + t('桌面客户端 v', 'Desktop client v') + '+s.desktopVersion+' + t(' · 内置 dsh ', ' · bundled dsh ') + '+(s.dshVersion??' + t('不可用', 'unavailable') + ')'
+    + '+(s.installedDshVersion?' + t(' · 本机 dsh ', ' · installed dsh ') + '+s.installedDshVersion:"");'
+    + 'const c=await(await fetch("desktop/settings")).json();$("url").value=c.serverUrl??"";'
+    + 'paintRuntimes(c.smartRuntimes);paintMode(s.selectedMode);'
+    + 'renderUpdate(await(await fetch("desktop/update")).json());'
+    + '}catch(e){$("status").textContent=' + t('状态不可用', 'Status unavailable') + '}}'
+    + '$("save").onclick=async()=>{try{'
+    + 'if(!$("url").value.trim()){$("note").textContent=' + t('请先填写地址', 'Enter an address first') + ';return}'
+    + 'const r=await fetch("desktop/settings",{method:"POST",headers:{"content-type":"application/json"},'
+    + 'body:JSON.stringify({serverUrl:$("url").value.trim()})});const j=await r.json();'
+    + '$("note").textContent=j.saved?(j.mode==="smart"?' + t('正在连接（智能模式：该实例停止时自动回落）', 'Connecting (Smart mode: falls back when that instance stops)') + ':' + t('已保存，正在连接…', 'Saved; connecting…') + ')'
+    + ':(' + t('保存失败：', 'Save failed: ') + '+(j.error||' + t('未知错误', 'unknown error') + '));'
+    + 'if(j.saved)setTimeout(()=>window.close(),900)}catch(e){$("note").textContent=' + t('保存失败：', 'Save failed: ') + '+e.message}};'
+    + 'const ALL_RUNTIMES=["probe","installed","npx","bundled"];'
+    + 'function paintMode(mode){const custom=mode==="connect";'
+    + '$("mode-smart").classList.toggle("primary",!custom);$("mode-custom").classList.toggle("primary",custom);'
+    + '$("smart-block").hidden=custom;$("custom-block").hidden=!custom}'
+    + '$("mode-smart").onclick=async()=>{paintMode("smart");'
+    + 'try{const s=await(await fetch("desktop/status")).json();if(s.selectedMode!=="connect")return;'
+    + 'const r=await fetch("desktop/switch",{method:"POST"});const j=await r.json();'
+    + 'if(!j.switched){paintMode("connect");$("note").textContent=' + t('切换失败：', 'Switch failed: ') + '+(j.error||' + t('未知错误', 'unknown error') + ');return}'
+    + '$("note").textContent=' + t('正在切换到智能模式…', 'Switching to Smart mode…') + ';setTimeout(()=>window.close(),500)}'
+    + 'catch(e){paintMode("connect");$("note").textContent=' + t('切换失败：', 'Switch failed: ') + '+e.message}};'
+    + '$("mode-custom").onclick=()=>{paintMode("connect");'
+    + 'if(!$("url").value){void(async()=>{try{const p=await(await fetch("desktop/probe")).json();'
+    + 'if(p.url&&!$("url").value){$("url").value=p.url;$("note").textContent=' + t('检测到本机已有 Web UI，可直接保存并连接。', 'A Web UI is already running on this machine; save to connect to it.') + '}}catch(e){}})()}};'
+    + 'function paintRuntimes(ids){const on=new Set(ids&&ids.length?ids:ALL_RUNTIMES);'
+    + 'for(const b of document.querySelectorAll("[data-smart-runtime]"))b.classList.toggle("primary",on.has(b.getAttribute("data-smart-runtime")))}'
+    + 'async function saveRuntimes(ids){try{const r=await fetch("desktop/smart-runtimes",{method:"POST",headers:{"content-type":"application/json"},'
+    + 'body:JSON.stringify({smartRuntimes:ids})});const j=await r.json();'
+    + 'if(j.saved){paintRuntimes(j.smartRuntimes);$("runtime-note").textContent=' + t('已更新智能连接来源', 'Smart connection sources updated') + '}'
+    + 'else{$("runtime-note").textContent=' + t('保存失败：', 'Save failed: ') + '+(j.error||' + t('至少保留一种来源', 'Keep at least one source') + ');paintRuntimes(j.smartRuntimes||ALL_RUNTIMES)}}'
+    + 'catch(e){$("runtime-note").textContent=' + t('保存失败：', 'Save failed: ') + '+e.message}}'
+    + 'for(const b of document.querySelectorAll("[data-smart-runtime]"))b.onclick=()=>{'
+    + 'const id=b.getAttribute("data-smart-runtime");'
+    + 'const current=[...document.querySelectorAll("[data-smart-runtime].primary")].map(x=>x.getAttribute("data-smart-runtime"));'
+    + 'const next=current.includes(id)?current.filter(x=>x!==id):current.concat(id);'
+    + 'if(!next.length){$("runtime-note").textContent=' + t('至少保留一种来源', 'Keep at least one source') + ';return}void saveRuntimes(next)};'
+    + 'const RUNTIME_NOTE=' + t('关掉的来源会跳过。至少保留一种。', 'Sources you turn off are skipped. Keep at least one.') + ';'
+    + 'for(const b of document.querySelectorAll("[data-smart-runtime]")){const tip=b.getAttribute("data-tip")||"";'
+    + 'b.onmouseenter=b.onfocus=()=>{$("runtime-note").textContent=tip};'
+    + 'b.onmouseleave=b.onblur=()=>{if($("runtime-note").textContent===tip)$("runtime-note").textContent=RUNTIME_NOTE}};'
+    // Any answer must put the button back; a fetch that throws would otherwise
+    // leave it grey until the page is reopened.
+    + '$("update-check").onclick=async()=>{try{$("update-check").disabled=true;const r=await fetch("desktop/update/check",{method:"POST"});renderUpdate((await r.json()).state)}'
+    + 'catch(e){$("update-check").disabled=false;$("update-status").hidden=false;$("update-status").classList.add("error");$("update-status").textContent=' + t('检查失败：', 'Check failed: ') + '+e.message}};'
+    // The install answers only when the download is done, so the page says what
+    // it is doing now, and puts the button back for any answer that never began.
+    + '$("update-install").onclick=async()=>{const fail=t=>{$("update-install").disabled=false;'
+    + '$("update-status").hidden=false;$("update-status").classList.add("error");$("update-status").textContent=' + t('安装失败：', 'Install failed: ') + '+t};'
+    + 'try{$("update-install").disabled=true;$("update-status").hidden=false;$("update-status").textContent=' + t('正在准备下载…', 'Preparing the download…') + ';'
+    + 'const r=await fetch("desktop/update/install",{method:"POST"});const j=await r.json();if(j.state)renderUpdate(j.state);'
+    + 'if(!j.started)fail(j.error||' + t('未知错误', 'unknown error') + ')}catch(e){fail(e.message)}};'
+    + '$("update-dismiss").onclick=async()=>{await fetch("desktop/update/dismiss",{method:"POST"});renderUpdate(await(await fetch("desktop/update")).json())};'
+    + 'refresh();'
+    + 'setInterval(async()=>{try{const u=await(await fetch("desktop/update")).json();if(u.phase==="downloading"||u.phase==="installing")renderUpdate(u)}catch(e){}},400);'
+}
 
 /**
  * The "open the releases page" glyph. An in-app download can fail on a machine
@@ -3562,11 +3621,20 @@ const EXTERNAL_LINK_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill=
   + '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>'
   + '<path d="M15 3h6v6"></path><path d="M10 14 21 3"></path></svg>'
 
-/** The connection-settings page, styled to match the loading page aesthetic. */
+/**
+ * The connection-settings page, styled to match the loading page aesthetic.
+ * Bilingual on the same rule as the failure page and the update prompt: this
+ * is the client's own surface, and it is the one an English-locale user is
+ * sent to when a connection needs fixing.
+ */
 function settingsPageHtml(): string {
   const icon = loadingIconTag()
-  return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
-    + '<title>连接设置</title>'
+  const chinese = localeChinese()
+  // Plain text, not escaped: every value below is a literal written here, and
+  // none of them contains a character HTML or an attribute would read.
+  const h = (zh: string, en: string): string => chinese ? zh : en
+  return '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
+    + '<title>' + h('连接设置', 'Connection settings') + '</title>'
     + '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; img-src data:; style-src \'unsafe-inline\'">'
     + '<meta name="color-scheme" content="light dark">'
     + '<style>:root{color-scheme:light dark}'
@@ -3635,31 +3703,31 @@ function settingsPageHtml(): string {
     + '@media(prefers-reduced-motion:reduce){*{transition:none!important}}'
     + '</style></head><body><div class="container">'
     // Header with logo
-    + '<div class="header">' + icon + '<h1 class="page-title">连接设置</h1></div>'
+    + '<div class="header">' + icon + '<h1 class="page-title">' + h('连接设置', 'Connection settings') + '</h1></div>'
     // Connection section
     + '<div class="section">'
-    + '<div class="section-title">连接<span class="badge">增强功能</span></div>'
-    + '<p class="status-text" id="status">连接状态读取中…</p>'
-    + '<div class="runtime-picks" role="radiogroup" aria-label="连接方式">'
-    + '<button type="button" id="mode-smart" class="primary">智能</button>'
-    + '<button type="button" id="mode-custom">自定义</button>'
+    + '<div class="section-title">' + h('连接', 'Connection') + '<span class="badge">' + h('增强功能', 'Enhanced') + '</span></div>'
+    + '<p class="status-text" id="status">' + h('连接状态读取中…', 'Reading connection status…') + '</p>'
+    + '<div class="runtime-picks" role="radiogroup" aria-label="' + h('连接方式', 'Connection mode') + '">'
+    + '<button type="button" id="mode-smart" class="primary">' + h('智能', 'Smart') + '</button>'
+    + '<button type="button" id="mode-custom">' + h('自定义', 'Custom') + '</button>'
     + '</div>'
     + '<div id="smart-block">'
-    + '<p class="note" style="margin-top:14px">可多选，按优先级依次尝试</p>'
+    + '<p class="note" style="margin-top:14px">' + h('可多选，按优先级依次尝试', 'Pick any; tried in this order') + '</p>'
     + '<div class="runtime-picks">'
-    + '<button type="button" data-smart-runtime="probe" class="primary" data-tip="本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。" aria-description="本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。">本机已运行</button>'
-    + '<button type="button" data-smart-runtime="installed" class="primary" data-tip="用你 PATH 上自己安装的 dsh，由客户端在后台启动。" aria-description="用你 PATH 上自己安装的 dsh，由客户端在后台启动。">本机已安装</button>'
-    + '<button type="button" data-smart-runtime="npx" class="primary" data-tip="用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。" aria-description="用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。">npx 缓存</button>'
-    + '<button type="button" data-smart-runtime="bundled" class="primary" data-tip="用安装包自带的官方运行时，不用另装 Node 或 dsh。" aria-description="用安装包自带的官方运行时，不用另装 Node 或 dsh。">客户端内置</button>'
+    + '<button type="button" data-smart-runtime="probe" class="primary" data-tip="' + h('本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。', 'Connect to an official Web UI already running on this machine (3080 by default) instead of starting another.') + '" aria-description="' + h('本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。', 'Connect to an official Web UI already running on this machine (3080 by default) instead of starting another.') + '">' + h('本机已运行', 'Already running') + '</button>'
+    + '<button type="button" data-smart-runtime="installed" class="primary" data-tip="' + h('用你 PATH 上自己安装的 dsh，由客户端在后台启动。', 'Start the dsh on your own PATH, in the background, from this client.') + '" aria-description="' + h('用你 PATH 上自己安装的 dsh，由客户端在后台启动。', 'Start the dsh on your own PATH, in the background, from this client.') + '">' + h('本机已安装', 'Installed') + '</button>'
+    + '<button type="button" data-smart-runtime="npx" class="primary" data-tip="' + h('用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。', 'Start from the package that npx @deepseek-ai/dsh left in your cache. No network.') + '" aria-description="' + h('用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。', 'Start from the package that npx @deepseek-ai/dsh left in your cache. No network.') + '">' + h('npx 缓存', 'npx cache') + '</button>'
+    + '<button type="button" data-smart-runtime="bundled" class="primary" data-tip="' + h('用安装包自带的官方运行时，不用另装 Node 或 dsh。', 'Use the official runtime shipped inside this client. No separate Node or dsh needed.') + '" aria-description="' + h('用安装包自带的官方运行时，不用另装 Node 或 dsh。', 'Use the official runtime shipped inside this client. No separate Node or dsh needed.') + '">' + h('客户端内置', 'Bundled') + '</button>'
     + '</div>'
-    + '<p class="note" id="runtime-note">关掉的来源会跳过。至少保留一种。</p>'
+    + '<p class="note" id="runtime-note">' + h('关掉的来源会跳过。至少保留一种。', 'Sources you turn off are skipped. Keep at least one.') + '</p>'
     + '</div>'
     + '<div id="custom-block" hidden>'
     + '<div class="custom-row">'
-    + '<input id="url" placeholder="例如 http://127.0.0.1:3080" spellcheck="false">'
-    + '<button id="save">保存并连接</button>'
+    + '<input id="url" placeholder="' + h('例如 http://127.0.0.1:3080', 'e.g. http://127.0.0.1:3080') + '" spellcheck="false">'
+    + '<button id="save">' + h('保存并连接', 'Save and connect') + '</button>'
     + '</div>'
-    + '<p class="note">直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。</p>'
+    + '<p class="note">' + h('直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。', 'Connects straight to the Web UI at that address. If it stops, this client does not fall back to a local runtime.') + '</p>'
     + '</div>'
     + '<p class="note" id="note"></p>'
     + '</div>'
@@ -3667,13 +3735,13 @@ function settingsPageHtml(): string {
     + '<hr class="divider">'
     // Update section
     + '<div class="section">'
-    + '<div class="section-title">应用更新<span class="badge">增强功能</span>'
+    + '<div class="section-title">' + h('应用更新', 'App updates') + '<span class="badge">' + h('增强功能', 'Enhanced') + '</span>'
     + '<div class="actions">'
     + '<a class="icon-link" id="update-page" href="' + RELEASES_PAGE_URL + '" target="_blank" rel="noreferrer"'
-    + ' title="打开 GitHub 发布页手动下载" aria-label="打开 GitHub 发布页手动下载">' + EXTERNAL_LINK_SVG + '</a>'
-    + '<button id="update-install" class="primary" hidden>下载并安装</button>'
-    + '<button id="update-check">检查更新</button>'
-    + '<button id="update-dismiss" hidden>稍后提醒</button>'
+    + ' title="' + h('打开 GitHub 发布页手动下载', 'Open the GitHub releases page to download manually') + '" aria-label="' + h('打开 GitHub 发布页手动下载', 'Open the GitHub releases page to download manually') + '">' + EXTERNAL_LINK_SVG + '</a>'
+    + '<button id="update-install" class="primary" hidden>' + h('下载并安装', 'Download and install') + '</button>'
+    + '<button id="update-check">' + h('检查更新', 'Check for updates') + '</button>'
+    + '<button id="update-dismiss" hidden>' + h('稍后提醒', 'Remind me later') + '</button>'
     + '</div></div>'
     + '<p class="version-text" id="versions"></p>'
     + '<p class="status-text" id="update-status" hidden></p>'
@@ -4642,7 +4710,7 @@ function startSettingsServer(): Promise<number> {
     }
     if (pathname === '/desktop/settings.js') {
       res.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-cache' })
-      res.end(SETTINGS_PAGE_SCRIPT)
+      res.end(settingsPageScript())
       return
     }
     if (pathname === '/desktop/settings') {
@@ -5145,8 +5213,27 @@ if (!gotLock) {
       }
       return result
     })
-    ipcMain.handle('desktop:update:dismiss', (event) => {
-      if (!bridgeCaller(event).trusted) return
+    ipcMain.handle('desktop:update:dismiss', async (event) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) return
+      // The third button on the card that check and install are the other two
+      // of, and it needs an answer from the same person they do: dismissing
+      // writes the version into THIS machine's settings, which silences the
+      // tray entry, the status tip and every automatic prompt for that version
+      // until someone checks by hand. A remote page may ask to be left alone;
+      // only the person at the keyboard may make this client quiet about a
+      // version it has already found.
+      if (caller.remote) {
+        const chinese = localeChinese()
+        const confirmed = await confirmSensitiveAction(
+          chinese ? '当前页面请求忽略此版本更新' : 'The current page asked to skip this update',
+          (chinese
+            ? '客户端将不再提示该版本，直到你手动检查更新。请求来自：'
+            : 'This client will stop offering that version until you check for updates by hand. Requested by: ')
+          + (currentTarget() ?? ''),
+        )
+        if (!confirmed) return
+      }
       desktopUpdater?.dismiss()
     })
     await guiPathReady
