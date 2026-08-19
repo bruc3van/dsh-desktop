@@ -1,17 +1,17 @@
-# DeepSeek Harness Desktop
+# DSH Desktop
 
 [中文](README.md) | English
 
 **Keep your Agent safely resident on your desktop: the official Web UI untouched, long tasks no longer hostage to a terminal or a browser tab, curated plugins reviewed before install.**
 
-DeepSeek Harness Desktop is an independent Electron client for `dsh`. The window shows the official Web UI itself — not a look-alike; whatever the official product is, that is what the window shows. The real engineering lives outside the window: tasks keep running when you close it, the app stays resident in the tray, the Agent runs in a governed execution environment, plugins go through a review-before-install marketplace, and the connection and update paths are hardened layer by layer.
+DSH Desktop is an independent Electron client for DeepSeek Harness (`dsh`). The window shows the official Web UI itself — not a look-alike; whatever the official product is, that is what the window shows. The real engineering lives outside the window: tasks keep running when you close it, the app stays resident in the tray, the Agent runs in a governed execution environment, plugins go through a review-before-install marketplace, and the connection and update paths are hardened layer by layer.
 
 > [!IMPORTANT]
 > **This is an unofficial, community-maintained third-party project.** It is not developed, published, endorsed, or supported by DeepSeek and does not represent DeepSeek. `DeepSeek`, `DeepSeek Harness`, `dsh`, and related names, logos, and trademarks belong to their respective owners. Report desktop-client issues to this repository, not to DeepSeek support.
 
 Release packages bundle a pinned version of the official `@deepseek-ai/dsh` runtime. End users do not need to install Node.js, pnpm, or the `dsh` CLI separately. The desktop shell, installers, connection enhancements, and release signatures are independently maintained by this project and are not part of the official runtime. The desktop client and official `dsh` use independent version numbers; the connection settings page displays both for compatibility diagnostics.
 
-![DeepSeek Harness Desktop home screen: the window is the official Web UI itself](docs/images/dsh-desktop-home.png)
+![DSH Desktop home screen: the window is the official Web UI itself](docs/images/dsh-desktop-home.png)
 
 ## Why use the desktop client?
 
@@ -65,8 +65,8 @@ Automated packages are currently unsigned on macOS and Windows. The operating sy
   If macOS still says the app is damaged and **Open Anyway** is unavailable, run the following only after the SHA-256 has been verified:
 
   ```sh
-  xattr -dr com.apple.quarantine "/Applications/DeepSeek Harness Desktop.app"
-  open "/Applications/DeepSeek Harness Desktop.app"
+  xattr -dr com.apple.quarantine "/Applications/DSH Desktop.app"
+  open "/Applications/DSH Desktop.app"
   ```
 
   This removes the download quarantine attribute only from this app. It does not disable Gatekeeper globally and does not require `sudo`. If the checksum does not match, delete the file and download it again instead of running the command.
@@ -247,4 +247,4 @@ Build commands and gate scripts, runtime-resolution details, the release process
 
 [MIT](LICENSE)
 
-The MIT License covers only code and assets maintained in this repository. The bundled official `@deepseek-ai/dsh` runtime and other third-party dependencies remain under their own licenses. "DeepSeek Harness" is used in the project name only to identify the compatible product; it does not imply an official relationship.
+The MIT License covers only code and assets maintained in this repository. The bundled official `@deepseek-ai/dsh` runtime and other third-party dependencies remain under their own licenses. "DSH" in the project name stands for DeepSeek Harness and is used only to identify the compatible product; it does not imply an official relationship.

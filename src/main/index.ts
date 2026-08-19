@@ -1,5 +1,5 @@
 /**
- * Electron main process for the DeepSeek Harness desktop client.
+ * Electron main process for the DSH Desktop client.
  *
  * The client consumes ONLY the public interface of the official dsh Web UI:
  * it manages a local `dsh web` child (or connects to a configured Web UI
@@ -95,6 +95,12 @@ interface ClientSettings {
   connectionMode?: 'smart' | 'connect'
   /** Last in-app update the user chose to ignore. */
   updateDismissedVersion?: string
+  /**
+   * The one-time notice about the pre-rename macOS bundle has been shown.
+   * Durable: it is a migration aid, and one that reappeared on every launch
+   * until the user tidied Applications would be a standing complaint instead.
+   */
+  legacyBundleNoticeShown?: boolean
   /** Epoch ms of the last completed update check (auto-check throttle). */
   updateLastCheckedAt?: number
   /**
@@ -185,6 +191,9 @@ function patchSettings(patch: Partial<ClientSettings> = {}, unset: readonly (key
   }
   if (!skip.has('updateLastCheckedAt') && merged.updateLastCheckedAt !== undefined) {
     next.updateLastCheckedAt = merged.updateLastCheckedAt
+  }
+  if (!skip.has('legacyBundleNoticeShown') && merged.legacyBundleNoticeShown !== undefined) {
+    next.legacyBundleNoticeShown = merged.legacyBundleNoticeShown
   }
   saveSettings(next)
 }
@@ -1747,7 +1756,7 @@ function loadingIconTag(): string {
 /** The small first-paint surface shown while Smart mode resolves the Web UI. */
 function loadingPageUrl(): string {
   const chinese = localeChinese()
-  const title = chinese ? '正在启动 DeepSeek Harness' : 'Starting DeepSeek Harness'
+  const title = chinese ? '正在启动 DSH Desktop' : 'Starting DSH Desktop'
   const hint = chinese ? '首次启动通常需要 10–20 秒' : 'The first launch usually takes 10–20 seconds'
   // The only connection seat reachable while the Web UI itself cannot load:
   // the official settings dialog (and its enhanced 连接 block) needs a page.
@@ -2107,7 +2116,7 @@ function reportConnectionFailureWithoutWindow(failure: ConnectionFailure): void 
       : failure.description + ' (' + String(failure.code) + ')')
   void dialog.showMessageBox({
     type: 'error',
-    title: 'Harness',
+    title: 'DSH Desktop',
     message: failure.kind === 'runtime'
       ? failure.headline
       : (chinese ? '无法连接 Web UI' : 'Could not reach the Web UI'),
@@ -2276,7 +2285,7 @@ function createWindow(): void {
     height: 820,
     minWidth: 1024,
     minHeight: 680,
-    title: 'Harness',
+    title: 'DSH Desktop',
     backgroundColor: windowBackgroundColor(),
     // The official Web UI carries its own header; a hiddenInset title bar
     // would overlap it. The standard title bar keeps the traffic lights away
@@ -2508,7 +2517,7 @@ function createTray(): void {
   const icon = trayImage()
   if (icon.isEmpty()) return
   tray = new Tray(icon)
-  tray.setToolTip('DeepSeek Harness')
+  tray.setToolTip('DSH Desktop')
   // Windows emits this too, and used to have nobody listening: a left-click on
   // the notification-area icon did nothing at all, and the window could only be
   // reached through the right-click menu. A double-click emits two clicks plus
@@ -2643,8 +2652,8 @@ function refreshTrayMenu(): void {
   if (tray === null) return
   const state = desktopUpdater?.getState()
   const tip = state?.phase === 'available' && state.info !== null && !state.dismissed
-    ? 'DeepSeek Harness · v' + state.info.availableVersion
-    : 'DeepSeek Harness'
+    ? 'DSH Desktop · v' + state.info.availableVersion
+    : 'DSH Desktop'
   tray.setToolTip(tip)
   const menu = Menu.buildFromTemplate(trayMenuTemplate())
   if (process.platform === 'darwin') return
@@ -3422,6 +3431,88 @@ function promptMacReplace(): void {
     // still hold the bundle open, which is the problem being solved here.
     if (answer.response === 0) app.quit()
   })
+}
+
+/**
+ * The bundle this client installed as before it was renamed to "DSH Desktop".
+ *
+ * A macOS update is a Finder drag, and Finder replaces by FILE NAME — so the
+ * first release carrying the new name lands BESIDE the old bundle instead of
+ * over it. Nothing breaks: both carry the same bundle id and read the same
+ * two data homes, so settings, conversations and credentials are shared. What
+ * the user is left with is two applications, and a Dock icon that still opens
+ * the version they believed they had just replaced.
+ */
+const LEGACY_MAC_BUNDLE = '/Applications/DeepSeek Harness Desktop.app'
+
+/** Whether a pre-rename install is still sitting beside this one. */
+function legacyMacBundleLeftBehind(): boolean {
+  // Packaged only: a development run is not an install, and has no predecessor
+  // to have replaced.
+  if (process.platform !== 'darwin' || !app.isPackaged) return false
+  // Not when this IS that bundle. A user who has not yet moved to a renamed
+  // build would otherwise be told to delete the copy they are running.
+  if (app.getPath('exe').startsWith(LEGACY_MAC_BUNDLE + '/')) return false
+  try {
+    return statSync(LEGACY_MAC_BUNDLE).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Say it once, and never delete anything.
+ *
+ * Removing an application the user installed is not a step a client takes on
+ * its own — and "reveal it in Finder" is the step they would take next anyway,
+ * so it is the one offered. The notice is recorded as shown BEFORE the dialog
+ * rather than after an answer: a migration aid that reappears every launch
+ * until the folder is tidy reads as nagging, and the release notes carry the
+ * same instruction for anyone who dismisses it.
+ */
+function promptLegacyMacBundle(): void {
+  if (!legacyMacBundleLeftBehind()) return
+  if (loadSettings().legacyBundleNoticeShown === true) return
+  patchSettings({ legacyBundleNoticeShown: true })
+  const chinese = localeChinese()
+  const options: Electron.MessageBoxOptions = {
+    type: 'info',
+    title: 'DSH Desktop',
+    message: chinese ? '「应用程序」里还留着旧版本' : 'An older copy is still in Applications',
+    detail: chinese
+      ? '本客户端已更名为「DSH Desktop」，你正在运行的就是它。\n'
+        + '更名前的「DeepSeek Harness Desktop」还留在「应用程序」里，可以删掉了——'
+        + '两者共用同一份设置和会话记录，删除旧的不会丢任何数据。'
+      : 'This client is now called DSH Desktop, and that is what you are running.\n'
+        + 'The pre-rename “DeepSeek Harness Desktop” is still in Applications and can be '
+        + 'deleted — both read the same settings and conversations, so removing the old '
+        + 'copy loses nothing.',
+    buttons: chinese ? ['在访达中显示', '稍后'] : ['Show in Finder', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+  }
+  const owner = mainWindow
+  const shown = owner === null || owner.isDestroyed()
+    ? dialog.showMessageBox(options)
+    : dialog.showMessageBox(owner, options)
+  void shown.then((answer) => {
+    if (answer.response === 0) shell.showItemInFolder(LEGACY_MAC_BUNDLE)
+  })
+}
+
+/**
+ * Hold the notice until there is a window to attach it to. A sheet on a window
+ * that has not been shown yet is a sheet nobody sees, and the client paints
+ * its first window before the runtime is anywhere near ready.
+ */
+function scheduleLegacyBundleNotice(): void {
+  if (!legacyMacBundleLeftBehind()) return
+  const window = mainWindow
+  if (window === null || window.isDestroyed() || window.isVisible()) {
+    promptLegacyMacBundle()
+    return
+  }
+  window.once('show', promptLegacyMacBundle)
 }
 
 let autoUpdateCheckScheduled = false
@@ -4580,6 +4671,11 @@ function installMenu(): void {
           label: chinese ? '检查更新…' : 'Check for Updates…',
           click: () => { void handleManualUpdateCheck(true) },
         },
+        // Same gesture (and same wording) as the tray's item: a plugin that
+        // only takes effect on a fresh runtime needs the harness replaced, and
+        // the menu bar is where a macOS user looks for it when the window —
+        // not the tray — is what they have in front of them.
+        { label: chinese ? '重启客户端' : 'Restart', click: restartApp },
         { type: 'separator' },
         { role: 'services', label: chinese ? '服务' : 'Services' },
         { type: 'separator' },
@@ -5033,6 +5129,9 @@ if (!gotLock) {
     // After both exist: the watcher's first pass rebuilds them if the Web UI's
     // language setting disagrees with the system locale they were built from.
     watchLocalePreference()
+    // After the locale watcher: the notice's wording follows the Web UI's
+    // language setting, and this is the first point where that is settled.
+    scheduleLegacyBundleNotice()
     powerMonitor.on('resume', () => { scheduleWindowHealthCheck('system resume', 3_000) })
     windowHealthTimer = setInterval(() => { void recoverBlankWindow('periodic health check') }, WINDOW_HEALTH_INTERVAL_MS)
     windowHealthTimer.unref()
@@ -5242,7 +5341,7 @@ if (!gotLock) {
       if (mainWindow === null) launchWindow()
     })
   }).catch((error: unknown) => {
-    dialog.showErrorBox('Harness', '桌面客户端启动失败。\n' + (error instanceof Error ? error.message : String(error)))
+    dialog.showErrorBox('DSH Desktop', '桌面客户端启动失败。\n' + (error instanceof Error ? error.message : String(error)))
     app.quit()
   })
 

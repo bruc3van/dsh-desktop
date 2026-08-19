@@ -6,7 +6,7 @@
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "1.0.1",
     "@deepseek-ai/dsh": "0.1.0-rc.7",
-    "dsh-desktop-safe-market": "https://github.com/bruc3van/dsh-desktop-safe-market/archive/706282d4839f5985444d63ba16be800a6f8e3b5f.tar.gz",
+    "dsh-desktop-safe-market": "https://github.com/bruc3van/dsh-desktop-safe-market/archive/ad67a71a1ec3df2fd10144aeef92789c8c82a2e1.tar.gz",
     "pnpm": "11.16.0"
   },
   "optionalDependencies": {

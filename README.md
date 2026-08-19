@@ -1,17 +1,17 @@
-# DeepSeek Harness Desktop
+# DSH Desktop
 
 中文 | [English](README_EN.md)
 
 **让 Agent 安全地常驻在你的桌面上：官方 Web UI 原封不动，长任务不再被终端和浏览器标签页绑架，精选插件先审查、再安装。**
 
-DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里呈现的是官方 Web UI 本体——不是仿制版，官方产品什么样，窗口里就是什么样；而真正的工程投入都在窗口之外：关闭窗口任务照跑、托盘常驻随点随开、Agent 跑在经过治理的执行环境里、插件安装走「先审查、再安装」的内置市场、连接与更新链路逐层加固。
+DSH Desktop 是一个独立的 DeepSeek Harness（`dsh`）Electron 客户端。窗口里呈现的是官方 Web UI 本体——不是仿制版，官方产品什么样，窗口里就是什么样；而真正的工程投入都在窗口之外：关闭窗口任务照跑、托盘常驻随点随开、Agent 跑在经过治理的执行环境里、插件安装走「先审查、再安装」的内置市场、连接与更新链路逐层加固。
 
 > [!IMPORTANT]
 > **这是社区维护的非官方第三方项目。** 本项目并非 DeepSeek 官方产品，不由 DeepSeek 开发、发布、背书或提供支持，也不代表 DeepSeek 的立场。`DeepSeek`、`DeepSeek Harness`、`dsh` 及相关名称、标识和商标归其各自权利人所有。桌面客户端的问题请提交到本仓库，不要联系 DeepSeek 官方支持。
 
 发布安装包内置固定版本的官方 `@deepseek-ai/dsh` 运行时；普通用户无需另外安装 Node.js、pnpm 或 `dsh` CLI。桌面外壳、安装包、连接增强与发布签名均由本项目独立负责，不属于官方运行时的一部分。桌面客户端与官方 `dsh` 使用各自独立的版本号；应用的连接设置页会同时显示两个版本号，便于排查兼容问题。
 
-![DeepSeek Harness Desktop 首页：窗口里就是官方 Web UI 本体](docs/images/dsh-desktop-home.png)
+![DSH Desktop 首页：窗口里就是官方 Web UI 本体](docs/images/dsh-desktop-home.png)
 
 ## 为什么值得使用
 
@@ -58,7 +58,7 @@ DeepSeek Harness Desktop 是一个独立的 `dsh` Electron 客户端。窗口里
   极少数情况下如果提示「已损坏，无法打开」、且系统设置里没有「仍要打开」按钮，打开「终端」执行以下命令后再双击打开应用：
 
   ```sh
-  xattr -dr com.apple.quarantine "/Applications/DeepSeek Harness Desktop.app"
+  xattr -dr com.apple.quarantine "/Applications/DSH Desktop.app"
   ```
 - **Windows**：如果 Microsoft Defender SmartScreen 弹出提示，点击「更多信息」，再点击「仍要运行」即可。
 
@@ -237,4 +237,4 @@ pnpm run dev
 
 [MIT](LICENSE)
 
-MIT 许可证仅适用于本仓库自行维护的代码和素材。随安装包分发的官方 `@deepseek-ai/dsh` 及其他第三方依赖分别适用其自身许可证。本项目名称中的 “DeepSeek Harness” 仅用于说明兼容对象，不表示官方关系。
+MIT 许可证仅适用于本仓库自行维护的代码和素材。随安装包分发的官方 `@deepseek-ai/dsh` 及其他第三方依赖分别适用其自身许可证。本项目名称中的 “DSH” 取自 DeepSeek Harness，仅用于说明兼容对象，不表示官方关系。

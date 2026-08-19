@@ -53,7 +53,7 @@ const probeOrigin = 'http://127.0.0.1:' + String(address.port)
 function systemNode() {
   const rejected = (path) =>
     /[\\/]\.dsh-desktop[\\/]bin[\\/]/i.test(path)
-    || /DeepSeek Harness/i.test(path)
+    || /DSH Desktop/i.test(path)
     || /electron\.exe$/i.test(path)
   if (process.platform === 'win32') {
     for (const candidate of [
