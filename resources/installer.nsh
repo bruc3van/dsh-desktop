@@ -195,6 +195,38 @@ FunctionEnd
 
 ; multiUserUi reloads InstallLocation when its mode page is left. Correct an
 ; unchanged broken value before the following directory page becomes visible.
+; electron-builder reports a failed legacy uninstall through a MessageBox that
+; carries no /SD default (handleUninstallResult in include/installUtil.nsh). A
+; silent install therefore puts up a dialog nobody can answer and waits forever
+; — as a 45-minute job timeout on CI, and as a hung installer for anyone
+; scripting an unattended upgrade. This is the hook electron-builder offers for
+; exactly that spot: keep its interactive behaviour as it was, and let a silent
+; run fail fast with the same error level instead of blocking.
+;
+; Both variants are defined because handleUninstallResult is called once per
+; registry root: SHELL_CONTEXT always, plus HKEY_CURRENT_USER when an all-users
+; install cleans up a per-user one.
+!macro dshUninstallResultCheck
+  ${If} ${Errors}
+    DetailPrint "Uninstall was not successful. Not able to launch uninstaller!"
+  ${ElseIf} $R0 != 0
+    DetailPrint "Uninstall was not successful. Uninstaller error code: $R0."
+    ${IfNot} ${Silent}
+      MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
+    ${EndIf}
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+!macroend
+
+!macro customUnInstallCheck
+  !insertmacro dshUninstallResultCheck
+!macroend
+
+!macro customUnInstallCheckCurrentUser
+  !insertmacro dshUninstallResultCheck
+!macroend
+
 !macro customInstallModeLeave
   !ifndef BUILD_UNINSTALLER
     !insertmacro dshRestoreUnchangedInstallTarget

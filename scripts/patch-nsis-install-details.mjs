@@ -291,6 +291,10 @@ export function checkNsisInstallDetails() {
     'WriteRegStr SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation',
     '!macro customInstall',
     'CreateShortCut "$newDesktopLink"',
+    // Without this hook a failed legacy uninstall reaches electron-builder's
+    // own MessageBox, which has no /SD default and hangs every silent install.
+    '!macro customUnInstallCheck',
+    '!macro customUnInstallCheckCurrentUser',
   ]) {
     if (!installerNsh.includes(requirement)) {
       failures.push('resources/installer.nsh is missing upgrade recovery: ' + requirement)
