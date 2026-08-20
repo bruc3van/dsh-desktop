@@ -23,6 +23,9 @@ Var /GLOBAL dshPerMachineOriginalInstallDir
 ; leave the user with a shortcut carrying the new name even if the legacy
 ; uninstaller removed (or had already lost) the old .lnk.
 Var /GLOBAL dshRenamedUpgrade
+; Set when this installer had to remove the previous installation itself
+; because that version's uninstaller refused to. See dshRemovePreviousInstall.
+Var /GLOBAL dshPreviousInstallRemoved
 !endif
 
 ; Refresh the selected old/original pair after the install-mode page may have
@@ -206,25 +209,106 @@ FunctionEnd
 ; Both variants are defined because handleUninstallResult is called once per
 ; registry root: SHELL_CONTEXT always, plus HKEY_CURRENT_USER when an all-users
 ; install cleans up a per-user one.
-!macro dshUninstallResultCheck
+; Finish the removal the previous version's uninstaller could not.
+;
+; Every in-place upgrade runs the already-installed uninstaller with
+; `--updated`, which selects electron-builder's un.atomicRMDir: it renames the
+; install directory's contents into $PLUGINSDIR before deleting them and aborts
+; the whole uninstall if any entry will not move. Running that same uninstaller
+; on that same directory with only `--updated` dropped removes all 13814 files
+; and exits 0, so nothing there is locked or unmovable — the atomic-rename step
+; is simply what does not survive. Reported from a real upgrade in
+; https://github.com/bruc3van/dsh-desktop/issues/11, and reproduced by
+; `pnpm run check:nsis-upgrade`.
+;
+; The uninstaller that fails already sits on the user's machine, so nothing
+; shipped from here can repair it. What this installer can do is remove that
+; directory itself and carry on, instead of leaving the upgrade dead in the
+; water with files that were always removable.
+;
+; The bar for deleting a directory is deliberately high: the registry must name
+; it as this product's install location AND the uninstaller that registry points
+; at must still live directly inside it. Anything short of that leaves the
+; directory alone and keeps the old abort, so an unexpected shape fails closed.
+!macro dshRemovePreviousInstall ROOT_KEY
+  Push $R5
+  Push $R6
+  Push $R7
+  StrCpy $dshPreviousInstallRemoved "false"
+
+  ReadRegStr $R5 ${ROOT_KEY} "${INSTALL_REGISTRY_KEY}" InstallLocation
+  ; Tolerate a trailing separator so the parent comparison below can be exact.
+  StrCpy $R6 $R5 "" -1
+  ${If} $R6 == "\"
+    StrCpy $R5 $R5 -1
+  ${EndIf}
+
+  ; Never a bare drive root, whatever the registry says.
+  StrLen $R6 $R5
+  ${If} $R6 > 3
+    Push $R5
+    Call dshIsUsableInstallDir
+    Pop $R6
+    ${If} $R6 == "true"
+      ReadRegStr $R7 ${ROOT_KEY} "${UNINSTALL_REGISTRY_KEY}" UninstallString
+      ${If} $R7 != ""
+        Push $R7
+        Call GetInQuotes
+        Pop $R7
+        ${If} ${FileExists} "$R7"
+          Push $R7
+          Call GetFileParent
+          Pop $R6
+          ${If} $R6 == $R5
+            DetailPrint "Previous uninstaller failed; removing $R5 directly."
+            ; User data lives outside the install directory, so this is the same
+            ; scope /KEEP_APP_DATA gave the uninstaller.
+            SetOutPath $TEMP
+            RMDir /r "$R5"
+            ; Believe it only when the registered uninstaller is actually gone.
+            ${IfNot} ${FileExists} "$R7"
+              StrCpy $dshPreviousInstallRemoved "true"
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  Pop $R7
+  Pop $R6
+  Pop $R5
+!macroend
+
+; electron-builder reports a failed legacy uninstall through a MessageBox that
+; carries no /SD default, so a silent install shows a dialog nobody can answer
+; and waits forever — a 45-minute job timeout on CI, a hung installer for any
+; scripted upgrade. Keep its interactive wording, but only after trying to
+; finish the removal ourselves, and never block when silent.
+!macro dshUninstallResultCheck ROOT_KEY
   ${If} ${Errors}
     DetailPrint "Uninstall was not successful. Not able to launch uninstaller!"
   ${ElseIf} $R0 != 0
     DetailPrint "Uninstall was not successful. Uninstaller error code: $R0."
-    ${IfNot} ${Silent}
-      MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
+    !insertmacro dshRemovePreviousInstall ${ROOT_KEY}
+    ${If} $dshPreviousInstallRemoved == "true"
+      DetailPrint "Previous installation removed by this installer; continuing."
+    ${Else}
+      ${IfNot} ${Silent}
+        MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
+      ${EndIf}
+      SetErrorLevel 2
+      Quit
     ${EndIf}
-    SetErrorLevel 2
-    Quit
   ${EndIf}
 !macroend
 
 !macro customUnInstallCheck
-  !insertmacro dshUninstallResultCheck
+  !insertmacro dshUninstallResultCheck SHELL_CONTEXT
 !macroend
 
 !macro customUnInstallCheckCurrentUser
-  !insertmacro dshUninstallResultCheck
+  !insertmacro dshUninstallResultCheck HKCU
 !macroend
 
 !macro customInstallModeLeave

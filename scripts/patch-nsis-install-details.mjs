@@ -295,6 +295,10 @@ export function checkNsisInstallDetails() {
     // own MessageBox, which has no /SD default and hangs every silent install.
     '!macro customUnInstallCheck',
     '!macro customUnInstallCheckCurrentUser',
+    // And the hook is only worth having because it finishes the removal the
+    // previous version's uninstaller refused to do (issue #11).
+    '!macro dshRemovePreviousInstall',
+    'RMDir /r "$R5"',
   ]) {
     if (!installerNsh.includes(requirement)) {
       failures.push('resources/installer.nsh is missing upgrade recovery: ' + requirement)
