@@ -40,12 +40,16 @@ const EXTRACT_COMMAND = 'Nsis7z::Extract "${FILE}"'
 const EXTRACT_WITH_DETAILS = 'Nsis7z::ExtractWithDetails "${FILE}" "' + EXTRACT_PROGRESS + '"'
 const COPY_FILES = 'CopyFiles /SILENT "$PLUGINSDIR\\7z-out\\*" $OUTDIR'
 const SET_OUT_PATH_7Z = 'SetOutPath "$PLUGINSDIR\\7z-out"'
+// electron-builder's own template closes this block with the lowercase-`e`
+// `${endIf}` alias. Match it verbatim: a pristine app-builder-lib is what CI
+// and a clean release checkout patch, and a near-miss here fails there while
+// an already-patched developer tree keeps passing.
 const DIRECTORY_NORMALIZATION = `\
     Function instFilesPre
       \${StrContains} $0 "\${APP_FILENAME}" $INSTDIR
       \${If} $0 == ""
         StrCpy $INSTDIR "$INSTDIR\\\${APP_FILENAME}"
-      \${EndIf}
+      \${endIf}
     FunctionEnd`
 const UPGRADE_SAFE_DIRECTORY_NORMALIZATION = `\
     Function instFilesPre
