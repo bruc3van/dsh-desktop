@@ -155,11 +155,29 @@ public static class DshWindowDump {
   throw "$What timed out after $TimeoutSeconds seconds"
 }
 
+# `Start-Process -Wait` waits for the process AND its descendants, and that is
+# load-bearing here: an NSIS uninstaller copies itself into TEMP, relaunches the
+# copy and lets the original exit immediately, so waiting only on the process
+# that was started returns while the uninstall is still running. -Wait cannot be
+# given a deadline though, so wait for the process explicitly and then for the
+# relaunched copy to go quiet, both inside the same budget.
+function Wait-ForInstallerFamilyQuiet([datetime]$Deadline) {
+  $names = @('Un_A', 'Un_B', 'Un_C', 'old-uninstaller')
+  while ((Get-Date) -lt $Deadline) {
+    $alive = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.Name })
+    if ($alive.Count -eq 0) { return }
+    Start-Sleep -Milliseconds 500
+  }
+  throw 'A relaunched NSIS uninstaller was still running past the deadline'
+}
+
 function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$TargetDir = '', [string]$LegacyDir = '') {
   Write-Step "run: $(Split-Path -Leaf $Path) $($Arguments -join ' ')"
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   $process = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru
   try {
     Wait-ForProcess $process "Installer $Path" $TimeoutSeconds
+    Wait-ForInstallerFamilyQuiet $deadline
   } catch {
     # How much of the install landed separates "never left .onInit" from "stuck
     # mid-extract", and the two point at completely different code.
@@ -206,6 +224,34 @@ function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeco
   Write-Step "done: $(Split-Path -Leaf $Path)"
 }
 
+function Test-LegacyUninstaller {
+  $probeDir = Join-Path $testRoot 'legacy-uninstaller-probe'
+  try {
+    Invoke-Installer $legacyInstaller @('/S', "/D=$probeDir")
+    $probeUninstaller = Join-Path $probeDir 'Uninstall DeepSeek Harness Desktop.exe'
+    if (-not (Test-Path -LiteralPath $probeUninstaller -PathType Leaf)) {
+      Write-Step 'probe: legacy uninstaller missing, skipped'
+      return
+    }
+    $before = @(Get-ChildItem -LiteralPath $probeDir -Recurse -File -ErrorAction SilentlyContinue).Count
+    # `_?=` must stay last and unquoted; $testRoot is asserted space-free above.
+    $probeArgs = @('/S', '/KEEP_APP_DATA', '/currentuser', '--updated', "_?=$probeDir")
+    Write-Step "probe: $(Split-Path -Leaf $probeUninstaller) $($probeArgs -join ' ')"
+    $probe = Start-Process -FilePath $probeUninstaller -ArgumentList $probeArgs -PassThru
+    Wait-ForProcess $probe 'Legacy uninstaller probe' 300
+    Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
+    $after = @(Get-ChildItem -LiteralPath $probeDir -Recurse -File -ErrorAction SilentlyContinue).Count
+    Write-Step "probe: exit code $($probe.ExitCode), files $before -> $after"
+  } catch {
+    Write-Step "probe: could not complete ($_)"
+  } finally {
+    Remove-Item -LiteralPath $productKey -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $legacyShortcut -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Remove-InstalledProduct {
   $registered = Get-ItemProperty -Path $uninstallKey -ErrorAction SilentlyContinue
   if ($null -eq $registered) {
@@ -222,6 +268,7 @@ function Remove-InstalledProduct {
   Write-Step "run: $(Split-Path -Leaf $uninstaller) /S /currentuser"
   $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', '/currentuser') -PassThru
   Wait-ForProcess $process "Existing product uninstaller $uninstaller" 300
+  Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
   if ($process.ExitCode -ne 0) {
     throw "Existing product cleanup exited with code $($process.ExitCode): $uninstaller"
   }
@@ -309,6 +356,7 @@ function Invoke-UpgradeScenario(
         Write-Step "cleanup: $(Split-Path -Leaf $cleanupUninstaller) /S /currentuser"
         $cleanup = Start-Process -FilePath $cleanupUninstaller -ArgumentList @('/S', '/currentuser') -PassThru
         Wait-ForProcess $cleanup "Cleanup uninstaller $cleanupUninstaller" 300
+        Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
         if ($cleanup.ExitCode -ne 0) {
           throw "Cleanup uninstaller exited with code $($cleanup.ExitCode): $cleanupUninstaller"
         }
@@ -363,6 +411,13 @@ try {
   # installed. Remove it before asking v0.2.2 to create the legacy fixture.
   Write-Step 'removing the freshly installed current build'
   Remove-InstalledProduct
+
+  # The upgrade fails because the legacy uninstaller returns 2 and removes
+  # nothing. Run it standalone, with the exact argument list electron-builder's
+  # uninstallOldVersion uses, to separate "this uninstaller cannot run silently
+  # at all" from "it only fails when the installer drives it". Reported, never
+  # fatal: the scenarios below are the actual contract.
+  Test-LegacyUninstaller
 
   # Covers UninstallString-parent recovery and proves /D= remains authoritative.
   Invoke-UpgradeScenario 'uninstaller-parent-explicit-target' $false $true
