@@ -341,6 +341,20 @@ jobs:
             throw "Installed NSIS runtime smoke failed with code $LASTEXITCODE"
           }
 
+      # Run last on Windows: this deliberately mutates the product's HKCU
+      # installer state and desktop shortcuts; cleanup failures fail the step.
+      - name: 缓存旧版 NSIS 测试夹具 / Cache legacy NSIS fixture
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\dsh-desktop-upgrade-fixtures
+          key: dsh-desktop-nsis-upgrade-v0.2.2-win-x64
+
+      - name: 验证旧版 NSIS 改名升级 / Smoke legacy NSIS rename upgrade
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/check-nsis-upgrade.ps1
+
       # macOS 侧的等价门禁：挂载刚生成的 DMG，把 .app 拷出来再跑一遍冒烟。
       # 此前 smoke:package 跑的是未打包的 .app 目录，DMG 本身从没被挂载过。
       #

@@ -339,3 +339,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Installed NSIS runtime smoke failed with code $LASTEXITCODE"
           }
+
+      # Run last: this deliberately mutates the product's HKCU installer state
+      # and desktop shortcuts, and its own cleanup failure must fail this step.
+      - name: 缓存旧版 NSIS 测试夹具 / Cache legacy NSIS fixture
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\dsh-desktop-upgrade-fixtures
+          key: dsh-desktop-nsis-upgrade-v0.2.2-win-x64
+
+      - name: 验证旧版 NSIS 改名升级 / Smoke legacy NSIS rename upgrade
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: ./scripts/check-nsis-upgrade.ps1

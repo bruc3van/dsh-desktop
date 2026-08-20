@@ -1,5 +1,5 @@
 /**
- * Make the Windows NSIS installer report what it is doing.
+ * Patch and verify the Windows NSIS install/upgrade experience.
  *
  * electron-builder packs the app as a 7z and extracts it with Nsis7z. Its
  * templates then silence the InstFiles list (`SetDetailsPrint none`), which is
@@ -8,9 +8,10 @@
  *
  * This module is both the `beforePack` hook (patches the installed
  * app-builder-lib copies, breaking pnpm hardlinks first) and
- * `pnpm run check:nsis-details` (proves the hook, the include, and the live
+ * `pnpm run check:nsis-details` (proves the hook, migration include, and live
  * templates still match). Silent installs keep `/S` behaviour: the print
- * change stays inside `${IfNot} ${Silent}`.
+ * change stays inside `${IfNot} ${Silent}` and upgrade recovery has an
+ * install-section hook of its own.
  *
  * Usage: node scripts/patch-nsis-install-details.mjs
  * @module desktop/scripts/patch-nsis-install-details
@@ -39,6 +40,43 @@ const EXTRACT_COMMAND = 'Nsis7z::Extract "${FILE}"'
 const EXTRACT_WITH_DETAILS = 'Nsis7z::ExtractWithDetails "${FILE}" "' + EXTRACT_PROGRESS + '"'
 const COPY_FILES = 'CopyFiles /SILENT "$PLUGINSDIR\\7z-out\\*" $OUTDIR'
 const SET_OUT_PATH_7Z = 'SetOutPath "$PLUGINSDIR\\7z-out"'
+const DIRECTORY_NORMALIZATION = `\
+    Function instFilesPre
+      \${StrContains} $0 "\${APP_FILENAME}" $INSTDIR
+      \${If} $0 == ""
+        StrCpy $INSTDIR "$INSTDIR\\\${APP_FILENAME}"
+      \${EndIf}
+    FunctionEnd`
+const UPGRADE_SAFE_DIRECTORY_NORMALIZATION = `\
+    Function instFilesPre
+      !ifmacrodef dshRestoreUnchangedInstallTarget
+        !insertmacro dshRestoreUnchangedInstallTarget
+      !endif
+      \${If} $dshExistingInstallFound == "true"
+      \${AndIf} $INSTDIR == $dshRecoveredInstallDir
+        Return
+      \${EndIf}
+      \${StrContains} $0 "\${APP_FILENAME}" $INSTDIR
+      \${If} $0 == ""
+        StrCpy $INSTDIR "$INSTDIR\\\${APP_FILENAME}"
+      \${EndIf}
+    FunctionEnd`
+const INSTALL_MODE_LEAVE = '\t\t!insertmacro MUI_PAGE_FUNCTION_CUSTOM LEAVE'
+const UPGRADE_SAFE_INSTALL_MODE_LEAVE = `\
+\t\t!ifmacrodef customInstallModeLeave
+\t\t\t!insertmacro customInstallModeLeave
+\t\t!endif
+
+${INSTALL_MODE_LEAVE}`
+const GENERIC_UNINSTALL_FAILURE = 'MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY OneMoreAttempt'
+const PRECISE_UNINSTALL_FAILURE = 'MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "旧版本卸载失败（退出码 $R0）。$\\r$\\n安装目录：$installationDir$\\r$\\n请查看详细信息后重试，或取消安装。 / Old version uninstall failed (exit code $R0).$\\r$\\nInstall directory: $installationDir" /SD IDCANCEL IDRETRY OneMoreAttempt'
+const INSTALL_SECTION_APP_EXE = 'StrCpy $appExe "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"'
+const PREPARE_UPGRADE_HOOK = `\
+!ifmacrodef customPrepareUpgrade
+  !insertmacro customPrepareUpgrade
+!endif
+
+${INSTALL_SECTION_APP_EXE}`
 
 /**
  * @param {string} installSection
@@ -99,13 +137,88 @@ export function patchNsisDetailsTemplates(installSection, extractAppPackage) {
 }
 
 /**
+ * Patch the two electron-builder upgrade behaviours that are unsafe across a
+ * product rename: directory-name appending and the generic "cannot close"
+ * wrapper around every legacy-uninstaller failure.
+ *
+ * @param {string} assistedInstaller
+ * @param {string} installUtil
+ * @param {string} multiUserUi
+ * @returns {{ assistedInstaller: string, installUtil: string, multiUserUi: string, assistedChanged: boolean, installUtilChanged: boolean, multiUserUiChanged: boolean, changed: boolean }}
+ */
+export function patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiUserUi) {
+  const directoryPatched = assistedInstaller.includes(UPGRADE_SAFE_DIRECTORY_NORMALIZATION)
+  const failurePatched = installUtil.includes(PRECISE_UNINSTALL_FAILURE)
+  const modeLeavePatched = multiUserUi.includes(UPGRADE_SAFE_INSTALL_MODE_LEAVE)
+  if (directoryPatched && failurePatched && modeLeavePatched) {
+    return {
+      assistedInstaller,
+      installUtil,
+      multiUserUi,
+      assistedChanged: false,
+      installUtilChanged: false,
+      multiUserUiChanged: false,
+      changed: false,
+    }
+  }
+  if (!directoryPatched && !assistedInstaller.includes(DIRECTORY_NORMALIZATION)) {
+    throw new Error('electron-builder NSIS assistedInstaller.nsh directory normalization changed, '
+      + 'or this repository changed its replacement text; reinstall app-builder-lib and retry')
+  }
+  if (!failurePatched && !installUtil.includes(GENERIC_UNINSTALL_FAILURE)) {
+    throw new Error('electron-builder NSIS installUtil.nsh uninstall failure handling changed')
+  }
+  if (!modeLeavePatched && !multiUserUi.includes(INSTALL_MODE_LEAVE)) {
+    throw new Error('electron-builder NSIS multiUserUi.nsh install-mode Leave hook changed')
+  }
+  return {
+    assistedInstaller: directoryPatched
+      ? assistedInstaller
+      : assistedInstaller.replace(DIRECTORY_NORMALIZATION, UPGRADE_SAFE_DIRECTORY_NORMALIZATION),
+    installUtil: failurePatched
+      ? installUtil
+      : installUtil.replace(GENERIC_UNINSTALL_FAILURE, PRECISE_UNINSTALL_FAILURE),
+    multiUserUi: modeLeavePatched
+      ? multiUserUi
+      : multiUserUi.replace(INSTALL_MODE_LEAVE, UPGRADE_SAFE_INSTALL_MODE_LEAVE),
+    assistedChanged: !directoryPatched,
+    installUtilChanged: !failurePatched,
+    multiUserUiChanged: !modeLeavePatched,
+    changed: true,
+  }
+}
+
+/**
+ * Add the project hook immediately before electron-builder captures $INSTDIR
+ * in $appExe and invokes the legacy uninstaller.
+ *
+ * @param {string} installSection
+ * @returns {{ installSection: string, changed: boolean }}
+ */
+export function patchNsisUpgradeInstallSection(installSection) {
+  if (installSection.includes(PREPARE_UPGRADE_HOOK)) {
+    return { installSection, changed: false }
+  }
+  if (!installSection.includes(INSTALL_SECTION_APP_EXE)) {
+    throw new Error('electron-builder NSIS installSection.nsh app executable initialization changed')
+  }
+  return {
+    installSection: installSection.replace(INSTALL_SECTION_APP_EXE, PREPARE_UPGRADE_HOOK),
+    changed: true,
+  }
+}
+
+/**
  * @param {string} appBuilderLibDir
- * @returns {{ installSection: string, extractAppPackage: string }}
+ * @returns {{ installSection: string, extractAppPackage: string, assistedInstaller: string, installUtil: string, multiUserUi: string }}
  */
 export function nsisTemplatePaths(appBuilderLibDir) {
   return {
     installSection: join(appBuilderLibDir, 'templates', 'nsis', 'installSection.nsh'),
     extractAppPackage: join(appBuilderLibDir, 'templates', 'nsis', 'include', 'extractAppPackage.nsh'),
+    assistedInstaller: join(appBuilderLibDir, 'templates', 'nsis', 'assistedInstaller.nsh'),
+    installUtil: join(appBuilderLibDir, 'templates', 'nsis', 'include', 'installUtil.nsh'),
+    multiUserUi: join(appBuilderLibDir, 'templates', 'nsis', 'multiUserUi.nsh'),
   }
 }
 
@@ -123,11 +236,28 @@ export function patchInstalledNsisTemplates() {
   const paths = nsisTemplatePaths(resolveAppBuilderLibDir())
   const installSection = readFileSync(paths.installSection, 'utf8')
   const extractAppPackage = readFileSync(paths.extractAppPackage, 'utf8')
-  const patched = patchNsisDetailsTemplates(installSection, extractAppPackage)
-  if (!patched.changed) return { changed: false, paths }
-  rewriteFile(paths.installSection, patched.installSection)
-  rewriteFile(paths.extractAppPackage, patched.extractAppPackage)
-  return { changed: true, paths }
+  const assistedInstaller = readFileSync(paths.assistedInstaller, 'utf8')
+  const installUtil = readFileSync(paths.installUtil, 'utf8')
+  const multiUserUi = readFileSync(paths.multiUserUi, 'utf8')
+  const details = patchNsisDetailsTemplates(installSection, extractAppPackage)
+  const upgrade = patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiUserUi)
+  const upgradeSection = patchNsisUpgradeInstallSection(details.installSection)
+  if (details.changed || upgradeSection.changed) {
+    rewriteFile(paths.installSection, upgradeSection.installSection)
+  }
+  if (details.changed) {
+    rewriteFile(paths.extractAppPackage, details.extractAppPackage)
+  }
+  if (upgrade.assistedChanged) {
+    rewriteFile(paths.assistedInstaller, upgrade.assistedInstaller)
+  }
+  if (upgrade.installUtilChanged) {
+    rewriteFile(paths.installUtil, upgrade.installUtil)
+  }
+  if (upgrade.multiUserUiChanged) {
+    rewriteFile(paths.multiUserUi, upgrade.multiUserUi)
+  }
+  return { changed: details.changed || upgrade.changed || upgradeSection.changed, paths }
 }
 
 /**
@@ -145,6 +275,22 @@ export function checkNsisInstallDetails() {
   }
   if (!installerNsh.includes('ShowInstDetails show')) {
     failures.push('resources/installer.nsh does not keep the InstFiles list open')
+  }
+  for (const requirement of [
+    'dshRecoveredInstallDir',
+    'dshExplicitInstallDir',
+    '!insertmacro GetDParameter $R0',
+    '!macro dshRestoreUnchangedInstallTarget',
+    '!macro customInstallModeLeave',
+    '"${UNINSTALL_REGISTRY_KEY}" InstallLocation',
+    '!macro customPrepareUpgrade',
+    'WriteRegStr SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation',
+    '!macro customInstall',
+    'CreateShortCut "$newDesktopLink"',
+  ]) {
+    if (!installerNsh.includes(requirement)) {
+      failures.push('resources/installer.nsh is missing upgrade recovery: ' + requirement)
+    }
   }
 
   let builderYml
@@ -176,11 +322,42 @@ export function checkNsisInstallDetails() {
   if (again.changed) failures.push('patching already-patched templates was not a no-op')
 
   try {
+    const upgrade = patchNsisUpgradeTemplates(FIXTURE_ASSISTED_INSTALLER, FIXTURE_INSTALL_UTIL, FIXTURE_MULTI_USER_UI)
+    if (!upgrade.changed) failures.push('upgrade fixture templates were already patched')
+    if (!upgrade.assistedInstaller.includes('$dshExistingInstallFound == "true"')
+      || !upgrade.assistedInstaller.includes('$INSTDIR == $dshRecoveredInstallDir')) {
+      failures.push('fixture assistedInstaller.nsh does not preserve an existing install directory')
+    }
+    if (!upgrade.multiUserUi.includes('customInstallModeLeave')) {
+      failures.push('fixture multiUserUi.nsh does not repair the directory before showing the directory page')
+    }
+    if (!upgrade.installUtil.includes('Old version uninstall failed (exit code $R0)')) {
+      failures.push('fixture installUtil.nsh does not report the legacy uninstaller exit code')
+    }
+    const upgradeAgain = patchNsisUpgradeTemplates(upgrade.assistedInstaller, upgrade.installUtil, upgrade.multiUserUi)
+    if (upgradeAgain.changed) failures.push('patching already-patched upgrade templates was not a no-op')
+    const upgradeSection = patchNsisUpgradeInstallSection(FIXTURE_UPGRADE_INSTALL_SECTION)
+    if (!upgradeSection.changed || !upgradeSection.installSection.includes('customPrepareUpgrade')) {
+      failures.push('fixture installSection.nsh does not prepare the recovered directory before uninstall')
+    }
+    if (patchNsisUpgradeInstallSection(upgradeSection.installSection).changed) {
+      failures.push('patching an already-patched upgrade install section was not a no-op')
+    }
+  } catch (error) {
+    failures.push('upgrade template fixture: ' + describe(error))
+  }
+
+  try {
     const live = nsisTemplatePaths(resolveAppBuilderLibDir())
     const installSection = readFileSync(live.installSection, 'utf8')
     const extractAppPackage = readFileSync(live.extractAppPackage, 'utf8')
+    const assistedInstaller = readFileSync(live.assistedInstaller, 'utf8')
+    const installUtil = readFileSync(live.installUtil, 'utf8')
+    const multiUserUi = readFileSync(live.multiUserUi, 'utf8')
     const blockers = nsisDetailsPatchBlockers(installSection, extractAppPackage)
     if (blockers.length > 0) failures.push(...blockers)
+    patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiUserUi)
+    patchNsisUpgradeInstallSection(installSection)
   } catch (error) {
     failures.push('app-builder-lib NSIS templates: ' + describe(error))
   }
@@ -202,6 +379,11 @@ export const FIXTURE_EXTRACT_APP = `\
  CopyFiles /SILENT "$PLUGINSDIR\\7z-out\\*" $OUTDIR
  Nsis7z::Extract "\${FILE}"
 `
+
+export const FIXTURE_ASSISTED_INSTALLER = DIRECTORY_NORMALIZATION
+export const FIXTURE_INSTALL_UTIL = GENERIC_UNINSTALL_FAILURE
+export const FIXTURE_MULTI_USER_UI = INSTALL_MODE_LEAVE
+export const FIXTURE_UPGRADE_INSTALL_SECTION = INSTALL_SECTION_APP_EXE
 
 function countOccurrences(source, search) {
   let count = 0
@@ -260,7 +442,7 @@ function rewriteFile(file, contents) {
 
 /**
  * electron-builder's beforePack hook. Mutates app-builder-lib templates in
- * place so the NSIS compile that follows picks up details printing.
+ * place so the NSIS compile that follows picks up details and upgrade safety.
  * @returns {void}
  */
 export default function beforePack() {
@@ -277,7 +459,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
       + 'reconcile resources/installer.nsh, electron-builder.yml, and scripts/patch-nsis-install-details.mjs.')
     process.exit(1)
   }
-  console.log('✓ NSIS installer include keeps the InstFiles list open')
+  console.log('✓ NSIS installer include keeps details visible and repairs renamed upgrades')
   console.log('✓ electron-builder.yml hooks ' + BEFORE_PACK)
-  console.log('✓ app-builder-lib NSIS templates still accept the details patch')
+  console.log('✓ app-builder-lib NSIS templates still accept the details and upgrade patches')
 }
