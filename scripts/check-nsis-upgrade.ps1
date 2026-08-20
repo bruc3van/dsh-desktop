@@ -306,6 +306,9 @@ function Test-SameVolumeUninstall {
     Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
     $after = @(Get-ChildItem -LiteralPath $sameVolumeRoot -Recurse -File -ErrorAction SilentlyContinue).Count
     Write-Step "probe D: exit code $($probe.ExitCode), files $before -> $after"
+    if ($after -eq $before) {
+      Test-NsisRenameBothVolumes $sameVolumeRoot 'probe D dir'
+    }
   } catch {
     Write-Step "probe D: could not complete ($_)"
   } finally {
@@ -321,6 +324,60 @@ function Test-SameVolumeUninstall {
 # the caller is hard-coded, not a diagnosis. Replay that exact operation here so
 # Windows reports the real error — sharing violation, access denied, or a path
 # that no longer fits MAX_PATH under the new prefix all look identical from NSIS.
+# NSIS's `Rename` is MoveFile without MOVEFILE_COPY_ALLOWED, so it cannot cross
+# volumes. [System.IO.File]::Move hides that difference — on .NET it falls back
+# to copy+delete and succeeds where NSIS would not — which is why the managed
+# replay moved every file the uninstaller had just refused. Call the same API
+# NSIS calls, so a failure here means a failure there.
+function Move-LikeNsis([string]$From, [string]$To) {
+  Add-Type -ErrorAction SilentlyContinue -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class DshNsisRename {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool MoveFileW(string from, string to);
+
+  // Returns null on success, the Win32 message on failure.
+  public static string Move(string from, string to) {
+    if (MoveFileW(from, to)) return null;
+    return new Win32Exception(Marshal.GetLastWin32Error()).Message;
+  }
+}
+'@
+  return [DshNsisRename]::Move($From, $To)
+}
+
+# Move one file out of the directory with NSIS's own semantics, to a staging
+# directory on the same volume and on the other one. The pair separates "NSIS
+# cannot rename across volumes" from "this file cannot be renamed at all".
+function Test-NsisRenameBothVolumes([string]$Directory, [string]$Label) {
+  try {
+    $sample = Get-ChildItem -LiteralPath $Directory -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $sample) {
+      Write-Step "$Label : no file to sample"
+      return
+    }
+    foreach ($root in @([System.IO.Path]::GetTempPath(), $env:RUNNER_TEMP)) {
+      $stage = Join-Path $root ('dsh-nsis-rename-' + [guid]::NewGuid().ToString('N'))
+      New-Item -ItemType Directory -Path $stage -Force | Out-Null
+      $destination = Join-Path $stage $sample.Name
+      $sameVolume = $sample.FullName.Substring(0, 1) -eq $stage.Substring(0, 1)
+      $failure = Move-LikeNsis $sample.FullName $destination
+      if ($null -eq $failure) {
+        Write-Step "$Label : MoveFileW to $($stage.Substring(0,2)) (same volume: $sameVolume) SUCCEEDED"
+        Move-LikeNsis $destination $sample.FullName | Out-Null
+      } else {
+        Write-Step "$Label : MoveFileW to $($stage.Substring(0,2)) (same volume: $sameVolume) FAILED — $failure"
+      }
+      Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  } catch {
+    Write-Step "$Label : could not complete ($_)"
+  }
+}
+
 function Test-AtomicRename([string]$Directory) {
   $stage = Join-Path ([System.IO.Path]::GetTempPath()) ('dsh-rename-probe-' + [guid]::NewGuid().ToString('N'))
   try {
@@ -395,6 +452,7 @@ function Test-LegacyUninstaller {
       Write-Step "probe B: exit code $($probeB.ExitCode), files $before -> $afterB"
     }
     if ($afterA -eq $before) {
+      Test-NsisRenameBothVolumes $probeDir 'legacy probe dir'
       Test-AtomicRename $probeDir
     }
   } catch {
