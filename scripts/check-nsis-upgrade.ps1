@@ -316,6 +316,47 @@ function Test-SameVolumeUninstall {
   }
 }
 
+# un.atomicRMDir renames every entry of $INSTDIR into $PLUGINSDIR\old-install
+# and returns the first path that would not move; the "File is busy" wording in
+# the caller is hard-coded, not a diagnosis. Replay that exact operation here so
+# Windows reports the real error — sharing violation, access denied, or a path
+# that no longer fits MAX_PATH under the new prefix all look identical from NSIS.
+function Test-AtomicRename([string]$Directory) {
+  $stage = Join-Path ([System.IO.Path]::GetTempPath()) ('dsh-rename-probe-' + [guid]::NewGuid().ToString('N'))
+  try {
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    Write-Step "rename probe: $Directory -> $stage"
+    $moved = 0
+    $failures = @()
+    foreach ($entry in Get-ChildItem -LiteralPath $Directory -Recurse -File -ErrorAction SilentlyContinue) {
+      $relative = $entry.FullName.Substring($Directory.Length).TrimStart('\')
+      $destination = Join-Path $stage $relative
+      try {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force -ErrorAction SilentlyContinue | Out-Null
+        [System.IO.File]::Move($entry.FullName, $destination)
+        $moved++
+      } catch {
+        $failures += [PSCustomObject]@{
+          Path   = $entry.FullName
+          Length = $entry.FullName.Length
+          Dest   = $destination
+          DestLength = $destination.Length
+          Error  = $_.Exception.Message
+        }
+        if ($failures.Count -ge 5) { break }
+      }
+    }
+    Write-Step "rename probe: $moved moved, $($failures.Count) failed"
+    if ($failures.Count -gt 0) {
+      $failures | Format-List | Out-String | Write-Host
+    }
+  } catch {
+    Write-Step "rename probe: could not complete ($_)"
+  } finally {
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Test-LegacyUninstaller {
   $probeDir = Join-Path $testRoot 'legacy-uninstaller-probe'
   try {
@@ -352,6 +393,9 @@ function Test-LegacyUninstaller {
       Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
       $afterB = @(Get-ChildItem -LiteralPath $probeDir -Recurse -File -ErrorAction SilentlyContinue).Count
       Write-Step "probe B: exit code $($probeB.ExitCode), files $before -> $afterB"
+    }
+    if ($afterA -eq $before) {
+      Test-AtomicRename $probeDir
     }
   } catch {
     Write-Step "probe: could not complete ($_)"
