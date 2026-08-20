@@ -28,6 +28,7 @@
     "check:smart-runtimes": "node scripts/check-smart-runtimes.mjs",
     "check:local-web-port": "node scripts/check-local-web-port.mjs",
     "check:identity": "node scripts/check-identity.mjs",
+    "check:permissions": "node scripts/check-permissions.mjs",
     "check:release-artifacts": "node scripts/check-release-artifacts.mjs",
     "check:runtime-lock": "node scripts/check-runtime-lock.mjs",
     "check:restart": "node scripts/check-restart.mjs",

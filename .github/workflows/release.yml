@@ -79,6 +79,9 @@ jobs:
       - name: 校验客户端身份指纹 / Verify client identity fingerprint
         run: pnpm run check:identity
 
+      - name: 校验 Web UI 权限策略 / Verify Web UI permission policy
+        run: pnpm run check:permissions
+
       # The download table, latest.json and electron-builder all encode the same
       # filename convention. A partial drift between them still builds, still
       # uploads, and still publishes — it just names files nobody built and

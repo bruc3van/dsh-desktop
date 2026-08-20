@@ -69,6 +69,7 @@ import {
   webSpawnArgs,
 } from './local-web-port.ts'
 import { officialDshPackageVersion } from './official-dsh-bin.ts'
+import { permissionGrantedForContext, windowsAppUserModelId } from './permission-policy.ts'
 
 /** The built bundle sits at <project>/.build/main.mjs. */
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
@@ -1454,6 +1455,34 @@ class WebUiManager {
 }
 
 let mainWindow: BrowserWindow | null = null
+const macFallbackNotificationIds = new Set<string>()
+let macDockBounceId: number | undefined
+
+function updateMacNotificationBadge(): void {
+  if (process.platform !== 'darwin') return
+  app.dock?.setBadge(macFallbackNotificationIds.size === 0 ? '' : String(macFallbackNotificationIds.size))
+}
+
+function clearMacNotificationAttention(id?: string): void {
+  if (process.platform !== 'darwin') return
+  if (id === undefined) macFallbackNotificationIds.clear()
+  else macFallbackNotificationIds.delete(id)
+  if (macDockBounceId !== undefined) {
+    app.dock?.cancelBounce(macDockBounceId)
+    macDockBounceId = undefined
+  }
+  updateMacNotificationBadge()
+}
+
+function requestMacNotificationAttention(id: string): void {
+  if (process.platform !== 'darwin' || id === '' || macFallbackNotificationIds.has(id)) return
+  macFallbackNotificationIds.add(id)
+  updateMacNotificationBadge()
+  const window = mainWindow
+  if (window !== null && !window.isDestroyed() && window.isVisible() && window.isFocused()) return
+  if (macDockBounceId === undefined) macDockBounceId = app.dock?.bounce('critical')
+}
+
 /** Whether a caller is waiting for the main window, as opposed to tray-only recovery. */
 let mainWindowRequested = false
 /** Whether the main window still shows the local loading document. */
@@ -2425,7 +2454,10 @@ function createWindow(): void {
   installPageContextMenu(mainWindow.webContents)
   mainWindow.once('ready-to-show', () => { mainWindow?.show() })
   mainWindow.on('show', () => { scheduleWindowHealthCheck('window shown') })
-  mainWindow.on('focus', () => { scheduleWindowHealthCheck('window focused') })
+  mainWindow.on('focus', () => {
+    scheduleWindowHealthCheck('window focused')
+    clearMacNotificationAttention()
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
     mainWindowRequested = false
@@ -3087,17 +3119,27 @@ function permissionTrustedSurface(contents: Electron.WebContents | null): boolea
 }
 
 /**
- * Permission decisions follow the bridge's trust model. Clipboard writes are
- * granted on the active target whether it is loopback or not — in Connect
- * mode the page is still the official UI the user chose, and its copy button
- * must keep working. Fullscreen is loopback-only: the only thing a remote
- * page gains from it is a screen the client's own chrome no longer frames.
+ * Permission decisions follow the bridge's trust model but use the requesting
+ * frame's URL. Electron passes null WebContents for notification checks and
+ * cross-origin sub-frame checks, so WebContents identity alone is neither
+ * sufficient nor always available.
  */
-function permissionGranted(contents: Electron.WebContents | null, permission: string): boolean {
-  if (permission !== 'clipboard-sanitized-write' && permission !== 'fullscreen') return false
-  if (contents === null || !permissionTrustedSurface(contents)) return false
-  if (permission === 'fullscreen') return originIsLoopback(appOrigin(contents.getURL()))
-  return true
+function permissionGranted(
+  contents: Electron.WebContents | null,
+  permission: string,
+  requestingUrl: string,
+  isMainFrame: boolean,
+): boolean {
+  const window = mainWindow
+  if (window === null || window.isDestroyed() || window.webContents.isDestroyed()) return false
+  if (contents !== null && contents !== window.webContents) return false
+  return permissionGrantedForContext({
+    permission,
+    visibleUrl: window.webContents.getURL(),
+    targetUrl: currentTarget(),
+    requestingUrl,
+    isMainFrame,
+  })
 }
 
 function broadcastUpdateState(state: UpdateState): void {
@@ -5510,16 +5552,27 @@ if (!gotLock) {
 
   void app.whenReady().then(async () => {
     app.setName('DSH Desktop')
+    // Installed Windows notifications must match electron-builder's shortcut
+    // identity. Development has no such shortcut, so use Electron's documented
+    // process.execPath identity (the Electron executable may still need to be
+    // pinned to Start for Windows to register its toast activator).
+    if (process.platform === 'win32') {
+      app.setAppUserModelId(windowsAppUserModelId(app.isPackaged, process.execPath))
+    }
     // Electron grants most permission requests when an app installs no
-    // handler. The official Web UI asks for none of them (its only clipboard
-    // use is writeText), and in Connect mode the page doing the asking is a
-    // remote origin — so: deny by default, grant only to the client's current
-    // target, and keep fullscreen loopback-only so a remote page cannot
-    // redraw the whole screen as a surface the client did not paint.
-    session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => {
-      callback(permissionGranted(contents, permission))
+    // handler. Grant the trusted loopback UI the ordinary desktop capabilities
+    // its plugins use, keep a custom remote origin narrower, and deny unrelated
+    // frames and device APIs. Both handlers are required: many Web APIs check
+    // first and request only after that check is denied.
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+      callback(permissionGranted(contents, permission, details.requestingUrl, details.isMainFrame))
     })
-    session.defaultSession.setPermissionCheckHandler((contents, permission) => permissionGranted(contents, permission))
+    session.defaultSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => permissionGranted(
+      contents,
+      permission,
+      details.requestingUrl ?? requestingOrigin,
+      details.isMainFrame,
+    ))
     session.defaultSession.setDevicePermissionHandler(() => false)
     // Downloads otherwise land in ~/Downloads silently. Only the client's own
     // active target may trigger one; anything else — a stray frame, an
@@ -5543,6 +5596,16 @@ if (!gotLock) {
     // and replaces the loading document with the official Web UI when ready.
     nativeTheme.on('updated', syncWindowBackgrounds)
     ipcMain.on('desktop:theme', onRendererTheme)
+    ipcMain.on('desktop:notification:fallback', (event, payload: unknown) => {
+      if (process.platform !== 'darwin' || !bridgeCaller(event).trusted || typeof payload !== 'object' || payload === null) return
+      const id = (payload as { id?: unknown }).id
+      if (typeof id !== 'string' || id === '' || id.length > 160 || macFallbackNotificationIds.size >= 99) return
+      requestMacNotificationAttention(id)
+    })
+    ipcMain.on('desktop:notification:clear', (event, id: unknown) => {
+      if (process.platform !== 'darwin' || !bridgeCaller(event).trusted || typeof id !== 'string' || id.length > 160) return
+      clearMacNotificationAttention(id)
+    })
     mainWindowRequested = true
     createWindow()
     const guiPathReady = restoreMacGuiPath()

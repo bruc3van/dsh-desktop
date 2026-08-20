@@ -16,6 +16,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { releaseNotesCss, renderReleaseNotes } from './release-notes.ts'
+import { installMacNotificationFallback } from './mac-notification-fallback.ts'
 
 /** Connection facts mirrored from the main process. */
 interface ConnectionStatus {
@@ -126,6 +127,15 @@ const local = {
   useSmart: (): void => { ipcRenderer.send('desktop:local:use-smart') },
 }
 
+const notificationFallback = {
+  post: (payload: { id: string; title: string; body: string; tag: string }): void => {
+    ipcRenderer.send('desktop:notification:fallback', payload)
+  },
+  clear: (id: string): void => {
+    ipcRenderer.send('desktop:notification:clear', id)
+  },
+}
+
 contextBridge.exposeInMainWorld('desktop', {
   platform: process.platform,
   versions: {
@@ -136,9 +146,18 @@ contextBridge.exposeInMainWorld('desktop', {
   connection,
   update,
   local,
+  ...process.platform === 'darwin' && { notificationFallback },
   /** Open the client's native connection-settings window (tray-era fallback). */
   openConnectionSettings: (): void => { ipcRenderer.send('desktop:open-connection-settings') },
 })
+
+// Current macOS artifacts are intentionally ad-hoc signed. Electron's native
+// UNNotification path is not reliable without a stable valid signature, so
+// preserve the Web Notification contract while rendering attention through
+// the Dock and an in-app toast. Windows and Linux retain the native API.
+if (process.platform === 'darwin') {
+  contextBridge.executeInMainWorld({ func: installMacNotificationFallback })
+}
 
 /**
  * The official UI owns appearance (light / dark / system). Window chrome

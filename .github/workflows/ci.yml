@@ -58,6 +58,9 @@ jobs:
       - name: 校验客户端身份指纹 / Verify client identity fingerprint
         run: pnpm run check:identity
 
+      - name: 校验 Web UI 权限策略 / Verify Web UI permission policy
+        run: pnpm run check:permissions
+
       - name: 校验发布产物命名约定 / Verify release artifact naming
         run: pnpm run check:release-artifacts
 
