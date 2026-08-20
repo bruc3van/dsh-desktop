@@ -550,7 +550,7 @@ console.log('\n# the pinned market carries what the docs promise')
   if (body !== '') {
     check('the pinned market can list and remove its own in-box seat',
       body.includes('dsh-desktop-seat.json') && body.includes('inBox'),
-      'the pinned dsh-desktop-safe-market does not read the ownership marker — bump the tarball in '
+      'the pinned dsh-desktop-safe-market does not read the ownership marker — bump the version in '
       + 'dsh-runtime/package.json to a release that does, or the removal path the README documents does not exist')
   }
 }
