@@ -452,6 +452,18 @@ function Test-LegacyUninstaller {
       Write-Step "probe B: exit code $($probeB.ExitCode), files $before -> $afterB"
     }
     if ($afterA -eq $before) {
+      # Everything so far infers the failure is un.atomicRMDir, from `Abort`
+      # being the only error level 2 on that path — but a Quit in un.onInit
+      # yields 2 as well. The `--updated` flag is what selects the atomicRMDir
+      # branch, so dropping only that flag separates the two for good.
+      Write-Step 'probe E (same arguments without --updated)'
+      $probeEArgs = @('/S', '/KEEP_APP_DATA', '/currentuser', "_?=$probeDir")
+      $probeE = Start-Process -FilePath $probeUninstaller -ArgumentList $probeEArgs -PassThru
+      Wait-ForProcess $probeE 'Uninstaller probe E' 300
+      Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
+      $afterE = @(Get-ChildItem -LiteralPath $probeDir -Recurse -File -ErrorAction SilentlyContinue).Count
+      Write-Step "probe E: exit code $($probeE.ExitCode), files $before -> $afterE"
+
       Test-NsisRenameBothVolumes $probeDir 'legacy probe dir'
       Test-AtomicRename $probeDir
     }
