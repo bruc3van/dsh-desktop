@@ -277,6 +277,45 @@ function Test-CurrentUninstaller {
   }
 }
 
+# The `--updated` uninstall renames $INSTDIR's contents into $PLUGINSDIR
+# before deleting them, and a rename cannot cross volumes. On this runner the
+# install fixtures sit on D: (RUNNER_TEMP) while $PLUGINSDIR follows TEMP to C:,
+# so that rename can never succeed here — while a real installation and TEMP
+# both live on C:. Install the same build under TEMP and run the identical
+# uninstall: if it succeeds there, the failure is this fixture's drive layout
+# and not something users can hit.
+function Test-SameVolumeUninstall {
+  $sameVolumeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('dsh-desktop-samevol-' + [guid]::NewGuid().ToString('N'))
+  try {
+    if ($sameVolumeRoot.Contains(' ')) {
+      Write-Step 'probe D: TEMP path contains spaces, skipped'
+      return
+    }
+    Write-Step "probe D: install root $sameVolumeRoot (same volume as PLUGINSDIR)"
+    Invoke-Installer $legacyInstaller @('/S', "/D=$sameVolumeRoot")
+    $un = Join-Path $sameVolumeRoot 'Uninstall DeepSeek Harness Desktop.exe'
+    if (-not (Test-Path -LiteralPath $un -PathType Leaf)) {
+      Write-Step 'probe D: uninstaller not found, skipped'
+      return
+    }
+    $before = @(Get-ChildItem -LiteralPath $sameVolumeRoot -Recurse -File -ErrorAction SilentlyContinue).Count
+    $probeDArgs = @('/S', '/KEEP_APP_DATA', '/currentuser', '--updated', "_?=$sameVolumeRoot")
+    Write-Step "probe D (same volume, --updated): $($probeDArgs -join ' ')"
+    $probe = Start-Process -FilePath $un -ArgumentList $probeDArgs -PassThru
+    Wait-ForProcess $probe 'Same-volume uninstaller probe' 300
+    Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
+    $after = @(Get-ChildItem -LiteralPath $sameVolumeRoot -Recurse -File -ErrorAction SilentlyContinue).Count
+    Write-Step "probe D: exit code $($probe.ExitCode), files $before -> $after"
+  } catch {
+    Write-Step "probe D: could not complete ($_)"
+  } finally {
+    Remove-Item -LiteralPath $productKey -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $legacyShortcut -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $sameVolumeRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Test-LegacyUninstaller {
   $probeDir = Join-Path $testRoot 'legacy-uninstaller-probe'
   try {
@@ -496,6 +535,7 @@ try {
   # at all" from "it only fails when the installer drives it". Reported, never
   # fatal: the scenarios below are the actual contract.
   Test-LegacyUninstaller
+  Test-SameVolumeUninstall
 
   # Covers UninstallString-parent recovery and proves /D= remains authoritative.
   Invoke-UpgradeScenario 'uninstaller-parent-explicit-target' $false $true
