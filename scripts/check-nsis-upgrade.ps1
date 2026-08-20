@@ -257,9 +257,10 @@ function Test-CurrentUninstaller {
     }
     $before = @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue).Count
     Write-ProcessesUnder $dir 'probe C before'
-    $args = @('/S', '/KEEP_APP_DATA', '/currentuser', '--updated', "_?=$dir")
-    Write-Step "probe C (current build, installer's argument list): $($args -join ' ')"
-    $probe = Start-Process -FilePath $un -ArgumentList $args -PassThru
+    # Not $args: that is an automatic variable in PowerShell.
+    $probeCArgs = @('/S', '/KEEP_APP_DATA', '/currentuser', '--updated', "_?=$dir")
+    Write-Step "probe C (current build, installer's argument list): $($probeCArgs -join ' ')"
+    $probe = Start-Process -FilePath $un -ArgumentList $probeCArgs -PassThru
     Wait-ForProcess $probe 'Current uninstaller probe' 300
     Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
     $after = @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue).Count
