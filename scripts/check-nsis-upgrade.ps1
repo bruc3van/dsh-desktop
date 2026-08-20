@@ -236,12 +236,30 @@ function Test-LegacyUninstaller {
     $before = @(Get-ChildItem -LiteralPath $probeDir -Recurse -File -ErrorAction SilentlyContinue).Count
     # `_?=` must stay last and unquoted; $testRoot is asserted space-free above.
     $probeArgs = @('/S', '/KEEP_APP_DATA', '/currentuser', '--updated', "_?=$probeDir")
-    Write-Step "probe: $(Split-Path -Leaf $probeUninstaller) $($probeArgs -join ' ')"
-    $probe = Start-Process -FilePath $probeUninstaller -ArgumentList $probeArgs -PassThru
-    Wait-ForProcess $probe 'Legacy uninstaller probe' 300
+
+    # Two ways to launch the same uninstaller, and the difference is the whole
+    # question. electron-builder's uninstallOldVersion copies it out to
+    # $PLUGINSDIR first and runs the copy; FIND_PROCESS asks whether any process
+    # runs from under $INSTDIR, so an in-place run matches itself and a copied
+    # run does not. If both fail, self-detection is not the explanation.
+    $copied = Join-Path $testRoot 'old-uninstaller.exe'
+    Copy-Item -LiteralPath $probeUninstaller -Destination $copied -Force
+    Write-Step "probe A (copied out, as the installer does): $($probeArgs -join ' ')"
+    $probeA = Start-Process -FilePath $copied -ArgumentList $probeArgs -PassThru
+    Wait-ForProcess $probeA 'Legacy uninstaller probe A' 300
     Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
-    $after = @(Get-ChildItem -LiteralPath $probeDir -Recurse -File -ErrorAction SilentlyContinue).Count
-    Write-Step "probe: exit code $($probe.ExitCode), files $before -> $after"
+    $afterA = @(Get-ChildItem -LiteralPath $probeDir -Recurse -File -ErrorAction SilentlyContinue).Count
+    Write-Step "probe A: exit code $($probeA.ExitCode), files $before -> $afterA"
+    Remove-Item -LiteralPath $copied -Force -ErrorAction SilentlyContinue
+
+    if ($afterA -eq $before) {
+      Write-Step "probe B (in place): $($probeArgs -join ' ')"
+      $probeB = Start-Process -FilePath $probeUninstaller -ArgumentList $probeArgs -PassThru
+      Wait-ForProcess $probeB 'Legacy uninstaller probe B' 300
+      Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
+      $afterB = @(Get-ChildItem -LiteralPath $probeDir -Recurse -File -ErrorAction SilentlyContinue).Count
+      Write-Step "probe B: exit code $($probeB.ExitCode), files $before -> $afterB"
+    }
   } catch {
     Write-Step "probe: could not complete ($_)"
   } finally {
