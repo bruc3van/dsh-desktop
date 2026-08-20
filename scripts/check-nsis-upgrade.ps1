@@ -249,12 +249,19 @@ function Test-CurrentUninstaller {
       Write-Step 'probe C: no current build registered, skipped'
       return
     }
-    $dir = [string]$registered.InstallLocation
-    $un = Join-Path $dir 'Uninstall DSH Desktop.exe'
-    if ($dir -eq '' -or -not (Test-Path -LiteralPath $un -PathType Leaf)) {
+    # InstallLocation is empty for this install, so take the uninstaller's own
+    # parent the way Remove-InstalledProduct does.
+    $uninstallString = [string]$registered.UninstallString
+    if ($uninstallString -notmatch '^"([^"]+)"') {
+      Write-Step 'probe C: cannot parse UninstallString, skipped'
+      return
+    }
+    $un = $Matches[1]
+    if (-not (Test-Path -LiteralPath $un -PathType Leaf)) {
       Write-Step 'probe C: current uninstaller not found, skipped'
       return
     }
+    $dir = Split-Path -Parent $un
     $before = @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue).Count
     Write-ProcessesUnder $dir 'probe C before'
     # Not $args: that is an automatic variable in PowerShell.
