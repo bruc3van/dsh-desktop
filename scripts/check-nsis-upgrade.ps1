@@ -3,6 +3,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Invoke-WebRequest renders a progress bar even on a redirected host, where it
+# only slows the transfer down and prints nothing useful.
+$ProgressPreference = 'SilentlyContinue'
 
 if ($env:CI -ne 'true') {
   throw 'check-nsis-upgrade.ps1 is destructive to the test product registry keys and may run only with CI=true'
@@ -38,11 +41,51 @@ if ($testRoot.Contains(' ')) {
   throw "NSIS upgrade fixture root must not contain spaces: $testRoot"
 }
 
-function Invoke-Installer([string]$Path, [string[]]$Arguments) {
-  $process = Start-Process -FilePath $Path -ArgumentList $Arguments -Wait -PassThru
+# Every installer this script runs is silent, so nothing it does reaches the
+# log on its own. Without these markers a hang is indistinguishable from a slow
+# download: the step simply prints nothing until the job hits its 45-minute
+# timeout. Print what is about to run, and bound how long it may take.
+function Write-Step([string]$Message) {
+  Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $Message)
+}
+
+# An NSIS installer that stops making progress never returns. That happened on
+# a GitHub runner (a silent upgrade over v0.2.2 sat until the job timed out),
+# and `Start-Process -Wait` gives no way to notice. Wait with a deadline, then
+# report which processes are still alive before failing — a headless runner
+# cannot answer a UAC consent prompt or any dialog without an /SD default, and
+# the process list is what tells those apart.
+function Wait-ForProcess([System.Diagnostics.Process]$Process, [string]$What, [int]$TimeoutSeconds) {
+  if ($Process.WaitForExit($TimeoutSeconds * 1000)) {
+    return
+  }
+  Write-Host "##[error]$What did not exit within $TimeoutSeconds seconds"
+  Write-Host 'Processes still running:'
+  # $ErrorActionPreference is Stop for the script as a whole; reading StartTime
+  # or Path on a process this account cannot open would otherwise turn the
+  # diagnostic dump itself into the failure being reported.
+  try {
+    Get-Process -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match 'dsh-desktop|DSH Desktop|DeepSeek|Uninstall|Un_|consent|msiexec' } |
+      Select-Object Id, Name, @{ n = 'Started'; e = { $_.StartTime } }, @{ n = 'Exe'; e = { $_.Path } } -ErrorAction SilentlyContinue |
+      Format-Table -AutoSize |
+      Out-String |
+      Write-Host
+  } catch {
+    Write-Host "  (process list unavailable: $_)"
+  }
+  try { $Process.Kill($true) } catch { }
+  throw "$What timed out after $TimeoutSeconds seconds"
+}
+
+function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300) {
+  Write-Step "run: $(Split-Path -Leaf $Path) $($Arguments -join ' ')"
+  $process = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru
+  Wait-ForProcess $process "Installer $Path" $TimeoutSeconds
   if ($process.ExitCode -ne 0) {
     throw "Installer $Path exited with code $($process.ExitCode)"
   }
+  Write-Step "done: $(Split-Path -Leaf $Path)"
 }
 
 function Remove-InstalledProduct {
@@ -58,10 +101,13 @@ function Remove-InstalledProduct {
   if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
     throw "Existing product uninstaller was not found: $uninstaller"
   }
-  $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', '/currentuser') -Wait -PassThru
+  Write-Step "run: $(Split-Path -Leaf $uninstaller) /S /currentuser"
+  $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', '/currentuser') -PassThru
+  Wait-ForProcess $process "Existing product uninstaller $uninstaller" 300
   if ($process.ExitCode -ne 0) {
     throw "Existing product cleanup exited with code $($process.ExitCode): $uninstaller"
   }
+  Write-Step "done: $(Split-Path -Leaf $uninstaller)"
   Remove-Item -LiteralPath $legacyShortcut -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $currentShortcut -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $productKey -Recurse -Force -ErrorAction SilentlyContinue
@@ -73,6 +119,7 @@ function Invoke-UpgradeScenario(
   [bool]$RemoveUninstallString,
   [bool]$UseExplicitTarget
 ) {
+  Write-Step "scenario: $Name"
   $scenarioRoot = Join-Path $testRoot $Name
   $legacyDir = Join-Path $scenarioRoot 'existing-custom-dir'
   $explicitDir = Join-Path $scenarioRoot 'new-explicit-dir'
@@ -141,7 +188,9 @@ function Invoke-UpgradeScenario(
     }
     if ($null -ne $cleanupUninstaller) {
       try {
-        $cleanup = Start-Process -FilePath $cleanupUninstaller -ArgumentList @('/S', '/currentuser') -Wait -PassThru
+        Write-Step "cleanup: $(Split-Path -Leaf $cleanupUninstaller) /S /currentuser"
+        $cleanup = Start-Process -FilePath $cleanupUninstaller -ArgumentList @('/S', '/currentuser') -PassThru
+        Wait-ForProcess $cleanup "Cleanup uninstaller $cleanupUninstaller" 300
         if ($cleanup.ExitCode -ne 0) {
           throw "Cleanup uninstaller exited with code $($cleanup.ExitCode): $cleanupUninstaller"
         }
@@ -163,6 +212,7 @@ function Invoke-UpgradeScenario(
 New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
+  Write-Step 'checking the cached v0.2.2 fixture'
   if (Test-Path -LiteralPath $legacyInstaller -PathType Leaf) {
     $cachedSha256 = (Get-FileHash -LiteralPath $legacyInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($cachedSha256 -ne $legacySha256) {
@@ -172,7 +222,9 @@ try {
   if (-not (Test-Path -LiteralPath $legacyInstaller -PathType Leaf)) {
     for ($attempt = 1; $attempt -le 3; $attempt++) {
       try {
-        Invoke-WebRequest -Uri $legacyUrl -OutFile $legacyInstaller -UseBasicParsing
+        Write-Step "download attempt $attempt : $legacyUrl"
+        Invoke-WebRequest -Uri $legacyUrl -OutFile $legacyInstaller -UseBasicParsing -TimeoutSec 300
+        Write-Step 'download complete'
         break
       } catch {
         Remove-Item -LiteralPath $legacyInstaller -Force -ErrorAction SilentlyContinue
@@ -191,6 +243,7 @@ try {
 
   # The preceding fresh-install smoke intentionally leaves the current build
   # installed. Remove it before asking v0.2.2 to create the legacy fixture.
+  Write-Step 'removing the freshly installed current build'
   Remove-InstalledProduct
 
   # Covers UninstallString-parent recovery and proves /D= remains authoritative.
