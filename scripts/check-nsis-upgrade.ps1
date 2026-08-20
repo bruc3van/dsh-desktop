@@ -83,6 +83,55 @@ function Wait-ForProcess([System.Diagnostics.Process]$Process, [string]$What, [i
   } catch {
     Write-Host "  (process detail unavailable: $_)"
   }
+  # The window text is the whole answer when an installer sits idle with a
+  # window open: a MessageBox that carries no /SD default is shown even in a
+  # silent install, and then nothing ever answers it. Reading the dialog's own
+  # text says which one it is; nothing else in the log can.
+  try {
+    Write-Host 'Windows owned by the waited-on process:'
+    Add-Type -ErrorAction SilentlyContinue -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class DshWindowDump {
+  delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+
+  public static List<string> ForProcess(uint pid) {
+    var found = new List<string>();
+    EnumWindows((h, l) => {
+      uint owner;
+      GetWindowThreadProcessId(h, out owner);
+      if (owner != pid) return true;
+      found.Add(Describe(h, ""));
+      EnumChildWindows(h, (c, l2) => { found.Add(Describe(c, "    ")); return true; }, IntPtr.Zero);
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+
+  static string Describe(IntPtr h, string indent) {
+    var cls = new StringBuilder(256);
+    GetClassNameW(h, cls, cls.Capacity);
+    var txt = new StringBuilder(2048);
+    GetWindowTextW(h, txt, txt.Capacity);
+    return indent + "[" + cls.ToString() + "] visible=" + IsWindowVisible(h) + " text=" + txt.ToString();
+  }
+}
+'@
+    foreach ($line in [DshWindowDump]::ForProcess([uint32]$Process.Id)) {
+      Write-Host "  $line"
+    }
+  } catch {
+    Write-Host "  (window dump unavailable: $_)"
+  }
   try {
     Write-Host 'Descendants of the waited-on process:'
     Get-CimInstance Win32_Process -Filter "ParentProcessId = $($Process.Id)" -ErrorAction SilentlyContinue |
@@ -106,7 +155,7 @@ function Wait-ForProcess([System.Diagnostics.Process]$Process, [string]$What, [i
   throw "$What timed out after $TimeoutSeconds seconds"
 }
 
-function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$TargetDir = '') {
+function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$TargetDir = '', [string]$LegacyDir = '') {
   Write-Step "run: $(Split-Path -Leaf $Path) $($Arguments -join ' ')"
   $process = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru
   try {
@@ -120,6 +169,7 @@ function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeco
     # from opposite ends. Recursing all of TEMP would be neither.
     $dirs = @()
     if ($TargetDir -ne '') { $dirs += $TargetDir }
+    if ($LegacyDir -ne '') { $dirs += $LegacyDir }
     $dirs += @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue |
       Select-Object -ExpandProperty FullName)
     foreach ($dir in $dirs) {
@@ -221,7 +271,7 @@ function Invoke-UpgradeScenario(
     if ($UseExplicitTarget) {
       $arguments += "/D=$explicitDir"
     }
-    Invoke-Installer $currentInstaller $arguments -TargetDir $targetDir
+    Invoke-Installer $currentInstaller $arguments -TargetDir $targetDir -LegacyDir $legacyDir
 
     $currentExe = Join-Path $targetDir 'DSH Desktop.exe'
     if (-not (Test-Path -LiteralPath $currentExe -PathType Leaf)) {
