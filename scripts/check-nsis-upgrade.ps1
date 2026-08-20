@@ -60,17 +60,45 @@ function Wait-ForProcess([System.Diagnostics.Process]$Process, [string]$What, [i
     return
   }
   Write-Host "##[error]$What did not exit within $TimeoutSeconds seconds"
-  Write-Host 'Processes still running:'
-  # $ErrorActionPreference is Stop for the script as a whole; reading StartTime
-  # or Path on a process this account cannot open would otherwise turn the
-  # diagnostic dump itself into the failure being reported.
+  # $ErrorActionPreference is Stop for the script as a whole; anything read here
+  # may fail on a process this account cannot open, and a diagnostic dump must
+  # never become the failure being reported.
+  #
+  # Three questions decide where an NSIS installer is stuck, and nothing else in
+  # the log answers them: does it own a window (a MessageBox with no /SD default
+  # blocks forever in a silent install), did it spawn anything (the legacy
+  # uninstaller and nsExec's shell both show up as children), and did it get as
+  # far as writing files (an empty target means it never left .onInit).
   try {
+    Write-Host 'The waited-on process:'
+    $Process.Refresh()
+    [PSCustomObject]@{
+      Id           = $Process.Id
+      Responding   = $Process.Responding
+      WindowHandle = $Process.MainWindowHandle
+      WindowTitle  = $Process.MainWindowTitle
+      CPUSeconds   = $Process.TotalProcessorTime.TotalSeconds
+      Threads      = $Process.Threads.Count
+    } | Format-List | Out-String | Write-Host
+  } catch {
+    Write-Host "  (process detail unavailable: $_)"
+  }
+  try {
+    Write-Host 'Descendants of the waited-on process:'
+    Get-CimInstance Win32_Process -Filter "ParentProcessId = $($Process.Id)" -ErrorAction SilentlyContinue |
+      Select-Object ProcessId, Name, CommandLine |
+      Format-List | Out-String | Write-Host
+  } catch {
+    Write-Host "  (child list unavailable: $_)"
+  }
+  try {
+    Write-Host 'Processes started in the last 15 minutes:'
+    $since = (Get-Date).AddMinutes(-15)
     Get-Process -ErrorAction SilentlyContinue |
-      Where-Object { $_.Name -match 'dsh-desktop|DSH Desktop|DeepSeek|Uninstall|Un_|consent|msiexec' } |
-      Select-Object Id, Name, @{ n = 'Started'; e = { $_.StartTime } }, @{ n = 'Exe'; e = { $_.Path } } -ErrorAction SilentlyContinue |
-      Format-Table -AutoSize |
-      Out-String |
-      Write-Host
+      Where-Object { $_.StartTime -gt $since } |
+      Sort-Object StartTime |
+      Select-Object Id, Name, @{ n = 'Started'; e = { $_.StartTime.ToString('HH:mm:ss') } } |
+      Format-Table -AutoSize | Out-String | Write-Host
   } catch {
     Write-Host "  (process list unavailable: $_)"
   }
@@ -78,10 +106,50 @@ function Wait-ForProcess([System.Diagnostics.Process]$Process, [string]$What, [i
   throw "$What timed out after $TimeoutSeconds seconds"
 }
 
-function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300) {
+function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$TargetDir = '') {
   Write-Step "run: $(Split-Path -Leaf $Path) $($Arguments -join ' ')"
   $process = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru
-  Wait-ForProcess $process "Installer $Path" $TimeoutSeconds
+  try {
+    Wait-ForProcess $process "Installer $Path" $TimeoutSeconds
+  } catch {
+    # How much of the install landed separates "never left .onInit" from "stuck
+    # mid-extract", and the two point at completely different code.
+    Write-Host 'What landed on disk:'
+    # NSIS unpacks into $PLUGINSDIR ($env:TEMP\ns*.tmp) and extracts the app 7z
+    # into a 7z-out folder under it, so these two answer "how far did it get"
+    # from opposite ends. Recursing all of TEMP would be neither.
+    $dirs = @()
+    if ($TargetDir -ne '') { $dirs += $TargetDir }
+    $dirs += @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty FullName)
+    foreach ($dir in $dirs) {
+      if (-not (Test-Path -LiteralPath $dir)) {
+        Write-Host "  $dir : absent"
+        continue
+      }
+      try {
+        $files = @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue)
+        $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+        Write-Host "  $dir : $($files.Count) files, $([math]::Round($bytes / 1MB, 1)) MB"
+      } catch {
+        Write-Host "  $dir : unreadable ($_)"
+      }
+    }
+    try {
+      Write-Host 'Registry at the time of the hang:'
+      foreach ($key in @($productKey, $uninstallKey)) {
+        $value = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+        if ($null -eq $value) {
+          Write-Host "  $key : absent"
+        } else {
+          Write-Host "  $key : InstallLocation=$($value.InstallLocation) UninstallString=$($value.UninstallString)"
+        }
+      }
+    } catch {
+      Write-Host "  (registry unreadable: $_)"
+    }
+    throw
+  }
   if ($process.ExitCode -ne 0) {
     throw "Installer $Path exited with code $($process.ExitCode)"
   }
@@ -153,7 +221,7 @@ function Invoke-UpgradeScenario(
     if ($UseExplicitTarget) {
       $arguments += "/D=$explicitDir"
     }
-    Invoke-Installer $currentInstaller $arguments
+    Invoke-Installer $currentInstaller $arguments -TargetDir $targetDir
 
     $currentExe = Join-Path $targetDir 'DSH Desktop.exe'
     if (-not (Test-Path -LiteralPath $currentExe -PathType Leaf)) {
