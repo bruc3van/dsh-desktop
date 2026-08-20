@@ -162,7 +162,15 @@ if (JSON.stringify(origins) !== '["http://127.0.0.1:3080","http://127.0.0.1:3110
 if (webProbeOrigins('http://127.0.0.1:3080', '    port: 3080\n').length !== 1) {
   throw new Error('the default origin was queued twice')
 }
+const withPinned = webProbeOrigins('http://127.0.0.1:3080', realPatch, [13080])
+if (JSON.stringify(withPinned) !== '["http://127.0.0.1:3080","http://127.0.0.1:13080","http://127.0.0.1:31104"]') {
+  throw new Error('a client-pinned port must sit after the default and before patch ports: ' + JSON.stringify(withPinned))
+}
+if (webProbeOrigins('http://127.0.0.1:3080', '', [3080, 0, 70000]).length !== 1) {
+  throw new Error('a pinned official/default or invalid extra port was queued')
+}
 console.log('✓ the default origin is probed first and never queued twice')
+console.log('✓ a client-pinned local port is probed with the patch-layer ports')
 
 // --- the updater's stop-before-installer ordering ---------------------------
 

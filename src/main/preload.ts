@@ -35,6 +35,8 @@ interface ConnectionStatus {
   npxCacheOutdated?: boolean
   /** Smart-mode sources currently enabled. Missing means all four. */
   smartRuntimes?: Array<'probe' | 'installed' | 'npx' | 'bundled'>
+  /** Bind port for a client-started dsh. 0 = random. */
+  localWebPort?: number
 }
 
 /** The connection bridge: read/save the Web UI origin through the main process. */
@@ -66,6 +68,19 @@ const connection = {
     ipcRenderer.invoke('desktop:connection:smartRuntimes', runtimes) as Promise<{
       saved: boolean
       smartRuntimes: Array<'probe' | 'installed' | 'npx' | 'bundled'>
+      error?: string
+    }>,
+  /** Bind port for a client-started dsh. 0 / blank = random. */
+  setLocalWebPort: (port: number | string): Promise<{
+    saved: boolean
+    localWebPort: number
+    applied?: boolean
+    error?: string
+  }> =>
+    ipcRenderer.invoke('desktop:connection:localWebPort', port) as Promise<{
+      saved: boolean
+      localWebPort: number
+      applied?: boolean
       error?: string
     }>,
 }
@@ -639,7 +654,8 @@ function injectEnhance(panel: Element): void {
         + 'transition:transform .15s ease}',
       '#' + ENHANCE_ID + ' .dsh-enhance-toggle[aria-checked="true"] .dsh-enhance-toggle-thumb{transform:translateX(18px)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-modes{flex-wrap:wrap;margin:0 0 4px}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-smart[hidden],#' + ENHANCE_ID + ' .dsh-enhance-custom[hidden]{display:none}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-smart[hidden],#' + ENHANCE_ID + ' .dsh-enhance-custom[hidden],'
+        + '#' + ENHANCE_ID + ' #dsh-enhance-port-block[hidden]{display:none}',
       '#' + ENHANCE_ID + ' .dsh-enhance-runtimes{flex-wrap:wrap;margin-top:8px}',
       '#' + ENHANCE_ID + ' .dsh-enhance-runtime{padding:5px 12px}',
       '#' + UPDATE_ID + '{margin:0;padding:16px 0;border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
@@ -695,6 +711,18 @@ function injectEnhance(panel: Element): void {
     + runtimePick('bundled', '客户端内置', '用安装包自带的官方运行时，不用另装 Node 或 dsh。')
     + '</div>'
     + '<p class="dsh-enhance-note" id="dsh-enhance-runtimeNote">关掉的来源会跳过。至少保留一种。</p>'
+    + '<p class="dsh-enhance-note" style="margin-top:14px">本地服务端口</p>'
+    + '<div class="dsh-enhance-row dsh-enhance-runtimes" role="radiogroup" aria-label="本地服务端口">'
+    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" id="dsh-enhance-port-random" type="button">随机</button>'
+    + '<button class="dsh-enhance-button dsh-enhance-runtime" id="dsh-enhance-port-fixed" type="button">固定</button>'
+    + '</div>'
+    + '<div id="dsh-enhance-port-block" hidden>'
+    + '<div class="dsh-enhance-row" style="margin-top:8px">'
+    + '<input class="dsh-enhance-input" id="dsh-enhance-port" spellcheck="false" inputmode="numeric" placeholder="例如 13080">'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-port-save" type="button">保存</button>'
+    + '</div>'
+    + '</div>'
+    + '<p class="dsh-enhance-note" id="dsh-enhance-portNote">仅影响客户端自己启动的 dsh。默认随机，不占用 3080。被占用时不会换口。</p>'
     + '</div>'
     + '<div class="dsh-enhance-custom" id="dsh-enhance-custom" hidden>'
     + '<div class="dsh-enhance-row" style="margin-top:10px">'
@@ -720,7 +748,49 @@ function injectEnhance(panel: Element): void {
   const smartBlockEl = block.querySelector('#dsh-enhance-smart') as HTMLElement
   const customBlockEl = block.querySelector('#dsh-enhance-custom') as HTMLElement
   const runtimeNoteEl = block.querySelector('#dsh-enhance-runtimeNote') as HTMLElement
+  const portRandomEl = block.querySelector('#dsh-enhance-port-random') as HTMLButtonElement
+  const portFixedEl = block.querySelector('#dsh-enhance-port-fixed') as HTMLButtonElement
+  const portBlockEl = block.querySelector('#dsh-enhance-port-block') as HTMLElement
+  const portEl = block.querySelector('#dsh-enhance-port') as HTMLInputElement
+  const portNoteEl = block.querySelector('#dsh-enhance-portNote') as HTMLElement
   const runtimeDefaultNote = '关掉的来源会跳过。至少保留一种。'
+  const paintPort = (port: number | undefined): void => {
+    const n = port !== undefined && port > 0 ? port : 0
+    const fixed = n > 0
+    portRandomEl.classList.toggle('dsh-enhance-switch', !fixed)
+    portFixedEl.classList.toggle('dsh-enhance-switch', fixed)
+    portBlockEl.hidden = !fixed
+    if (fixed) portEl.value = String(n)
+  }
+  const savePort = (value: number | string): void => {
+    void connection.setLocalWebPort(value).then((result) => {
+      paintPort(result.localWebPort)
+      portNoteEl.textContent = result.saved
+        ? (result.applied === true
+          ? (result.localWebPort > 0 ? '已固定端口，正在重新启动本地服务…' : '已改回随机端口，正在重新启动本地服务…')
+          : '已保存')
+        : ('保存失败：' + (result.error ?? '未知错误'))
+    }, (error: unknown) => {
+      const text = error instanceof Error ? error.message : String(error)
+      portNoteEl.textContent = '保存失败：' + (text.includes('sender is not the active Web UI')
+        ? '正在重新启动本地服务，请稍后再试' : text)
+    })
+  }
+  portRandomEl.addEventListener('click', () => { paintPort(0); savePort(0) })
+  portFixedEl.addEventListener('click', () => {
+    portRandomEl.classList.remove('dsh-enhance-switch')
+    portFixedEl.classList.add('dsh-enhance-switch')
+    portBlockEl.hidden = false
+    portEl.focus()
+  })
+  block.querySelector('#dsh-enhance-port-save')?.addEventListener('click', () => {
+    const value = portEl.value.trim()
+    if (value === '') {
+      portNoteEl.textContent = '请输入端口'
+      return
+    }
+    savePort(value)
+  })
   const paintMode = (mode: 'smart' | 'connect'): void => {
     const custom = mode === 'connect'
     modeSmartEl.setAttribute('aria-checked', custom ? 'false' : 'true')
@@ -805,29 +875,65 @@ function injectEnhance(panel: Element): void {
       button.classList.toggle('dsh-enhance-switch', id !== null && on.has(id as typeof allRuntimes[number]))
     }
   }
+  type SmartRuntimePick = 'probe' | 'installed' | 'npx' | 'bundled'
+  let runtimeSaveBusy = false
+  let runtimeSaveQueued: SmartRuntimePick[] | undefined
+  const selectedRuntimes = (): SmartRuntimePick[] => runtimeButtons
+    .filter((entry) => entry.classList.contains('dsh-enhance-switch'))
+    .map((entry) => entry.getAttribute('data-smart-runtime'))
+    .filter((entry): entry is SmartRuntimePick => entry !== null)
+  const bridgeFailure = (error: unknown): string => {
+    const text = error instanceof Error ? error.message : String(error)
+    if (text.includes('sender is not the active Web UI') || text.includes('Render frame was disposed')) {
+      return '正在重新启动本地服务，请稍后再试'
+    }
+    return text
+  }
+  const commitRuntimes = (ids: SmartRuntimePick[]): void => {
+    paintRuntimes(ids)
+    runtimeNoteEl.textContent = '正在更新智能连接来源…'
+    if (runtimeSaveBusy) {
+      runtimeSaveQueued = ids
+      return
+    }
+    runtimeSaveBusy = true
+    void connection.setSmartRuntimes(ids).then((result) => {
+      runtimeSaveBusy = false
+      if (runtimeSaveQueued !== undefined) {
+        const queued = runtimeSaveQueued
+        runtimeSaveQueued = undefined
+        commitRuntimes(queued)
+        return
+      }
+      paintRuntimes(result.smartRuntimes)
+      runtimeNoteEl.textContent = result.saved
+        ? '已更新智能连接来源'
+        : ('保存失败：' + (result.error ?? '至少保留一种来源'))
+    }, (error: unknown) => {
+      runtimeSaveBusy = false
+      if (runtimeSaveQueued !== undefined) {
+        const queued = runtimeSaveQueued
+        runtimeSaveQueued = undefined
+        commitRuntimes(queued)
+        return
+      }
+      runtimeNoteEl.textContent = '保存失败：' + bridgeFailure(error)
+      void connection.getStatus().then((status) => { paintRuntimes(status.smartRuntimes) }, () => {})
+    })
+  }
   for (const button of runtimeButtons) {
     button.addEventListener('click', () => {
       const id = button.getAttribute('data-smart-runtime')
       if (id === null) return
-      const current = runtimeButtons
-        .filter((entry) => entry.classList.contains('dsh-enhance-switch'))
-        .map((entry) => entry.getAttribute('data-smart-runtime'))
-        .filter((entry): entry is 'probe' | 'installed' | 'npx' | 'bundled' => entry !== null)
-      const next = current.includes(id as typeof current[number])
+      const current = selectedRuntimes()
+      const next = current.includes(id as SmartRuntimePick)
         ? current.filter((entry) => entry !== id)
-        : [...current, id as typeof current[number]]
+        : [...current, id as SmartRuntimePick]
       if (next.length === 0) {
         runtimeNoteEl.textContent = '至少保留一种来源'
         return
       }
-      void connection.setSmartRuntimes(next).then((result) => {
-        paintRuntimes(result.smartRuntimes)
-        runtimeNoteEl.textContent = result.saved
-          ? '已更新智能连接来源'
-          : ('保存失败：' + (result.error ?? '至少保留一种来源'))
-      }, (error: unknown) => {
-        runtimeNoteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
-      })
+      commitRuntimes(next)
     })
     const tip = button.getAttribute('data-tip') ?? ''
     button.addEventListener('mouseenter', () => { runtimeNoteEl.textContent = tip })
@@ -861,6 +967,7 @@ function injectEnhance(panel: Element): void {
     urlEl.value = status.savedServerUrl
     paintMode(status.selectedMode)
     paintRuntimes(status.smartRuntimes)
+    paintPort(status.localWebPort)
   }).catch(() => { statusEl.textContent = '连接状态不可用' })
   panel.appendChild(block)
 }

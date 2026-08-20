@@ -20,6 +20,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { createServer } from 'node:http'
+import { createConnection } from 'node:net'
 import { createRequire } from 'node:module'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
@@ -59,6 +60,15 @@ import {
   validateSmartRuntimes,
   type SmartRuntimeId,
 } from './smart-runtimes.ts'
+import {
+  isOfficialWebPort,
+  localWebPortRangeLabel,
+  NO_OPEN_SINCE,
+  normalizeLocalWebPort,
+  parseLocalWebPort,
+  webSpawnArgs,
+} from './local-web-port.ts'
+import { officialDshPackageVersion } from './official-dsh-bin.ts'
 
 /** The built bundle sits at <project>/.build/main.mjs. */
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
@@ -118,6 +128,12 @@ interface ClientSettings {
    * Missing means all four (legacy). An empty list is refused on save.
    */
   smartRuntimes?: SmartRuntimeId[]
+  /**
+   * Bind port for a `dsh web` this client starts. Missing or 0 means
+   * `--port 0` (OS-assigned). A positive value is passed as `--port` on that
+   * spawn only — never written into the shared profile patch layer.
+   */
+  localWebPort?: number
 }
 
 function loadSettings(): ClientSettings {
@@ -185,6 +201,10 @@ function patchSettings(patch: Partial<ClientSettings> = {}, unset: readonly (key
   if (!skip.has('smartRuntimes')) {
     const parsed = validateSmartRuntimes(merged.smartRuntimes)
     if (parsed !== undefined) next.smartRuntimes = parsed
+  }
+  if (!skip.has('localWebPort')) {
+    const parsed = normalizeLocalWebPort(merged.localWebPort)
+    if (parsed > 0) next.localWebPort = parsed
   }
   if (!skip.has('updateDismissedVersion') && merged.updateDismissedVersion !== undefined) {
     next.updateDismissedVersion = merged.updateDismissedVersion
@@ -519,6 +539,17 @@ function enabledSmartRuntimes(): SmartRuntimeId[] {
   return normalizeSmartRuntimes(loadSettings().smartRuntimes)
 }
 
+/** The bind port a client-started `dsh web` will request. 0 = random. */
+function configuredLocalWebPort(): number {
+  return normalizeLocalWebPort(loadSettings().localWebPort)
+}
+
+/** True when this runtime's CLI accepts `--no-open` (and would open a browser without it). */
+function runtimeSupportsNoOpen(version: string | undefined): boolean {
+  if (version === undefined || version.trim() === '') return false
+  return compareVersions(version, NO_OPEN_SINCE) >= 0
+}
+
 /** The user-installed dsh Smart mode would spawn next, if any. */
 function selectedInstalledDsh(): InstalledDsh | undefined {
   const enabled = enabledSmartRuntimes()
@@ -589,6 +620,44 @@ async function readCommandVersion(command: string, shell: boolean, timeoutMs = 1
       finish(code === 0 ? parseVersionOutput(stdout) : undefined)
     })
   })
+}
+
+/**
+ * Sync `--version` for a spawn that is about to happen anyway. Used by the
+ * DSH_DESKTOP_DSH override: resolveDshCommand is synchronous, and without a
+ * version the `--no-open` gate treats rc.8+ as too old and the system
+ * browser opens beside this window.
+ */
+function readCommandVersionSync(
+  command: string,
+  args: readonly string[] = [],
+  shell = false,
+  timeoutMs = 5_000,
+): string | undefined {
+  try {
+    const result = spawnSync(command, [...args, '--version'], {
+      cwd: homedir(),
+      env: process.env,
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      shell,
+      ...SPAWN_NO_WINDOW,
+    })
+    if (result.status !== 0 || typeof result.stdout !== 'string') return undefined
+    return parseVersionOutput(result.stdout)
+  } catch {
+    return undefined
+  }
+}
+
+let overrideDshVersionCache: { key: string; version: string | undefined } | undefined
+
+function versionForOverride(key: string, read: () => string | undefined): string | undefined {
+  if (overrideDshVersionCache?.key === key) return overrideDshVersionCache.version
+  const version = read()
+  overrideDshVersionCache = { key, version }
+  return version
 }
 
 /**
@@ -1007,11 +1076,14 @@ function resolveDshCommand(): DshCommand {
     // rejects it with EFTYPE; POSIX only works because of the shebang. Run it
     // on the same Node the bundled runtime uses.
     if (/\.[cm]?js$/i.test(explicit)) {
+      const command = nodeForChild()
       return {
-        command: nodeForChild(),
+        command,
         args: [explicit],
         label: explicit,
         source: 'override',
+        version: versionForOverride(explicit, () =>
+          readCommandVersionSync(command, [explicit]) ?? officialDshPackageVersion(explicit)),
       }
     }
     // Same spawn rules as a PATH install: a Windows `.cmd` override is a
@@ -1023,6 +1095,9 @@ function resolveDshCommand(): DshCommand {
       ...target.shell && { shell: true },
       label: explicit,
       source: 'override',
+      version: versionForOverride(explicit, () =>
+        readCommandVersionSync(target.command, [], target.shell === true)
+        ?? officialDshPackageVersion(explicit)),
     }
   }
   const enabled = enabledSmartRuntimes()
@@ -1050,7 +1125,15 @@ function resolveDshCommand(): DshCommand {
       const bin = join(siblings, name, 'apps', 'cli', 'lib', 'bin.js')
       if (existsSync(bin)) {
         const node = process.env.DSH_DESKTOP_NODE ?? 'node'
-        return { command: node, args: [runtimeLauncher()], entry: bin, binPath: bin, label: bin, source: 'checkout' }
+        return {
+          command: node,
+          args: [runtimeLauncher()],
+          entry: bin,
+          binPath: bin,
+          label: bin,
+          source: 'checkout',
+          version: officialDshPackageVersion(bin),
+        }
       }
     }
     return { command: 'dsh', args: [], label: 'dsh', source: 'path' }
@@ -1063,10 +1146,12 @@ function resolveDshCommand(): DshCommand {
  * The line comes from a child's stdout, so the value is only accepted as a
  * navigation target after it parses as an http(s) URL — the window must never
  * be pointed at a `file:`/`javascript:` string a damaged or substituted
- * runtime happened to print.
+ * runtime happened to print. rc.8 also prints
+ * `dsh web: opening the default browser; pass --no-open to disable`; requiring
+ * an http(s) URL keeps that diagnostic from being mistaken for readiness.
  */
 function parseReadiness(line: string): string | undefined {
-  const match = /^dsh web:\s+(\S+)/.exec(line)
+  const match = /^dsh web:\s+(https?:\/\/\S+)/i.exec(line)
   const candidate = match?.[1]
   if (candidate === undefined) return undefined
   try {
@@ -1190,7 +1275,9 @@ class WebUiManager {
     this.lastCommand = dsh
     applyBundledPluginSeat(dsh)
     const pnpm = bundledPnpmEntry()
-    const child = spawn(dsh.command, [...dsh.args, 'web', '--port', '0'], {
+    const port = configuredLocalWebPort()
+    const version = dsh.version ?? (dsh.source === 'bundled' ? bundledDshVersion() ?? undefined : undefined)
+    const child = spawn(dsh.command, [...dsh.args, ...webSpawnArgs(port, runtimeSupportsNoOpen(version))], {
       cwd: childHome(),
       env: {
         ...process.env,
@@ -1416,6 +1503,18 @@ let connectionGeneration = 0
 let replacingLocalRuntime = false
 /** Last Smart-mode source apply; a faster toggle supersedes an in-flight stop. */
 let smartRuntimeApply = 0
+/**
+ * Loopback origin still painted while a Smart-mode source/port apply has
+ * already cleared `currentTarget` (or already named the next child). The
+ * injected settings card keeps sending from that document until navigation
+ * actually replaces it; without this, a second toggle during the restart
+ * is denied as "sender is not the active Web UI".
+ */
+let smartBridgeHandoffOrigin: string | undefined
+/** Occupancy + persist of source toggles: the latest click must not race. */
+let smartRuntimesSaveChain: Promise<void> = Promise.resolve()
+/** Occupancy + persist of a local bind: a later click must invalidate an earlier one. */
+let localWebPortSaveEpoch = 0
 /** Avoid concurrent health probes and reload loops after sleep/wake churn. */
 let windowRecoveryInFlight = false
 let lastAutomaticReloadAt = 0
@@ -1442,21 +1541,24 @@ function defaultWebProbeUrl(): string {
   return devOverride('DSH_DESKTOP_PROBE_URL') ?? 'http://127.0.0.1:3080'
 }
 
-/** Default origin plus any port the user pinned in the web profile's patch layer. */
-function smartProbeUrls(): string[] {
+/** Default origin plus any port the user pinned in the web profile's patch layer
+ *  or in this client's local-bind setting. */
+function smartProbeUrls(extraPorts: readonly number[] = []): string[] {
+  const pinned = configuredLocalWebPort()
+  const extras = pinned > 0 ? [...extraPorts, pinned] : [...extraPorts]
   const patch = join(childHome(), 'profiles', WEB_PROFILE, 'cordis.patch.yml')
   let source: string
   try {
     source = readFileSync(patch, 'utf8')
   } catch {
-    return [defaultWebProbeUrl()]
+    return webProbeOrigins(defaultWebProbeUrl(), '', extras)
   }
-  return webProbeOrigins(defaultWebProbeUrl(), source)
+  return webProbeOrigins(defaultWebProbeUrl(), source, extras)
 }
 
 /** The first origin a real harness answers on, or undefined when none does. */
-async function probeSmartTargets(): Promise<string | undefined> {
-  const urls = smartProbeUrls()
+async function probeSmartTargets(extraPorts: readonly number[] = []): Promise<string | undefined> {
+  const urls = smartProbeUrls(extraPorts)
   for (const url of urls) {
     const answered = await probeWebUi(url)
     if (answered !== undefined) return answered
@@ -1555,6 +1657,26 @@ async function probeWebUi(base: string, timeoutMs = 1_500): Promise<string | und
   } catch {
     return undefined
   }
+}
+
+/**
+ * Whether anything is accepting TCP on this loopback port. Used to refuse a
+ * pinned bind that would fail with EADDRINUSE — including an unrelated
+ * process that is not a dsh (probeWebUi would miss those).
+ */
+function loopbackPortHeld(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: '127.0.0.1', port })
+    const finish = (held: boolean): void => {
+      socket.removeAllListeners()
+      socket.destroy()
+      resolve(held)
+    }
+    socket.setTimeout(300)
+    socket.once('connect', () => { finish(true) })
+    socket.once('timeout', () => { finish(false) })
+    socket.once('error', () => { finish(false) })
+  })
 }
 
 /**
@@ -2379,6 +2501,7 @@ function createWindow(): void {
   // (an nginx "400 The plain HTTP request was sent to HTTPS port", say) as if
   // it were the app, with no way back. The status is the failure.
   mainWindow.webContents.on('did-navigate', (_event, url, httpResponseCode, httpStatusText) => {
+    releaseSmartBridgeHandoff(url)
     const target = currentTarget()
     if (!quitting && !url.startsWith('data:') && httpResponseCode < 400
       && target !== undefined && appOrigin(url) === appOrigin(target)) {
@@ -2403,6 +2526,7 @@ function createWindow(): void {
   // configured page responds. Reloads and reconnects are deduplicated by the
   // scheduler below.
   mainWindow.webContents.on('did-finish-load', () => {
+    releaseSmartBridgeHandoff(mainWindow?.webContents.getURL() ?? '')
     if (!targetNavigationSucceeded) return
     const target = currentTarget()
     if (target === undefined) return
@@ -2462,7 +2586,7 @@ function openSettingsWindow(): void {
   }
   settingsWindow = new BrowserWindow({
     width: 480,
-    height: 660,
+    height: 720,
     title: '连接设置',
     // Without this the window keeps Electron's own default icon in its title
     // bar and taskbar entry — the one place the client still looked like a
@@ -2684,6 +2808,7 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     selectedMode: usesConfiguredServer(settings) ? 'connect' : 'smart',
     canSwitch: savedServerUrl !== undefined,
     smartRuntimes: enabledSmartRuntimes(),
+    localWebPort: configuredLocalWebPort(),
     ...includeLocalDetail && webUi?.pid() !== undefined && { childPid: webUi.pid() },
     ...includeLocalDetail && webUi?.lastError !== null && webUi?.lastError !== undefined && { lastError: webUi.lastError },
     // Which dsh the local child came from. Names a path on this machine, so it
@@ -2740,10 +2865,42 @@ function bridgeCaller(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent
     return UNTRUSTED_CALLER
   }
   if (frameUrl.startsWith('data:')) return { trusted: loadingDocumentActive || errorDocumentActive, remote: false }
-  const target = currentTarget()
   const origin = appOrigin(frameUrl)
-  if (target === undefined || origin === '' || origin !== appOrigin(target)) return UNTRUSTED_CALLER
-  return { trusted: true, remote: !originIsLoopback(origin) }
+  if (origin === '') return UNTRUSTED_CALLER
+  const target = currentTarget()
+  if (target !== undefined && origin === appOrigin(target)) {
+    return { trusted: true, remote: !originIsLoopback(origin) }
+  }
+  // Source / port apply stops the child before the window leaves the previous
+  // loopback UI. A remote Connect page left on screen after the target moved
+  // stays untrusted; only that handoff origin may keep driving the bridge.
+  if (smartBridgeHandoffOrigin !== undefined && origin === smartBridgeHandoffOrigin) {
+    return { trusted: true, remote: false }
+  }
+  return UNTRUSTED_CALLER
+}
+
+function loopbackPageOrigin(value: string): string | undefined {
+  if (value === '' || value.startsWith('data:')) return undefined
+  return originIsLoopback(value) ? appOrigin(value) : undefined
+}
+
+function rememberSmartBridgeHandoff(): void {
+  const fromTarget = loopbackPageOrigin(currentTarget() ?? '')
+  if (fromTarget !== undefined) {
+    smartBridgeHandoffOrigin = fromTarget
+    return
+  }
+  if (mainWindow === null || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+  const fromWindow = loopbackPageOrigin(mainWindow.webContents.getURL())
+  if (fromWindow !== undefined) smartBridgeHandoffOrigin = fromWindow
+}
+
+function releaseSmartBridgeHandoff(loadedUrl: string): void {
+  if (smartBridgeHandoffOrigin === undefined) return
+  if (loadedUrl.startsWith('data:') || appOrigin(loadedUrl) !== smartBridgeHandoffOrigin) {
+    smartBridgeHandoffOrigin = undefined
+  }
 }
 
 function bridgeDenied(): Error {
@@ -2803,12 +2960,7 @@ function bundledDshVersion(): string | null {
   if (cachedBundledDshVersion !== undefined) return cachedBundledDshVersion
   const bin = resolveBundledDsh()?.binPath
   if (bin === undefined) return (cachedBundledDshVersion = null)
-  try {
-    const manifest = JSON.parse(readFileSync(join(bin, '..', '..', 'package.json'), 'utf8')) as { version?: unknown }
-    cachedBundledDshVersion = typeof manifest.version === 'string' ? manifest.version : null
-  } catch {
-    cachedBundledDshVersion = null
-  }
+  cachedBundledDshVersion = officialDshPackageVersion(bin) ?? null
   return cachedBundledDshVersion
 }
 
@@ -3645,7 +3797,7 @@ function settingsPageScript(): string {
     + '$("versions").textContent=' + t('桌面客户端 v', 'Desktop client v') + '+s.desktopVersion+' + t(' · 内置 dsh ', ' · bundled dsh ') + '+(s.dshVersion??' + t('不可用', 'unavailable') + ')'
     + '+(s.installedDshVersion?' + t(' · 本机 dsh ', ' · installed dsh ') + '+s.installedDshVersion:"");'
     + 'const c=await(await fetch("desktop/settings")).json();$("url").value=c.serverUrl??"";'
-    + 'paintRuntimes(c.smartRuntimes);paintMode(s.selectedMode);'
+    + 'paintRuntimes(c.smartRuntimes);paintMode(s.selectedMode);paintPort(s.localWebPort);'
     + 'renderUpdate(await(await fetch("desktop/update")).json());'
     + '}catch(e){$("status").textContent=' + t('状态不可用', 'Status unavailable') + '}}'
     + '$("save").onclick=async()=>{try{'
@@ -3672,18 +3824,39 @@ function settingsPageScript(): string {
     + 'for(const b of document.querySelectorAll("[data-smart-runtime]"))b.classList.toggle("primary",on.has(b.getAttribute("data-smart-runtime")))}'
     + 'async function saveRuntimes(ids){try{const r=await fetch("desktop/smart-runtimes",{method:"POST",headers:{"content-type":"application/json"},'
     + 'body:JSON.stringify({smartRuntimes:ids})});const j=await r.json();'
+    + 'if(runtimeQueued)return j;'
     + 'if(j.saved){paintRuntimes(j.smartRuntimes);$("runtime-note").textContent=' + t('已更新智能连接来源', 'Smart connection sources updated') + '}'
-    + 'else{$("runtime-note").textContent=' + t('保存失败：', 'Save failed: ') + '+(j.error||' + t('至少保留一种来源', 'Keep at least one source') + ');paintRuntimes(j.smartRuntimes||ALL_RUNTIMES)}}'
-    + 'catch(e){$("runtime-note").textContent=' + t('保存失败：', 'Save failed: ') + '+e.message}}'
+    + 'else{$("runtime-note").textContent=' + t('保存失败：', 'Save failed: ') + '+(j.error||' + t('至少保留一种来源', 'Keep at least one source') + ');paintRuntimes(j.smartRuntimes||ALL_RUNTIMES)}'
+    + 'return j}catch(e){if(!runtimeQueued)$("runtime-note").textContent=' + t('保存失败：', 'Save failed: ') + '+e.message;return null}}'
+    + 'let runtimeBusy=false,runtimeQueued;'
+    + 'function commitRuntimes(ids){paintRuntimes(ids);$("runtime-note").textContent=' + t('正在更新智能连接来源…', 'Updating Smart-mode sources…') + ';'
+    + 'if(runtimeBusy){runtimeQueued=ids;return}runtimeBusy=true;'
+    + 'void saveRuntimes(ids).then(()=>{runtimeBusy=false;if(runtimeQueued){const q=runtimeQueued;runtimeQueued=undefined;commitRuntimes(q)}})}'
     + 'for(const b of document.querySelectorAll("[data-smart-runtime]"))b.onclick=()=>{'
     + 'const id=b.getAttribute("data-smart-runtime");'
     + 'const current=[...document.querySelectorAll("[data-smart-runtime].primary")].map(x=>x.getAttribute("data-smart-runtime"));'
     + 'const next=current.includes(id)?current.filter(x=>x!==id):current.concat(id);'
-    + 'if(!next.length){$("runtime-note").textContent=' + t('至少保留一种来源', 'Keep at least one source') + ';return}void saveRuntimes(next)};'
+    + 'if(!next.length){$("runtime-note").textContent=' + t('至少保留一种来源', 'Keep at least one source') + ';return}commitRuntimes(next)};'
     + 'const RUNTIME_NOTE=' + t('关掉的来源会跳过。至少保留一种。', 'Sources you turn off are skipped. Keep at least one.') + ';'
     + 'for(const b of document.querySelectorAll("[data-smart-runtime]")){const tip=b.getAttribute("data-tip")||"";'
     + 'b.onmouseenter=b.onfocus=()=>{$("runtime-note").textContent=tip};'
     + 'b.onmouseleave=b.onblur=()=>{if($("runtime-note").textContent===tip)$("runtime-note").textContent=RUNTIME_NOTE}};'
+    + 'function paintPort(port){const n=Number(port)||0;const fixed=n>0;'
+    + '$("port-random").classList.toggle("primary",!fixed);$("port-fixed").classList.toggle("primary",fixed);'
+    + '$("port-fixed-block").hidden=!fixed;if(fixed)$("port").value=String(n);else if(!$("port").value)$("port").value=""}'
+    + 'async function savePort(value){try{const r=await fetch("desktop/local-web-port",{method:"POST",headers:{"content-type":"application/json"},'
+    + 'body:JSON.stringify({localWebPort:value})});const j=await r.json();'
+    + 'if(j.saved){paintPort(j.localWebPort);$("port-note").textContent=j.applied?(j.localWebPort?'
+    + t('已固定端口，正在重新启动本地服务…', 'Port pinned; restarting the local service…') + ':'
+    + t('已改回随机端口，正在重新启动本地服务…', 'Back to a random port; restarting the local service…') + '):'
+    + t('已保存', 'Saved') + '}else{$("port-note").textContent=' + t('保存失败：', 'Save failed: ')
+    + '+(j.error||' + t('未知错误', 'unknown error') + ');paintPort(j.localWebPort)}}'
+    + 'catch(e){$("port-note").textContent=' + t('保存失败：', 'Save failed: ') + '+e.message}}'
+    + '$("port-random").onclick=()=>{paintPort(0);void savePort(0)};'
+    + '$("port-fixed").onclick=()=>{$("port-random").classList.remove("primary");$("port-fixed").classList.add("primary");'
+    + '$("port-fixed-block").hidden=false;$("port").focus()};'
+    + '$("port-save").onclick=()=>{const v=$("port").value.trim();if(!v){$("port-note").textContent='
+    + t('请输入端口', 'Enter a port') + ';return}void savePort(v)};'
     // Any answer must put the button back; a fetch that throws would otherwise
     // leave it grey until the page is reopened.
     + '$("update-check").onclick=async()=>{try{$("update-check").disabled=true;const r=await fetch("desktop/update/check",{method:"POST"});renderUpdate((await r.json()).state)}'
@@ -3812,6 +3985,18 @@ function settingsPageHtml(): string {
     + '<button type="button" data-smart-runtime="bundled" class="primary" data-tip="' + h('用安装包自带的官方运行时，不用另装 Node 或 dsh。', 'Use the official runtime shipped inside this client. No separate Node or dsh needed.') + '" aria-description="' + h('用安装包自带的官方运行时，不用另装 Node 或 dsh。', 'Use the official runtime shipped inside this client. No separate Node or dsh needed.') + '">' + h('客户端内置', 'Bundled') + '</button>'
     + '</div>'
     + '<p class="note" id="runtime-note">' + h('关掉的来源会跳过。至少保留一种。', 'Sources you turn off are skipped. Keep at least one.') + '</p>'
+    + '<p class="note" style="margin-top:14px">' + h('本地服务端口', 'Local service port') + '</p>'
+    + '<div class="runtime-picks" role="radiogroup" aria-label="' + h('本地服务端口', 'Local service port') + '">'
+    + '<button type="button" id="port-random" class="primary">' + h('随机', 'Random') + '</button>'
+    + '<button type="button" id="port-fixed">' + h('固定', 'Fixed') + '</button>'
+    + '</div>'
+    + '<div id="port-fixed-block" hidden>'
+    + '<div class="custom-row">'
+    + '<input id="port" inputmode="numeric" placeholder="' + h('例如 13080', 'e.g. 13080') + '" spellcheck="false">'
+    + '<button id="port-save">' + h('保存', 'Save') + '</button>'
+    + '</div>'
+    + '</div>'
+    + '<p class="note" id="port-note">' + h('仅影响客户端自己启动的 dsh。默认随机，不占用 3080。被占用时不会换口。', 'Only a dsh this client starts. Random by default, so 3080 stays free. A taken port is not replaced.') + '</p>'
     + '</div>'
     + '<div id="custom-block" hidden>'
     + '<div class="custom-row">'
@@ -3865,13 +4050,24 @@ async function startLocalRuntime(generation: number, force = false): Promise<voi
   // source is one the user has since turned off, which stops it instead.
   const survivor = await adoptOrClearSurvivingRuntime()
   if (generation !== connectionGeneration || quitting) return
+  if (settleSurvivingRuntime(survivor, generation, force)) return
+  configuredTarget = undefined
+  probeConnected = false
+  launchWindow(generation, force)
+}
+
+/**
+ * Apply a runtime-lock verdict. Returns true when this start is done
+ * (adopted or blocked) and the caller must not spawn.
+ */
+function settleSurvivingRuntime(survivor: SurvivingRuntime, generation: number, force: boolean): boolean {
   if (survivor.kind === 'adopt') {
     configuredTarget = survivor.url
     probeConnected = true
     childTarget = undefined
     reseatForAdoptedRuntime()
     launchWindow(generation, force)
-    return
+    return true
   }
   if (survivor.kind === 'blocked') {
     const chinese = localeChinese()
@@ -3884,11 +4080,9 @@ async function startLocalRuntime(generation: number, force = false): Promise<voi
         : 'A leftover dsh runtime (PID ' + pid + ') is still running and could not be reached or stopped. Starting another writer on the same session data would corrupt it, so this launch was refused. After that process exits, delete the record file and retry.',
       recordPath: runtimeLockFile(childHome()),
     })
-    return
+    return true
   }
-  configuredTarget = undefined
-  probeConnected = false
-  launchWindow(generation, force)
+  return false
 }
 
 /**
@@ -4172,6 +4366,14 @@ function resolveRuntime(force = false): void {
   // only a pinned address leaves the seat released.
   releaseBundledPluginSeat('resolving which runtime will serve')
   const startLocal = async (skipOccupancy = false): Promise<void> => {
+    // Reclaim our leftover before occupancy / pinned-port gates. Those gates
+    // cannot see the runtime lock, and on a cold start `isOwnManagedOrigin`
+    // is always false — a pinned port still held by this client's crash
+    // leftover would otherwise look like a stranger ("quit it in the
+    // terminal") and never reach adopt-or-kill.
+    const survivor = await adoptOrClearSurvivingRuntime()
+    if (quitting || generation !== connectionGeneration) return
+    if (settleSurvivingRuntime(survivor, generation, force)) return
     // Occupancy is a safety gate, not a connection source. Skip it when the
     // probe just established the ports are empty, or when tests isolate
     // DSH_HOME and must not treat this machine's 3080 as a writer on it.
@@ -4187,6 +4389,15 @@ function resolveRuntime(force = false): void {
         return
       }
     }
+    const pinned = configuredLocalWebPort()
+    if (pinned > 0 && !devFlag('DSH_DESKTOP_SKIP_PROBE')) {
+      const origin = 'http://127.0.0.1:' + String(pinned)
+      if (await loopbackPortHeld(pinned) && !isOwnManagedOrigin(origin)) {
+        if (quitting || generation !== connectionGeneration) return
+        showPinnedPortStartupFailure(pinned)
+        return
+      }
+    }
     if (installedDshDetection === undefined) {
       updateLoadingStatus('正在检查本机 dsh 运行时…', 'Looking for a dsh runtime on this machine…')
     }
@@ -4194,11 +4405,17 @@ function resolveRuntime(force = false): void {
     if (quitting || generation !== connectionGeneration) return
     await startLocalRuntime(generation, force)
   }
-  if (devFlag('DSH_DESKTOP_SKIP_PROBE') || !smartRuntimeEnabled(enabledSmartRuntimes(), 'probe')) {
-    void startLocal()
-    return
-  }
-  void probeSmartTargets().then(async (probed) => {
+  // Reclaim before the reuse probe: a leftover on a pinned port still
+  // answering host.describe would otherwise be adopted as "already running".
+  void (async () => {
+    const survivor = await adoptOrClearSurvivingRuntime()
+    if (quitting || generation !== connectionGeneration) return
+    if (settleSurvivingRuntime(survivor, generation, force)) return
+    if (devFlag('DSH_DESKTOP_SKIP_PROBE') || !smartRuntimeEnabled(enabledSmartRuntimes(), 'probe')) {
+      void startLocal()
+      return
+    }
+    const probed = await probeSmartTargets()
     if (quitting || generation !== connectionGeneration) return
     if (probed !== undefined) {
       configuredTarget = probed
@@ -4211,7 +4428,7 @@ function resolveRuntime(force = false): void {
       return
     }
     await startLocal(true)
-  })
+  })()
 }
 
 /**
@@ -4227,10 +4444,10 @@ function applyConnectionSettings(settings: ClientSettings, force = false): void 
 
 /**
  * True when `url` is the managed child this process is serving — never a
- * user-started instance. Client-started runtimes bind `--port 0`, so they
- * almost never sit on the probe list; this still guards a patch-port
- * collision, so toggling installed / npx / bundled is not mistaken for
- * occupancy of a process we can already stop.
+ * user-started instance. Client-started runtimes default to `--port 0`, so they
+ * almost never sit on the probe list; a pinned local port still has to be
+ * recognised as ours, so toggling installed / npx / bundled is not mistaken
+ * for occupancy of a process we can already stop.
  */
 function isOwnManagedOrigin(url: string): boolean {
   if (probeConnected) return false
@@ -4247,10 +4464,13 @@ function isOwnManagedOrigin(url: string): boolean {
  * those while reuse is off hits the same wall as turning reuse off itself.
  * This client never kills a process it did not start.
  */
-async function instanceOccupyingLocalSpawn(ids: readonly SmartRuntimeId[]): Promise<string | undefined> {
+async function instanceOccupyingLocalSpawn(
+  ids: readonly SmartRuntimeId[],
+  extraPorts: readonly number[] = [],
+): Promise<string | undefined> {
   if (devFlag('DSH_DESKTOP_SKIP_PROBE')) return undefined
   if (smartRuntimeEnabled(ids, 'probe')) return undefined
-  const probed = await probeSmartTargets()
+  const probed = await probeSmartTargets(extraPorts)
   if (probed !== undefined && !isOwnManagedOrigin(probed)) return probed
   const target = currentTarget()
   if (target === undefined || !originIsLoopback(target)) return undefined
@@ -4399,8 +4619,40 @@ function warnOccupiedUserInstance(url: string): void {
   })
 }
 
-async function refuseOccupiedLocalSpawn(ids: readonly SmartRuntimeId[]): Promise<string | undefined> {
-  const occupied = await instanceOccupyingLocalSpawn(ids)
+function pinnedPortAddress(port: number): string {
+  return 'http://127.0.0.1:' + String(port)
+}
+
+/** A pinned bind that something else already holds — not a dsh we could reuse. */
+function warnPinnedPortHeld(port: number): void {
+  const chinese = localeChinese()
+  showClientNotice({
+    heading: chinese ? '该端口已被占用' : 'That port is already in use',
+    hint: chinese
+      ? '固定端口被占用时客户端不会换口。请关掉占用方，或改用其他端口 / 随机端口。'
+      : 'This client will not pick another port when the one you pinned is taken. Free it, or choose a different or random port.',
+    addressLabel: chinese ? '端口' : 'Port',
+    address: pinnedPortAddress(port),
+    action: chinese ? '知道了' : 'OK',
+  })
+}
+
+function showPinnedPortStartupFailure(port: number): void {
+  const chinese = localeChinese()
+  showConnectionError({
+    kind: 'runtime',
+    headline: chinese ? '该端口已被占用' : 'That port is already in use',
+    detail: chinese
+      ? '已固定为 ' + String(port) + '，被占用时不会换口。请关掉占用方，或在连接设置里改用其他端口 / 随机端口。'
+      : 'Pinned to ' + String(port) + ', and this client will not pick another port. Free it, or choose a different or random port in Connection settings.',
+  })
+}
+
+async function refuseOccupiedLocalSpawn(
+  ids: readonly SmartRuntimeId[],
+  extraPorts: readonly number[] = [],
+): Promise<string | undefined> {
+  const occupied = await instanceOccupyingLocalSpawn(ids, extraPorts)
   if (occupied === undefined) return undefined
   warnOccupiedUserInstance(occupied)
   return occupied
@@ -4426,6 +4678,19 @@ async function persistSmartRuntimes(ids: SmartRuntimeId[]): Promise<{
   smartRuntimes: SmartRuntimeId[]
   error?: string
 }> {
+  const run = smartRuntimesSaveChain.then(
+    () => persistSmartRuntimesNow(ids),
+    () => persistSmartRuntimesNow(ids),
+  )
+  smartRuntimesSaveChain = run.then(() => undefined, () => undefined)
+  return run
+}
+
+async function persistSmartRuntimesNow(ids: SmartRuntimeId[]): Promise<{
+  saved: boolean
+  smartRuntimes: SmartRuntimeId[]
+  error?: string
+}> {
   const previous = enabledSmartRuntimes()
   const settings = loadSettings()
   if (!usesConfiguredServer(settings)) {
@@ -4445,10 +4710,19 @@ async function persistSmartRuntimes(ids: SmartRuntimeId[]): Promise<{
   webUi?.clearFatalError()
   patchSettings({ smartRuntimes: ids })
   if (usesConfiguredServer(loadSettings())) return { saved: true, smartRuntimes: ids }
+  applySmartLocalRuntimeChange()
+  return { saved: true, smartRuntimes: ids }
+}
+
+/**
+ * Stop the current child and re-resolve Smart mode. Shared by source toggles
+ * and a local-port change: both stay in Smart (`configuredTarget` stays unset),
+ * so a child exit must not look like a crash.
+ */
+function applySmartLocalRuntimeChange(): void {
+  rememberSmartBridgeHandoff()
   const epoch = ++smartRuntimeApply
   replacingLocalRuntime = true
-  // Drop in-flight probe/spawn/launchWindow from the previous resolve so a
-  // readiness rejection from this stop cannot paint the failure surface.
   connectionGeneration += 1
   void (async () => {
     try {
@@ -4458,7 +4732,6 @@ async function persistSmartRuntimes(ids: SmartRuntimeId[]): Promise<{
     replacingLocalRuntime = false
     applyConnectionSettings(loadSettings(), true)
   })()
-  return { saved: true, smartRuntimes: ids }
 }
 
 async function requestSmartRuntimesSave(value: unknown): Promise<{
@@ -4475,6 +4748,112 @@ async function requestSmartRuntimesSave(value: unknown): Promise<{
     }
   }
   return persistSmartRuntimes(parsed)
+}
+
+async function persistLocalWebPort(port: number, epoch: number): Promise<{
+  saved: boolean
+  localWebPort: number
+  applied?: boolean
+  error?: string
+}> {
+  if (epoch !== localWebPortSaveEpoch) {
+    return { saved: true, localWebPort: configuredLocalWebPort(), applied: false }
+  }
+  const current = configuredLocalWebPort()
+  const chinese = localeChinese()
+  const settings = loadSettings()
+  if (!usesConfiguredServer(settings) && port > 0) {
+    const occupied = await refuseOccupiedLocalSpawn(enabledSmartRuntimes(), [port])
+    if (epoch !== localWebPortSaveEpoch) {
+      return { saved: true, localWebPort: configuredLocalWebPort(), applied: false }
+    }
+    if (occupied !== undefined) {
+      return {
+        saved: false,
+        localWebPort: current,
+        error: chinese ? '请先退出本机已运行的实例，再固定该端口' : 'Quit the running instance before pinning that port',
+      }
+    }
+    if (!devFlag('DSH_DESKTOP_SKIP_PROBE')) {
+      const origin = pinnedPortAddress(port)
+      if (await loopbackPortHeld(port) && !isOwnManagedOrigin(origin)) {
+        if (epoch !== localWebPortSaveEpoch) {
+          return { saved: true, localWebPort: configuredLocalWebPort(), applied: false }
+        }
+        warnPinnedPortHeld(port)
+        return {
+          saved: false,
+          localWebPort: current,
+          error: chinese ? '该端口已被占用' : 'That port is already in use',
+        }
+      }
+    }
+  }
+  if (epoch !== localWebPortSaveEpoch) {
+    return { saved: true, localWebPort: configuredLocalWebPort(), applied: false }
+  }
+  if (port === 0) patchSettings({}, ['localWebPort'])
+  else patchSettings({ localWebPort: port })
+  if (usesConfiguredServer(loadSettings())) {
+    return { saved: true, localWebPort: port, applied: false }
+  }
+  if (current === port) return { saved: true, localWebPort: port, applied: false }
+  pathInstalledDshRejected = false
+  npxInstalledDshRejected = false
+  webUi?.clearFatalError()
+  applySmartLocalRuntimeChange()
+  return { saved: true, localWebPort: port, applied: true }
+}
+
+async function requestLocalWebPortSave(value: unknown, remoteCaller: boolean): Promise<{
+  saved: boolean
+  localWebPort: number
+  applied?: boolean
+  error?: string
+}> {
+  const chinese = localeChinese()
+  const parsed = parseLocalWebPort(value)
+  const cancelled = { saved: false, localWebPort: configuredLocalWebPort(), error: chinese ? '已取消' : 'Cancelled' }
+  if (parsed === undefined) {
+    return {
+      saved: false,
+      localWebPort: configuredLocalWebPort(),
+      error: chinese
+        ? '请输入 ' + localWebPortRangeLabel() + ' 之间的端口，或留空使用随机端口'
+        : 'Enter a port from ' + localWebPortRangeLabel() + ', or leave it blank for a random port',
+    }
+  }
+  // Claim this request before either confirmation dialog. A later port choice
+  // must supersede this one even while the user is still deciding whether to
+  // approve 3080 (and, for remote callers, the additional sensitive action).
+  const epoch = ++localWebPortSaveEpoch
+  if (remoteCaller) {
+    const confirmed = await confirmSensitiveAction(
+      chinese ? '当前页面请求更改本地服务端口' : 'The current page asked to change the local service port',
+      (chinese
+        ? '这会决定客户端自己启动的 dsh 绑在哪个端口。请求来自：'
+        : 'This chooses which port a client-started dsh binds to. Requested by: ')
+      + (currentTarget() ?? '') + '\n'
+      + (chinese ? '新端口：' : 'New port: ') + (parsed === 0 ? (chinese ? '随机' : 'random') : String(parsed)),
+    )
+    if (!confirmed) return cancelled
+    if (epoch !== localWebPortSaveEpoch) {
+      return { saved: true, localWebPort: configuredLocalWebPort(), applied: false }
+    }
+  }
+  if (isOfficialWebPort(parsed) && configuredLocalWebPort() !== parsed) {
+    const confirmed = await confirmSensitiveAction(
+      chinese ? '这会占用官方默认端口 3080' : 'This occupies the official default port 3080',
+      chinese
+        ? '终端里的 dsh web 将无法再使用默认端口。客户端启动的服务默认使用随机端口，正是为了把 3080 留给你自己启动的实例。'
+        : 'A dsh web you start in a terminal will no longer be able to use the default port. Client-started runtimes default to a random port so 3080 stays free for an instance you start yourself.',
+    )
+    if (!confirmed) return cancelled
+    if (epoch !== localWebPortSaveEpoch) {
+      return { saved: true, localWebPort: configuredLocalWebPort(), applied: false }
+    }
+  }
+  return persistLocalWebPort(parsed, epoch)
 }
 
 /**
@@ -4846,7 +5225,7 @@ function startSettingsServer(): Promise<number> {
         return
       }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-cache' })
-      res.end(JSON.stringify(loadSettings()))
+      res.end(JSON.stringify({ ...loadSettings(), localWebPort: configuredLocalWebPort() }))
       return
     }
     if (pathname === '/desktop/smart-runtimes' && req.method === 'POST') {
@@ -4867,6 +5246,34 @@ function startSettingsServer(): Promise<number> {
           try {
             const parsed = JSON.parse(body) as { smartRuntimes?: unknown }
             const result = await requestSmartRuntimesSave(parsed.smartRuntimes)
+            res.writeHead(result.saved ? 200 : 400, { 'content-type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify(result))
+          } catch (error) {
+            res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify({ saved: false, error: error instanceof Error ? error.message : String(error) }))
+          }
+        })()
+      })
+      return
+    }
+    if (pathname === '/desktop/local-web-port' && req.method === 'POST') {
+      let body = ''
+      let bodyTooLarge = false
+      req.on('data', (chunk: Buffer) => {
+        if (bodyTooLarge) return
+        body += chunk.toString()
+        if (body.length > 16_384) {
+          bodyTooLarge = true
+          res.writeHead(413, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ saved: false, error: 'request body too large' }))
+        }
+      })
+      req.on('end', () => {
+        if (bodyTooLarge) return
+        void (async () => {
+          try {
+            const parsed = JSON.parse(body) as { localWebPort?: unknown }
+            const result = await requestLocalWebPortSave(parsed.localWebPort, false)
             res.writeHead(result.saved ? 200 : 400, { 'content-type': 'application/json; charset=utf-8' })
             res.end(JSON.stringify(result))
           } catch (error) {
@@ -4983,76 +5390,94 @@ function boot(): void {
       // this session can build on, and the client does not control it. Skip
       // that source for the rest of the session and try the next enabled one
       // (npx, then bundled) rather than spending the shared retry budget on
-      // identical failures — the budget still covers the fallback.
-      const failedInstalled = webUi?.lastSource === 'installed' && !pathInstalledDshRejected
-      const failedNpx = webUi?.lastSource === 'npx' && !npxInstalledDshRejected
-      if (!wasReady && (failedInstalled || failedNpx)) {
-        if (failedInstalled) pathInstalledDshRejected = true
-        else npxInstalledDshRejected = true
-        console.warn('[desktop] user-installed dsh failed to start ('
-          + String(code) + '/' + String(signal) + '); trying the next enabled runtime')
-        const generation = connectionGeneration
-        if (mainWindowRequested) {
-          showLoadingDocument()
-          updateLoadingStatus('本机 dsh 启动失败，正在改用其他来源…',
-            'The installed dsh did not start; trying the next enabled runtime…')
-        }
-        webUi?.spawn()
-        if (mainWindowRequested) {
-          launchWindow(generation)
-          return
-        }
-        void webUi?.ready().then((url) => {
-          if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
-          markLocalRuntimeReady(url)
-        }, () => {})
-        return
-      }
-      if (retryable && launchBudget > 0) {
-        launchBudget -= 1
-        const delayMs = relaunchDelayMs(launchBudget)
-        const generation = connectionGeneration
-        console.error('[desktop] dsh web ' + (wasReady ? 'exited' : 'failed to start') + ' (' + String(code) + '/' + String(signal)
-          + '); relaunching in ' + String(delayMs) + 'ms (' + String(launchBudget) + ' left)')
-        if (mainWindowRequested) {
-          showLoadingDocument()
-          updateLoadingStatus(
-            wasReady ? '本地服务意外退出，正在重启…' : '本地服务启动失败，正在重试…',
-            wasReady ? 'The local service exited; restarting…' : 'The local service did not start; retrying…',
-          )
-        }
-        setTimeout(() => {
-          if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
+      // identical failures — the budget still covers the fallback. A pinned
+      // port that is still held is the exception: every source would fail the
+      // same bind, so walking the ladder only stacks identical errors.
+      const recoverFromChildExit = (): void => {
+        const failedInstalled = webUi?.lastSource === 'installed' && !pathInstalledDshRejected
+        const failedNpx = webUi?.lastSource === 'npx' && !npxInstalledDshRejected
+        if (!wasReady && (failedInstalled || failedNpx)) {
+          if (failedInstalled) pathInstalledDshRejected = true
+          else npxInstalledDshRejected = true
+          console.warn('[desktop] user-installed dsh failed to start ('
+            + String(code) + '/' + String(signal) + '); trying the next enabled runtime')
+          const generation = connectionGeneration
+          if (mainWindowRequested) {
+            showLoadingDocument()
+            updateLoadingStatus('本机 dsh 启动失败，正在改用其他来源…',
+              'The installed dsh did not start; trying the next enabled runtime…')
+          }
           webUi?.spawn()
           if (mainWindowRequested) {
             launchWindow(generation)
             return
           }
-          // Tray mode stays quiet, but still observes readiness/rejection so a
-          // failed recovery consumes the shared retry budget without an
-          // unhandled promise rejection.
           void webUi?.ready().then((url) => {
             if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
             markLocalRuntimeReady(url)
           }, () => {})
-        }, delayMs)
-        return
+          return
+        }
+        if (retryable && launchBudget > 0) {
+          launchBudget -= 1
+          const delayMs = relaunchDelayMs(launchBudget)
+          const generation = connectionGeneration
+          console.error('[desktop] dsh web ' + (wasReady ? 'exited' : 'failed to start') + ' (' + String(code) + '/' + String(signal)
+            + '); relaunching in ' + String(delayMs) + 'ms (' + String(launchBudget) + ' left)')
+          if (mainWindowRequested) {
+            showLoadingDocument()
+            updateLoadingStatus(
+              wasReady ? '本地服务意外退出，正在重启…' : '本地服务启动失败，正在重试…',
+              wasReady ? 'The local service exited; restarting…' : 'The local service did not start; retrying…',
+            )
+          }
+          setTimeout(() => {
+            if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
+            webUi?.spawn()
+            if (mainWindowRequested) {
+              launchWindow(generation)
+              return
+            }
+            void webUi?.ready().then((url) => {
+              if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
+              markLocalRuntimeReady(url)
+            }, () => {})
+          }, delayMs)
+          return
+        }
+        if (!wasReady) {
+          console.error('[desktop] dsh web failed to start (' + String(code) + '/' + String(signal) + '); no relaunches left')
+          showLocalRuntimeStartupFailure(code, signal)
+          return
+        }
+        console.error('[desktop] dsh web exited (' + String(code) + '/' + String(signal) + ')')
+        const chinese = localeChinese()
+        showConnectionError({
+          kind: 'runtime',
+          headline: chinese ? '本地服务意外退出' : 'The local service exited unexpectedly',
+          detail: (chinese ? '代码 ' : 'code ') + String(code) + (chinese ? ' / 信号 ' : ' / signal ') + String(signal),
+        })
       }
       if (!wasReady) {
-        console.error('[desktop] dsh web failed to start (' + String(code) + '/' + String(signal) + '); no relaunches left')
-        showLocalRuntimeStartupFailure(code, signal)
-        return
+        const pinned = configuredLocalWebPort()
+        // `lastSource` is cleared when command resolution fails before spawn.
+        // In that case another process holding the requested port is
+        // incidental and must not hide the real runtime/configuration error.
+        if (pinned > 0 && webUi?.lastSource !== undefined) {
+          void loopbackPortHeld(pinned).then((held) => {
+            if (quitting || installerHandoff || configuredTarget !== undefined || replacingLocalRuntime) return
+            if (held) {
+              console.error('[desktop] pinned port ' + String(pinned)
+                + ' is still held after a failed spawn; not trying other runtimes')
+              showPinnedPortStartupFailure(pinned)
+              return
+            }
+            recoverFromChildExit()
+          })
+          return
+        }
       }
-      // A live window lost its runtime, and the retry budget is spent. The
-      // surface stays interactive rather than quitting under the user: a
-      // deliberate retry (or another address) is still a way out.
-      console.error('[desktop] dsh web exited (' + String(code) + '/' + String(signal) + ')')
-      const chinese = localeChinese()
-      showConnectionError({
-        kind: 'runtime',
-        headline: chinese ? '本地服务意外退出' : 'The local service exited unexpectedly',
-        detail: (chinese ? '代码 ' : 'code ') + String(code) + (chinese ? ' / 信号 ' : ' / signal ') + String(signal),
-      })
+      recoverFromChildExit()
     },
   )
 
@@ -5211,6 +5636,11 @@ if (!gotLock) {
         }
       }
       return persistSmartRuntimes(parsed)
+    })
+    ipcMain.handle('desktop:connection:localWebPort', async (event, port: unknown) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) throw bridgeDenied()
+      return requestLocalWebPortSave(port, caller.remote)
     })
     ipcMain.handle('desktop:connection:probe', async (event) => {
       const caller = bridgeCaller(event)

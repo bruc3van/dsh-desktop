@@ -110,6 +110,9 @@ jobs:
       - name: 验证智能连接来源契约 / Verify Smart-mode source preference
         run: pnpm run check:smart-runtimes
 
+      - name: 验证本地服务端口契约 / Verify local-bind port preference
+        run: pnpm run check:local-web-port
+
       - name: 验证内置插件接入 / Verify bundled plugin seat
         run: pnpm run check:bundled-plugin
 
@@ -279,6 +282,9 @@ jobs:
 
       - name: 验证智能连接来源契约 / Verify Smart-mode source preference
         run: pnpm run check:smart-runtimes
+
+      - name: 验证本地服务端口契约 / Verify local-bind port preference
+        run: pnpm run check:local-web-port
 
       - name: 验证 pnpm 与 Electron Node 耦合 / Verify pnpm engine against Electron Node
         run: pnpm run check:pnpm-engine

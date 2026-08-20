@@ -17,7 +17,7 @@ pnpm run dev
 
 On launch, **Smart mode** picks a runtime in this order:
 
-1. It checks `http://127.0.0.1:3080`. If an official Web UI is already running there, the desktop client connects to it. The browser and desktop app then share one live Harness process. A `port` set in `~/.dsh/profiles/web/cordis.patch.yml` is probed as well; an instance started with `dsh web --port <port>` leaves nothing outside its command line to find, so point the client at it from connection settings instead.
+1. It checks `http://127.0.0.1:3080`. If an official Web UI is already running there, the desktop client connects to it. The browser and desktop app then share one live Harness process. A `port` set in `~/.dsh/profiles/web/cordis.patch.yml`, or a local bind pinned in Connection settings, is probed as well; an instance started with `dsh web --port <port>` that left nothing outside its command line to find still needs its address typed in Connection settings.
 2. If nothing answers, it looks for a `dsh` you already installed on PATH (a working `dsh --version` is the whole test).
 3. Then it looks for a copy npx has already cached. **The official instruction, `npx @deepseek-ai/dsh web`, installs nothing onto PATH** — it leaves the complete package in npm's cache (`~/.npm/_npx/` on POSIX, `%LOCALAPPDATA%\npm-cache\_npx\` on Windows). Running it once is enough for the client to reuse it.
 4. Only if none of those exist does it use the pinned official runtime bundled in the installer or project dependencies.
@@ -26,7 +26,7 @@ Each of those four sources can be turned off independently in Connection setting
 
 Steps 2 and 3 run on **your own Node** and use only packages that are **already present** — nothing is downloaded, and Node.js is never installed for you; an empty cache is simply skipped. The client reads the cached package's `package.json` to confirm it really is `@deepseek-ai/dsh` and to report its true version, so nothing else sitting at that path can be launched by mistake. The npx cache never updates itself: when the cached version is older than the bundled runtime the client still prefers your cache, but says so in the connection settings — re-running `npx @deepseek-ai/dsh web` once refreshes the cache to the latest release.
 
-What gets started is always a plain background service (`dsh web --port 0`) — not a browser window, and never on port 3080 — and the client shuts it down when you quit. If the chosen runtime fails to start, the client walks the remaining enabled sources (the bundled runtime last, when it is still enabled). Connection settings show which runtime is in use (installed / npx cache / bundled) and its version. The bundled safe marketplace is seated into whichever runtime the client starts (a reused instance and a pinned address are the exceptions — the client does not start those); see [Development and verification](#development-and-verification) and the README's [bundled safe marketplace](../README_EN.md#the-bundled-safe-marketplace) section.
+What gets started is always a plain background service (default `dsh web --port 0`, or a port pinned in Connection settings) — rc.8 and newer get `--no-open`, so not a browser window, and never on port 3080 unless you pin it — and the client shuts it down when you quit. If the chosen runtime fails to start, the client walks the remaining enabled sources (the bundled runtime last, when it is still enabled). A pinned port that is already taken is not replaced, and the source ladder is not walked against the same dead bind. Connection settings show which runtime is in use (installed / npx cache / bundled) and its version. The bundled safe marketplace is seated into whichever runtime the client starts (a reused instance and a pinned address are the exceptions — the client does not start those); see [Development and verification](#development-and-verification) and the README's [bundled safe marketplace](../README_EN.md#the-bundled-safe-marketplace) section.
 
 If the bundled runtime cannot start, or you want to use another instance, open **Settings → Desktop settings**. If the page cannot load at all, the startup surface offers **Web UI connection…**.
 
@@ -38,6 +38,7 @@ pnpm run prepare:runtime # prepare the bundled dsh runtime closure
 pnpm run check:picker   # verify the bundled Win32 picker compatibility patch
 pnpm run check:runtime-env # verify the Agent environment does not inherit Electron's Node-mode variable
 pnpm run check:bundled-plugin # verify the market seat / withdraw / version-gate contract
+pnpm run check:local-web-port # verify the local-bind port and --no-open spawn args
 pnpm run check:runtime-lock # verify the runtime lock and update-install ordering
 pnpm run check:restart  # verify who the tray Restart may stop
 pnpm run dist           # build packages for the current platform
@@ -52,7 +53,7 @@ pnpm run shot:readme    # refresh the privacy-safe README screenshots
 pnpm run e2e            # send a real prompt and verify the streamed response
 ```
 
-In addition, `scripts/` contains a family of regression checks for connection and runtime behavior: `check:connection` (mode switching), `check:installed-runtime` (installed runtime), `check:runtime-resolution` (runtime resolution), `check:smart-runtimes` (Smart-mode source toggles), `check:bundled-plugin` (in-box market seat / withdraw), `check:runtime-lock` (runtime lock and update ordering), `check:restart` (who the tray Restart may stop), `check:auto-fallback` (occupancy refusal when reuse is turned off or managed sources would spawn beside a live instance, then loss-of-instance fallback), and `check:error-surface` (error UI).
+In addition, `scripts/` contains a family of regression checks for connection and runtime behavior: `check:connection` (mode switching), `check:installed-runtime` (installed runtime), `check:runtime-resolution` (runtime resolution), `check:smart-runtimes` (Smart-mode source toggles), `check:local-web-port` (local-bind port), `check:bundled-plugin` (in-box market seat / withdraw), `check:runtime-lock` (runtime lock and update ordering), `check:restart` (who the tray Restart may stop), `check:auto-fallback` (occupancy refusal when reuse is turned off or managed sources would spawn beside a live instance, then loss-of-instance fallback), and `check:error-surface` (error UI).
 
 `pnpm run e2e` needs a valid API key (export `DEEPSEEK_API_KEY=…`, or add one once via 设置 → 凭据). Without one it exits with code 2 on purpose: a skipped live round trip must not look green. It also runs against a throwaway `DSH_HOME`, so it never touches your real sessions. The production window loads the official Web UI; this repository does not maintain a second product renderer. `pnpm run check:updater` drives a local update-feed fixture through check, hash verification, and dismiss.
 

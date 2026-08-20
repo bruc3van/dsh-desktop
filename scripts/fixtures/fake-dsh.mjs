@@ -5,6 +5,8 @@
  * It answers the two things the desktop client asks of an installed runtime:
  * `--version`, which is the whole condition check, and `web --port 0`, which
  * must print the official readiness line and then serve `/api/host.describe`.
+ * A numeric `--port` other than 0 is honoured so a pinned-port check can bind
+ * a known address. Extra flags such as `--no-open` are ignored.
  * DSH_FIXTURE_FAIL=1 makes `web` exit immediately, standing in for an
  * installed runtime that is present but cannot start.
  * DSH_FIXTURE_DELAY_MS delays the readiness line so a source toggle can land
@@ -32,6 +34,14 @@ if (process.env.DSH_FIXTURE_FAIL === '1') {
   process.exit(1)
 }
 
+function requestedPort() {
+  const index = args.indexOf('--port')
+  if (index === -1) return 0
+  const raw = args[index + 1]
+  const port = Number(raw)
+  return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 0
+}
+
 const server = createServer((req, res) => {
   if (req.url === '/api/host.describe' && req.method === 'POST') {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -45,7 +55,7 @@ const server = createServer((req, res) => {
 })
 
 function listen() {
-  server.listen(0, '127.0.0.1', () => {
+  server.listen(requestedPort(), '127.0.0.1', () => {
     const address = server.address()
     // The exact line shape `parseReadiness` matches in the official runtime.
     process.stdout.write('dsh web: http://127.0.0.1:' + String(address.port) + '\n')

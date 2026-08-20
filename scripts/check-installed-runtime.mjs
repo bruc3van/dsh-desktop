@@ -14,6 +14,9 @@
  *     crash — PATH/npx stay eligible, and the retry budget is not spent;
  *  4. the connection surfaces can see a live instance on the default port, so
  *     switching to it is one click rather than a typed address.
+ *  5. Smart mode really binds a pinned local port, refuses to fall through
+ *     when a non-dsh process holds it, and does not blame that process when
+ *     command resolution failed before any child was spawned.
  * @module desktop/scripts/check-installed-runtime
  */
 
@@ -294,10 +297,13 @@ async function closeApp(app) {
 }
 
 /** One Electron run against its own homes, with the fixture ahead on PATH. */
-async function launch(name, extraEnv = {}, { pathDsh = true } = {}) {
+async function launch(name, extraEnv = {}, {
+  pathDsh = true,
+  settings = { connectionMode: 'smart' },
+} = {}) {
   const home = join(checkHome, name)
   mkdirSync(join(home, 'desktop'), { recursive: true })
-  writeFileSync(join(home, 'desktop', 'settings.json'), JSON.stringify({ connectionMode: 'smart' }, null, 2) + '\n')
+  writeFileSync(join(home, 'desktop', 'settings.json'), JSON.stringify(settings, null, 2) + '\n')
   // The shared sanitizer drops ELECTRON_RUN_AS_NODE and every DSH_DESKTOP_* /
   // DSH_FIXTURE_* knob — a leftover diagnostic from a previous packaged run
   // must not skip PATH detection or pin a command this check did not ask for.
@@ -489,6 +495,78 @@ try {
   check('the rejected runtime is no longer offered', fellBack.installedDshVersion === undefined, fellBack.installedDshVersion)
 } finally {
   await closeApp(app)
+}
+
+// 2b. A Smart-mode child must really bind the configured local port. Reserve
+//     an ephemeral port first so the check does not depend on a magic number.
+const portAllocator = createServer()
+await new Promise((resolve, reject) => {
+  portAllocator.once('error', reject)
+  portAllocator.listen(0, '127.0.0.1', resolve)
+})
+const allocatedAddress = portAllocator.address()
+if (typeof allocatedAddress !== 'object' || allocatedAddress === null) throw new Error('port allocator did not bind')
+const smartPinnedPort = allocatedAddress.port
+await new Promise(resolve => portAllocator.close(resolve))
+try {
+  app = await openApp('smart-pinned', { DSH_DESKTOP_SKIP_PROBE: '1' }, {
+    settings: { connectionMode: 'smart', localWebPort: smartPinnedPort },
+  })
+  const pinned = await waitForStatus(app, s => s.targetUrl !== '')
+  check('Smart mode starts the selected runtime on the pinned port',
+    pinned.runtimeSource === 'installed'
+      && pinned.targetUrl === 'http://127.0.0.1:' + String(smartPinnedPort),
+    JSON.stringify({ source: pinned.runtimeSource, targetUrl: pinned.targetUrl }))
+} finally {
+  await closeApp(app)
+}
+
+// 2c. A non-dsh listener on the pinned port is a bind failure shared by every
+//     runtime source, so the client must show the port problem and stop rather
+//     than silently falling through to bundled.
+const occupiedServer = createServer((_req, res) => { res.end('not dsh') })
+await new Promise((resolve, reject) => {
+  occupiedServer.once('error', reject)
+  occupiedServer.listen(0, '127.0.0.1', resolve)
+})
+const occupiedAddress = occupiedServer.address()
+if (typeof occupiedAddress !== 'object' || occupiedAddress === null) throw new Error('occupied-port fixture did not bind')
+const occupiedPort = occupiedAddress.port
+try {
+  app = await openApp('smart-port-held', { DSH_DESKTOP_SKIP_PROBE: '1' }, {
+    settings: { connectionMode: 'smart', localWebPort: occupiedPort },
+  })
+  const record = logFor(app)
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline && !/pinned port .* is still held after a failed spawn/.test(record.text())) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  check('a non-dsh listener on the pinned port stops runtime fallback',
+    /dsh runtime: installed/.test(record.text())
+      && /pinned port .* is still held after a failed spawn/.test(record.text())
+      && !/dsh runtime: bundled/.test(record.text()),
+    record.text().match(/dsh runtime: \w+|pinned port .*|trying the next enabled runtime/g)?.join(' → '))
+} finally {
+  await closeApp(app)
+}
+
+// 2d. If source resolution itself fails, no child attempted the bind. A
+//     coincidental listener on the chosen port must not replace the actual
+//     configuration error with the occupied-port surface.
+try {
+  app = await openApp('pre-spawn-port-held', { DSH_DESKTOP_SKIP_PROBE: '1' }, {
+    pathDsh: false,
+    settings: { connectionMode: 'smart', localWebPort: occupiedPort, smartRuntimes: ['probe'] },
+  })
+  const failed = await waitForStatus(app, s => typeof s.lastError === 'string')
+  const record = logFor(app)
+  check('a pre-spawn failure keeps its real error when the pinned port is occupied',
+    /No enabled Smart-mode runtime|没有启用可启动的运行时/.test(failed.lastError)
+      && !/pinned port .* is still held after a failed spawn/.test(record.text()),
+    JSON.stringify({ lastError: failed.lastError, log: record.text().match(/pinned port .*|failed to start[^\n]*/g) }))
+} finally {
+  await closeApp(app)
+  await new Promise(resolve => occupiedServer.close(resolve))
 }
 
 // 3. With nothing on PATH — the state `npx @deepseek-ai/dsh web` leaves users

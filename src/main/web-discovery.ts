@@ -46,13 +46,22 @@ export function configuredWebPorts(patchSource: string): number[] {
 
 /**
  * Every origin smart mode should try before concluding nothing is running: the
- * default first, so the common case is decided by the first probe.
+ * default first, so the common case is decided by the first probe. Extra ports
+ * (a client-pinned local bind) come next — a leftover on that port is more
+ * likely than a patch-layer one — then whatever the profile patch names.
  */
-export function webProbeOrigins(defaultOrigin: string, patchSource: string): string[] {
+export function webProbeOrigins(
+  defaultOrigin: string,
+  patchSource: string,
+  extraPorts: readonly number[] = [],
+): string[] {
   const origins = [defaultOrigin]
-  for (const port of configuredWebPorts(patchSource)) {
+  const add = (port: number): void => {
+    if (port <= 0 || port > 65535) return
     const candidate = 'http://127.0.0.1:' + String(port)
     if (!origins.includes(candidate)) origins.push(candidate)
   }
+  for (const port of extraPorts) add(port)
+  for (const port of configuredWebPorts(patchSource)) add(port)
   return origins
 }

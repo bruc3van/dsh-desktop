@@ -215,9 +215,95 @@ try {
   if (!restoredSources.saved) {
     throw new Error('restoring Smart-mode sources failed: ' + JSON.stringify(restoredSources))
   }
+  if (await remoteSettingsPage.locator('#port-random').count() !== 1
+    || await remoteSettingsPage.locator('#port-fixed').count() !== 1) {
+    throw new Error('native connection page is missing local-port toggles')
+  }
+  const badPort = await remoteSettingsPage.evaluate(async () => {
+    const response = await fetch('desktop/local-web-port', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ localWebPort: 'nope' }),
+    })
+    return response.json()
+  })
+  if (badPort.saved) {
+    throw new Error('a non-numeric local port was accepted: ' + JSON.stringify(badPort))
+  }
+  const pinnedPort = await remoteSettingsPage.evaluate(async () => {
+    const response = await fetch('desktop/local-web-port', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ localWebPort: 13080 }),
+    })
+    return response.json()
+  })
+  if (!pinnedPort.saved || pinnedPort.localWebPort !== 13080 || pinnedPort.applied) {
+    throw new Error('pinning a local port in Connect mode failed: ' + JSON.stringify(pinnedPort))
+  }
+  const pinnedSettings = JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8'))
+  if (pinnedSettings.localWebPort !== 13080) {
+    throw new Error('pinned local port was not persisted: ' + JSON.stringify(pinnedSettings))
+  }
+  if (new URL(window.url()).origin !== remoteOrigin) {
+    throw new Error('pinning a local port in Connect mode left the pinned origin: ' + window.url())
+  }
+  const randomPort = await remoteSettingsPage.evaluate(async () => {
+    const response = await fetch('desktop/local-web-port', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ localWebPort: 0 }),
+    })
+    return response.json()
+  })
+  if (!randomPort.saved || randomPort.localWebPort !== 0) {
+    throw new Error('clearing the pinned local port failed: ' + JSON.stringify(randomPort))
+  }
+  const clearedSettings = JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8'))
+  if (clearedSettings.localWebPort !== undefined) {
+    throw new Error('random local port was stored instead of omitted: ' + JSON.stringify(clearedSettings))
+  }
+  writeFileSync(join(desktopHome, 'settings.json'), JSON.stringify({
+    serverUrl: remoteOrigin,
+    connectionMode: 'connect',
+    localWebPort: 70000,
+  }, null, 2) + '\n')
+  const outOfRangePorts = await remoteSettingsPage.evaluate(async () => {
+    const settings = await (await fetch('desktop/settings')).json()
+    const status = await (await fetch('desktop/status')).json()
+    return { settings: settings.localWebPort, status: status.localWebPort }
+  })
+  if (outOfRangePorts.settings !== 0 || outOfRangePorts.status !== 0) {
+    throw new Error('an out-of-range saved port was shown as pinned: ' + JSON.stringify(outOfRangePorts))
+  }
+  writeFileSync(join(desktopHome, 'settings.json'), JSON.stringify({
+    serverUrl: remoteOrigin,
+    connectionMode: 'connect',
+  }, null, 2) + '\n')
   const toSmart = await window.evaluate(() => window.desktop.connection.switchMode())
   if (!toSmart.switched || toSmart.mode !== 'smart') throw new Error('failed to switch to Smart mode: ' + JSON.stringify(toSmart))
   ({ window } = await waitForStatus(app, status => status.selectedMode === 'smart' && status.targetUrl !== ''))
+  const racedPorts = await remoteSettingsPage.evaluate(async () => {
+    const pin = fetch('desktop/local-web-port', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ localWebPort: 13080 }),
+    }).then((response) => response.json())
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const random = await fetch('desktop/local-web-port', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ localWebPort: 0 }),
+    }).then((response) => response.json())
+    return { pin: await pin, random }
+  })
+  if (!racedPorts.random.saved || racedPorts.random.localWebPort !== 0) {
+    throw new Error('clearing a local port while a pin was in flight failed: ' + JSON.stringify(racedPorts))
+  }
+  const racedSettings = JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8'))
+  if (racedSettings.localWebPort !== undefined) {
+    throw new Error('the earlier pin overwrote the later random port: ' + JSON.stringify(racedSettings))
+  }
   const smartSettings = JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8'))
   if (smartSettings.serverUrl !== remoteOrigin || smartSettings.connectionMode !== 'smart') {
     throw new Error('Smart switch did not preserve the remote origin: ' + JSON.stringify(smartSettings))
@@ -260,6 +346,8 @@ try {
   console.log('✓ enhanced connection card shows the saved remote address under Custom')
   console.log('✓ Smart-mode source toggles persist without leaving Connect mode')
   console.log('✓ native settings selects Custom for a pinned address')
+  console.log('✓ an out-of-range saved port is shown as random')
+  console.log('✓ a later random-port click wins over an in-flight pin')
   console.log('✓ switching to Smart mode keeps the remote address')
   console.log('✓ shortcut switches back to the saved remote origin')
   console.log('✓ saving an unchanged selection still reconnects the window')

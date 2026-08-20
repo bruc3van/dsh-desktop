@@ -36,7 +36,7 @@ import {
 } from './runtime-spawn.ts'
 
 /** The official CLI entry, passed by the main process (never on argv: the
- *  harness parses `process.argv.slice(2)` and must still see `web --port 0`). */
+ *  harness parses `process.argv.slice(2)` and must still see `web --port …`). */
 const ENTRY_VARIABLE = 'DSH_DESKTOP_RUNTIME_ENTRY'
 const NODE_MODE = 'ELECTRON_RUN_AS_NODE'
 
