@@ -224,6 +224,51 @@ function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeco
   Write-Step "done: $(Split-Path -Leaf $Path)"
 }
 
+# List every process running from under a directory — the exact question
+# electron-builder's FIND_PROCESS asks (it ignores the process name it is given
+# and matches on $INSTDIR), so this shows what that check would have seen.
+function Write-ProcessesUnder([string]$Directory, [string]$Label) {
+  try {
+    $under = @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object { $_.Path -and $_.Path.StartsWith($Directory, [StringComparison]::OrdinalIgnoreCase) })
+    if ($under.Count -eq 0) {
+      Write-Step "$Label : nothing running under the install directory"
+    } else {
+      Write-Step "$Label : $($under.Count) process(es) running under the install directory"
+      $under | Select-Object ProcessId, Name, Path | Format-Table -AutoSize | Out-String | Write-Host
+    }
+  } catch {
+    Write-Step "$Label : could not query ($_)"
+  }
+}
+
+function Test-CurrentUninstaller {
+  try {
+    $registered = Get-ItemProperty -Path $uninstallKey -ErrorAction SilentlyContinue
+    if ($null -eq $registered) {
+      Write-Step 'probe C: no current build registered, skipped'
+      return
+    }
+    $dir = [string]$registered.InstallLocation
+    $un = Join-Path $dir 'Uninstall DSH Desktop.exe'
+    if ($dir -eq '' -or -not (Test-Path -LiteralPath $un -PathType Leaf)) {
+      Write-Step 'probe C: current uninstaller not found, skipped'
+      return
+    }
+    $before = @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue).Count
+    Write-ProcessesUnder $dir 'probe C before'
+    $args = @('/S', '/KEEP_APP_DATA', '/currentuser', '--updated', "_?=$dir")
+    Write-Step "probe C (current build, installer's argument list): $($args -join ' ')"
+    $probe = Start-Process -FilePath $un -ArgumentList $args -PassThru
+    Wait-ForProcess $probe 'Current uninstaller probe' 300
+    Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
+    $after = @(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue).Count
+    Write-Step "probe C: exit code $($probe.ExitCode), files $before -> $after"
+  } catch {
+    Write-Step "probe C: could not complete ($_)"
+  }
+}
+
 function Test-LegacyUninstaller {
   $probeDir = Join-Path $testRoot 'legacy-uninstaller-probe'
   try {
@@ -244,6 +289,7 @@ function Test-LegacyUninstaller {
     # run does not. If both fail, self-detection is not the explanation.
     $copied = Join-Path $testRoot 'old-uninstaller.exe'
     Copy-Item -LiteralPath $probeUninstaller -Destination $copied -Force
+    Write-ProcessesUnder $probeDir 'probe A before'
     Write-Step "probe A (copied out, as the installer does): $($probeArgs -join ' ')"
     $probeA = Start-Process -FilePath $copied -ArgumentList $probeArgs -PassThru
     Wait-ForProcess $probeA 'Legacy uninstaller probe A' 300
@@ -427,6 +473,12 @@ try {
 
   # The preceding fresh-install smoke intentionally leaves the current build
   # installed. Remove it before asking v0.2.2 to create the legacy fixture.
+  # Which uninstallers can actually run silently decides how far this reaches.
+  # The legacy v0.2.2 one returns 2 and removes nothing; if the current build's
+  # uninstaller handles the same argument list, the fault is v0.2.2's alone and
+  # only upgrades from that version are affected.
+  Test-CurrentUninstaller
+
   Write-Step 'removing the freshly installed current build'
   Remove-InstalledProduct
 
