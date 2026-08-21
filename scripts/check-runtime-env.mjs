@@ -142,10 +142,27 @@ const check = (name, ok, detail) => { checks.push({ ok, name, detail }) }
  * `process.execPath` site must be an argument to a patched call, or a site
  * audited here.
  */
+const EXEC_PATH_TOKEN = 'process.execPath'
 const AUDITED_INDIRECT = new Map([
-  ['@deepseek-ai/dsh-sandbox-local/lib/index.js',
-    'windowsAclRunnerInvocation() returns an argv whose [0] is process.execPath; it is consumed by '
-    + 'child_process.spawn in dsh-subprocess-local and by spawnSync in this module\'s own probe.'],
+  ['@deepseek-ai/dsh-sandbox-local/lib/index.js', [
+    {
+      label: 'compiled Windows ACL runner argv',
+      context: 'if (existsSync(builtEntry)) return [process.execPath, builtEntry];',
+      expected: 1,
+    },
+    {
+      label: 'source Windows ACL runner argv',
+      context: 'return [\n\t\t\tprocess.execPath,\n\t\t\t"--import",',
+      expected: 1,
+    },
+  ]],
+  ['@deepseek-ai/dsh-tool-fs-search/lib/index.js', [
+    {
+      label: 'pkg ripgrep sidecar derivation',
+      context: 'const executableSidecar = `${process.execPath}-rg`;\n\t\tif ("pkg" in process && existsSync(executableSidecar)) return executableSidecar;',
+      expected: 1,
+    },
+  ]],
 ])
 const PATCHED_CALL = /(?:^|[^.\w$])(?:spawn|spawnSync|fork)\s*\(\s*$/
 
@@ -158,9 +175,59 @@ const windowsAuditPath = runtimeAuditPath('dsh-sandbox-local', '\\lib\\index.js'
 check('runtime audit paths are platform-neutral',
   windowsAuditPath === '@deepseek-ai/dsh-sandbox-local/lib/index.js', windowsAuditPath)
 
+/** Audit every process.execPath occurrence in one bundled-runtime source file. */
+function auditExecPathSource(relative, source) {
+  const offenders = []
+  const rules = AUDITED_INDIRECT.get(relative) ?? []
+  const ruleHits = rules.map(() => 0)
+  let sites = 0
+  let index = source.indexOf(EXEC_PATH_TOKEN)
+  while (index !== -1) {
+    sites += 1
+    let allowed = PATCHED_CALL.test(source.slice(Math.max(0, index - 60), index))
+    if (!allowed) {
+      for (const [ruleIndex, rule] of rules.entries()) {
+        const tokenOffset = rule.context.indexOf(EXEC_PATH_TOKEN)
+        const contextStart = index - tokenOffset
+        if (tokenOffset >= 0 && contextStart >= 0
+          && source.slice(contextStart, contextStart + rule.context.length) === rule.context) {
+          ruleHits[ruleIndex] += 1
+          allowed = true
+          break
+        }
+      }
+    }
+    if (!allowed) {
+      const line = source.slice(0, index).split('\n').length
+      offenders.push(relative + ':' + String(line) + ' — '
+        + source.slice(index - 40 < 0 ? 0 : index - 40, index + 40).replace(/\s+/g, ' ').trim())
+    }
+    index = source.indexOf(EXEC_PATH_TOKEN, index + 1)
+  }
+  for (const [ruleIndex, rule] of rules.entries()) {
+    if (ruleHits[ruleIndex] !== rule.expected) {
+      offenders.push(relative + ' — audited context "' + rule.label + '" matched '
+        + String(ruleHits[ruleIndex]) + ' times, expected ' + String(rule.expected))
+    }
+  }
+  return { offenders, sites }
+}
+
+const fsSearchAuditPath = '@deepseek-ai/dsh-tool-fs-search/lib/index.js'
+const fsSearchExpectedContext = AUDITED_INDIRECT.get(fsSearchAuditPath)[0].context
+check('an audited indirect execPath context is accepted exactly once',
+  auditExecPathSource(fsSearchAuditPath, fsSearchExpectedContext).offenders.length === 0)
+check('a dangerous execPath call added to an audited file is still rejected',
+  auditExecPathSource(fsSearchAuditPath,
+    fsSearchExpectedContext + '\nexecFile(process.execPath, ["--version"]);').offenders.length === 1)
+check('duplicating an audited execPath context is rejected',
+  auditExecPathSource(fsSearchAuditPath,
+    fsSearchExpectedContext + '\n' + fsSearchExpectedContext).offenders.length === 1)
+
 async function scanRuntimeExecPathSites(runtimeModules) {
   const offenders = []
   let sites = 0
+  const auditedFilesSeen = new Set()
   const scopeDir = join(runtimeModules, '@deepseek-ai')
   for (const packageName of await readdir(scopeDir)) {
     const libDir = join(scopeDir, packageName, 'lib')
@@ -178,18 +245,16 @@ async function scanRuntimeExecPathSites(runtimeModules) {
         }
         if (!/\.(?:js|mjs|cjs)$/.test(entry.name)) continue
         const source = await readFile(path, 'utf8')
-        let index = source.indexOf('process.execPath')
-        while (index !== -1) {
-          sites += 1
-          const relative = runtimeAuditPath(packageName, path.slice(join(scopeDir, packageName).length))
-          if (!PATCHED_CALL.test(source.slice(Math.max(0, index - 60), index)) && !AUDITED_INDIRECT.has(relative)) {
-            const line = source.slice(0, index).split('\n').length
-            offenders.push(relative + ':' + String(line) + ' — ' + source.slice(index - 40 < 0 ? 0 : index - 40, index + 40).replace(/\s+/g, ' ').trim())
-          }
-          index = source.indexOf('process.execPath', index + 1)
-        }
+        const relative = runtimeAuditPath(packageName, path.slice(join(scopeDir, packageName).length))
+        if (AUDITED_INDIRECT.has(relative)) auditedFilesSeen.add(relative)
+        const audited = auditExecPathSource(relative, source)
+        sites += audited.sites
+        offenders.push(...audited.offenders)
       }
     }
+  }
+  for (const relative of AUDITED_INDIRECT.keys()) {
+    if (!auditedFilesSeen.has(relative)) offenders.push(relative + ' — audited runtime file is missing')
   }
   return { offenders, sites }
 }

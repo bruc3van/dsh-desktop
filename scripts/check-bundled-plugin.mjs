@@ -49,7 +49,7 @@ const {
  * The runtime the fixtures seat into: same version as the one this client
  * would ship, which is the ordinary case the gate lets through.
  */
-const RUNTIME = { version: '0.1.0-rc.7', builtAgainst: '0.1.0-rc.7' }
+const RUNTIME = { version: '0.1.1-rc.1', builtAgainst: '0.1.1-rc.1' }
 
 /** The marker naming a seat directory as the client's own. */
 const SEAT_MARKER = '.dsh-desktop-seat.json'

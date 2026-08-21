@@ -178,11 +178,19 @@ const darkThemeTokens = await settingsDialog.locator('#dsh-desktop-enhance').eva
   const cardStyle = getComputedStyle(card)
   const title = card.querySelector('.dsh-enhance-title')
   const input = card.querySelector('.dsh-enhance-input')
+  const normalizeColor = value => {
+    const probe = document.createElement('span')
+    probe.style.color = value
+    card.append(probe)
+    const normalized = getComputedStyle(probe).color
+    probe.remove()
+    return normalized
+  }
   return {
     title: title ? getComputedStyle(title).color : '',
-    titleToken: cardStyle.getPropertyValue('--dsw-alias-label-primary').trim(),
+    titleToken: normalizeColor(cardStyle.getPropertyValue('--dsw-alias-label-primary').trim()),
     input: input ? getComputedStyle(input).backgroundColor : '',
-    inputToken: cardStyle.getPropertyValue('--dsw-alias-bg-layer-1').trim(),
+    inputToken: normalizeColor(cardStyle.getPropertyValue('--dsw-alias-bg-layer-1').trim()),
   }
 })
 check('connection card follows dark theme tokens',
