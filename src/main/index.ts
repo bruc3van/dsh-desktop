@@ -2229,19 +2229,31 @@ function showConnectionError(failure: ConnectionFailure): void {
       recordLabel: chinese ? '记录文件' : 'Record',
       recordPath: failure.recordPath,
     },
-  })).then(() => {
-    if (window !== mainWindow || window.isDestroyed() || window.webContents.isDestroyed()) return
-    // The page's own CSP forbids inline script, so the seats are bound from
-    // here. onclick (not addEventListener) keeps repeat calls idempotent.
-    void window.webContents.executeJavaScript(
-      '(() => { const bind = (id, run) => { const b = document.getElementById(id); if (b !== null) b.onclick = run };'
-      + ' bind("error-retry", () => { window.desktop?.local?.retry?.() });'
-      + ' bind("error-use-smart", () => { window.desktop?.local?.useSmart?.() });'
-      + ' bind("error-settings", () => { window.desktop?.openConnectionSettings?.() });'
-      + ' bind("error-quit", () => { window.desktop?.local?.quit?.() }) })();',
-      true,
-    ).catch(() => {})
-  }, () => {})
+  })).catch(() => {})
+  // The seats are NOT bound from that promise. This navigation supersedes the
+  // 4xx response Chromium was still committing, and the abort event that
+  // produces can settle loadURL as a rejection even though the failure surface
+  // renders — leaving every button dead with no second chance to bind. The
+  // document's own did-finish-load is the event that actually describes what
+  // is on screen, so bindErrorPageSeats runs from there.
+}
+
+/**
+ * Bind the failure surface's seats. The page's own CSP forbids inline script,
+ * so the handlers are assigned from the main process. onclick (not
+ * addEventListener) keeps repeat calls idempotent, and the null check makes a
+ * call that lands on any other document a no-op.
+ */
+function bindErrorPageSeats(window: BrowserWindow): void {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return
+  void window.webContents.executeJavaScript(
+    '(() => { const bind = (id, run) => { const b = document.getElementById(id); if (b !== null) b.onclick = run };'
+    + ' bind("error-retry", () => { window.desktop?.local?.retry?.() });'
+    + ' bind("error-use-smart", () => { window.desktop?.local?.useSmart?.() });'
+    + ' bind("error-settings", () => { window.desktop?.openConnectionSettings?.() });'
+    + ' bind("error-quit", () => { window.desktop?.local?.quit?.() }) })();',
+    true,
+  ).catch(() => {})
 }
 
 /**
@@ -2566,6 +2578,10 @@ function createWindow(): void {
   // configured page responds. Reloads and reconnects are deduplicated by the
   // scheduler below.
   mainWindow.webContents.on('did-finish-load', () => {
+    // Every finished document, before the update-check gate below returns:
+    // this is the one event that reports the failure surface has actually
+    // landed, and its seats are dead until they are bound.
+    if (errorDocumentActive && mainWindow !== null) bindErrorPageSeats(mainWindow)
     releaseSmartBridgeHandoff(mainWindow?.webContents.getURL() ?? '')
     if (!targetNavigationSucceeded) return
     const target = currentTarget()
