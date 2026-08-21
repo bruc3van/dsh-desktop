@@ -71,8 +71,8 @@ In addition, `scripts/` contains a family of regression checks for connection an
 To release a version, push its tag directly. GitHub Actions treats the tag as the single version source and writes it to `package.json` during the build:
 
 ```sh
-git tag v0.2.6
-git push origin v0.2.6
+git tag v0.2.7
+git push origin v0.2.7
 ```
 
 GitHub Actions validates the tag format, uses the tag as the release version, then builds:
