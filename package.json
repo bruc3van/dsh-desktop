@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "description": "让 Agent 安全常驻桌面的独立 DeepSeek Harness 客户端：官方 Web UI 原封不动，长任务常驻后台，精选插件先审查再安装 / Independent desktop client that keeps dsh agents resident and secure: the official Web UI untouched, long tasks alive in the tray, curated plugins reviewed before install",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "main": ".build/main.mjs",
