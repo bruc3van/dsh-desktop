@@ -311,6 +311,34 @@ FunctionEnd
   !insertmacro dshUninstallResultCheck HKCU
 !macroend
 
+; Remove this version's own files without the atomic-rename detour.
+;
+; electron-builder's default removal takes two shapes: a plain uninstall moves
+; out of the directory and deletes it, while an update (`--updated`, which every
+; in-place upgrade passes) first renames every entry into $PLUGINSDIR\old-install
+; so a locked file can be rolled back, and aborts the whole uninstall when any
+; entry will not move. That rename step is what fails — see
+; https://github.com/bruc3van/dsh-desktop/issues/11 and the single-variable
+; control in `pnpm run check:nsis-upgrade`: the same uninstaller on the same
+; directory exits 2 and removes nothing with `--updated`, and exits 0 removing
+; all 13814 files without it. Nothing there is locked; the detour is.
+;
+; So take the shape that works, for both cases. dshRemovePreviousInstall already
+; rescues upgrades from versions that shipped with the broken path — this is what
+; keeps every version from 0.2.6 on from needing that rescue at all.
+;
+; The trade-off is deliberate: rollback-on-locked-file goes away, so a genuinely
+; busy file now leaves its remains behind instead of restoring the old install
+; and stopping. That case is already handled upstream — CHECK_APP_RUNNING closes
+; the app before the uninstall section runs — and leftovers the installer writes
+; over beat an upgrade that cannot proceed at all.
+!macro customRemoveFiles
+  DetailPrint "Removing $INSTDIR"
+  ; Move out of $INSTDIR so it can be removed.
+  SetOutPath $TEMP
+  RMDir /r $INSTDIR
+!macroend
+
 !macro customInstallModeLeave
   !ifndef BUILD_UNINSTALLER
     !insertmacro dshRestoreUnchangedInstallTarget

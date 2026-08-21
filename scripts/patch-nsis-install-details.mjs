@@ -73,7 +73,15 @@ const UPGRADE_SAFE_INSTALL_MODE_LEAVE = `\
 
 ${INSTALL_MODE_LEAVE}`
 const GENERIC_UNINSTALL_FAILURE = 'MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY OneMoreAttempt'
-const PRECISE_UNINSTALL_FAILURE = 'MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "旧版本卸载失败（退出码 $R0）。$\\r$\\n安装目录：$installationDir$\\r$\\n请查看详细信息后重试，或取消安装。 / Old version uninstall failed (exit code $R0).$\\r$\\nInstall directory: $installationDir" /SD IDCANCEL IDRETRY OneMoreAttempt'
+// electron-builder asks the user to retry or cancel once the legacy uninstall
+// has failed five times. That dialog made sense while a failure ended the
+// upgrade; now `customUnInstallCheck` removes the old directory itself right
+// after, so the only thing the dialog changes is that the recovery waits for a
+// click — and it reads as a hard failure moments before the install succeeds.
+// Report the same detail (the exit code and directory issue #11 asked for) into
+// the details list instead and fall through to the Return the Cancel branch
+// already took, so the recovery runs on its own.
+const PRECISE_UNINSTALL_FAILURE = 'DetailPrint "旧版本卸载失败（退出码 $R0），安装目录：$installationDir；改由安装程序清理后继续 / Old version uninstall failed (exit code $R0). Install directory: $installationDir. Continuing; this installer will remove it."'
 const INSTALL_SECTION_APP_EXE = 'StrCpy $appExe "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"'
 const PREPARE_UPGRADE_HOOK = `\
 !ifmacrodef customPrepareUpgrade
@@ -170,7 +178,11 @@ export function patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiU
       + 'or this repository changed its replacement text; reinstall app-builder-lib and retry')
   }
   if (!failurePatched && !installUtil.includes(GENERIC_UNINSTALL_FAILURE)) {
-    throw new Error('electron-builder NSIS installUtil.nsh uninstall failure handling changed')
+    // Also what a developer tree hits after this repository edits its own
+    // replacement text: the installed template still carries the previous
+    // patch, so neither string matches. Reinstalling restores the pristine one.
+    throw new Error('electron-builder NSIS installUtil.nsh uninstall failure handling changed, '
+      + 'or this repository changed its replacement text; reinstall app-builder-lib and retry')
   }
   if (!modeLeavePatched && !multiUserUi.includes(INSTALL_MODE_LEAVE)) {
     throw new Error('electron-builder NSIS multiUserUi.nsh install-mode Leave hook changed')
@@ -299,6 +311,9 @@ export function checkNsisInstallDetails() {
     // previous version's uninstaller refused to do (issue #11).
     '!macro dshRemovePreviousInstall',
     'RMDir /r "$R5"',
+    // And this keeps every version from 0.2.6 on from needing that rescue:
+    // the uninstaller skips the atomic-rename detour that issue #11 dies on.
+    '!macro customRemoveFiles',
   ]) {
     if (!installerNsh.includes(requirement)) {
       failures.push('resources/installer.nsh is missing upgrade recovery: ' + requirement)
