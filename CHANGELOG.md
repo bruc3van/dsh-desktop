@@ -2,6 +2,11 @@
 
 本文件记录 dsh-desktop 各版本的主要特性变化。历史版本中的常规修复不再赘述，仅保留安全相关的加固记录。
 
+## [未发布]
+
+### 变更
+- 内置运行时升至 [`@deepseek-ai/dsh@0.1.1-rc.2`](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.1-rc.2)，并同步迁移 Windows 目录选择器的 Electron 兼容补丁
+
 ## [0.3.0] - 2026-08-21
 
 ### 变更
