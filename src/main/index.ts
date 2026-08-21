@@ -1163,6 +1163,46 @@ function parseReadiness(line: string): string | undefined {
   }
 }
 
+const RUNTIME_OUTPUT_TAIL_LIMIT = 8_192
+const ANSI_CSI_PATTERN = new RegExp(String.fromCharCode(27) + '\\[[0-?]*[ -/]*[@-~]', 'g')
+
+/** Keep only the tail: startup failures end with the actionable exception. */
+function appendRuntimeOutputTail(current: string, chunk: Buffer): string {
+  return (current + chunk.toString()).slice(-RUNTIME_OUTPUT_TAIL_LIMIT)
+}
+
+/**
+ * Runtime output is shown locally, but it can still echo credentials from a
+ * damaged config. Remove terminal decoration and common secret assignments
+ * before it reaches the error page or the status bridge.
+ */
+function sanitizeRuntimeOutput(value: string): string {
+  const printable = [...value.replace(/\r\n?/g, '\n').replace(ANSI_CSI_PATTERN, '')]
+    .filter(char => char === '\n' || char === '\t' || char.charCodeAt(0) >= 32)
+    .join('')
+  return printable
+    .replace(/(Bearer\s+)[^\s]+/gi, '$1[redacted]')
+    .replace(/(["']?(?:api[_-]?key|token|secret|password)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)/gi, '$1[redacted]')
+    .trim()
+}
+
+/** Prefer stderr; fall back to stdout for CLIs that report failures there. */
+function runtimeStartupDiagnostic(stderr: string, stdout: string): string | undefined {
+  const errorOutput = sanitizeRuntimeOutput(stderr)
+  if (errorOutput !== '') return errorOutput
+  const normalOutput = sanitizeRuntimeOutput(stdout)
+  return normalOutput === '' ? undefined : normalOutput
+}
+
+/** One bounded status-line summary; the failure page retains the full tail. */
+function runtimeDiagnosticSummary(detail: string): string {
+  const lines = detail.split('\n').map(line => line.trim()).filter(line => line !== '')
+  const useful = lines.find(line => /error|failed|cannot|missing|enoent|exception/i.test(line))
+    ?? lines.at(-1)
+    ?? detail
+  return useful.slice(0, 300)
+}
+
 /** One `dsh web` child generation: process + its own lifecycle listeners. */
 interface WebUiGeneration {
   child: ChildProcess
@@ -1194,6 +1234,8 @@ class WebUiManager {
    */
   private fatalError: Error | undefined
   lastError: string | null = null
+  /** Sanitized stdout/stderr tail from the most recent failed startup. */
+  lastDiagnostic: string | null = null
   /** Which runtime the current generation was spawned from (status + fallback). */
   lastSource: DshCommand['source'] | undefined
   /** The resolved command of the last spawn, for the post-readiness seat. */
@@ -1246,6 +1288,7 @@ class WebUiManager {
       // through the same fatal-error surface as a damaged installation.
       this.fatalError = error instanceof Error ? error : new Error(String(error))
       this.lastError = this.fatalError.message
+      this.lastDiagnostic = this.fatalError.stack ?? this.fatalError.message
       this.lastSource = undefined
       this.lastCommand = undefined
       queueMicrotask(() => {
@@ -1259,6 +1302,7 @@ class WebUiManager {
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error))
       this.lastError = failure.message
+      this.lastDiagnostic = failure.stack ?? failure.message
       // This generation never started: do not let onExit attribute the miss
       // to the previous source (which would reject PATH/npx and respawn).
       this.lastSource = undefined
@@ -1272,6 +1316,8 @@ class WebUiManager {
       return
     }
     console.log('[desktop] dsh runtime: ' + dsh.source + ' (' + dsh.label + ')')
+    this.lastError = null
+    this.lastDiagnostic = null
     this.lastSource = dsh.source
     this.lastCommand = dsh
     applyBundledPluginSeat(dsh)
@@ -1307,6 +1353,8 @@ class WebUiManager {
     const gen: WebUiGeneration = { child, ready, readyReported: false, stopped: false }
     let exitReported = false
     let readinessProbeStarted = false
+    let stdoutTail = ''
+    let stderrTail = ''
 
     // Recorded before readiness, not after: a client killed during the child's
     // boot still has to leave the pid behind for the next start to reap.
@@ -1350,6 +1398,7 @@ class WebUiManager {
     // pipe must not be lost (or misparsed).
     let stdoutBuffer = ''
     child.stdout.on('data', (chunk: Buffer) => {
+      stdoutTail = appendRuntimeOutputTail(stdoutTail, chunk)
       stdoutBuffer += chunk.toString()
       const lines = stdoutBuffer.split('\n')
       stdoutBuffer = lines.pop() ?? ''
@@ -1370,6 +1419,7 @@ class WebUiManager {
           }, (error: unknown) => {
             if (exitReported) return
             this.lastError = error instanceof Error ? error.message : String(error)
+            this.lastDiagnostic = error instanceof Error ? error.stack ?? error.message : String(error)
             rejectReady(error instanceof Error ? error : new Error(String(error)))
             // Tree-kill, not child.kill(): on Windows the direct child may be
             // the cmd.exe wrapper around a .cmd shim, and killing it alone
@@ -1384,10 +1434,12 @@ class WebUiManager {
       if (stdoutBuffer.trim() !== '') this.onLog(stdoutBuffer)
     })
     child.stderr.on('data', (chunk: Buffer) => {
+      stderrTail = appendRuntimeOutputTail(stderrTail, chunk)
       process.stderr.write('[dsh web] ' + chunk.toString())
     })
     child.on('error', (error) => {
       this.lastError = error.message
+      this.lastDiagnostic = error.stack ?? error.message
       rejectReady(error)
       // An 'error' after a successful spawn (a failed kill, say) leaves the
       // child running; only a process that never existed or already left
@@ -1397,6 +1449,15 @@ class WebUiManager {
       }
     })
     child.on('exit', (code, signal) => {
+      if (!gen.readyReported) {
+        const diagnostic = runtimeStartupDiagnostic(stderrTail, stdoutTail)
+        if (diagnostic !== undefined) {
+          this.lastDiagnostic = diagnostic
+          this.lastError = runtimeDiagnosticSummary(diagnostic)
+        } else if (this.lastError === null) {
+          this.lastError = 'dsh web exited before ready (code=' + String(code) + ', signal=' + String(signal) + ')'
+        }
+      }
       rejectReady(new Error('dsh web exited before ready (code=' + String(code) + ')'))
       reportExit(code, signal)
     })
@@ -2101,6 +2162,7 @@ function errorPageUrl(copy: {
   address: string
   reasonLabel: string
   reason: string
+  reasonLimit?: number
   retry: string
   settings: string
   quit: string
@@ -2125,10 +2187,10 @@ function errorPageUrl(copy: {
     + '.mark{width:64px;height:64px;border-radius:16px;box-shadow:0 12px 32px rgba(15,17,21,.14)}'
     + 'h1{margin:22px 0 0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.01em}'
     + '.hint{margin:10px 0 0;color:#6e7480;font-size:14px;line-height:22px}'
-    + '.facts{margin:22px 0 0;padding:12px 14px;text-align:left;border:1px solid #ebeef2;border-radius:12px;background:#fafbfc}'
+    + '.facts{margin:22px 0 0;padding:12px 14px;text-align:left;border:1px solid #ebeef2;border-radius:12px;background:#fafbfc;max-height:min(42vh,360px);overflow:auto}'
     + '.fact{display:flex;gap:12px;font-size:13px;line-height:20px}.fact+.fact{margin-top:8px}'
     + 'dt{flex:0 0 auto;min-width:' + (chinese ? '32px' : '58px') + ';margin:0;color:#9aa0a6}'
-    + 'dd{margin:0;min-width:0;color:#0f1115;word-break:break-all}'
+    + 'dd{margin:0;min-width:0;color:#0f1115;word-break:break-word;white-space:pre-wrap}'
     + '.actions{margin:24px 0 0;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}'
     + 'button{white-space:nowrap;font:inherit;font-size:13px;font-weight:400;background:transparent;'
     + 'border:1px solid #d8d8d4;border-radius:28px;padding:7px 18px;color:#0f1115;cursor:pointer;transition:background .15s ease,opacity .15s ease}'
@@ -2147,7 +2209,7 @@ function errorPageUrl(copy: {
     + '<p class="hint">' + escapeHtml(copy.hint) + '</p>'
     + '<dl class="facts">'
     + fact(copy.addressLabel, copy.address, 300)
-    + fact(copy.reasonLabel, copy.reason, 300)
+    + fact(copy.reasonLabel, copy.reason, copy.reasonLimit ?? 300)
     + fact(copy.recordLabel ?? '', copy.recordPath ?? '')
     + '</dl>'
     + '<div class="actions">'
@@ -2216,7 +2278,8 @@ function showConnectionError(failure: ConnectionFailure): void {
     addressLabel: chinese ? '地址' : 'Address',
     address,
     reasonLabel: chinese ? '原因' : 'Reason',
-    reason,
+    reason: failure.kind === 'runtime' ? reason.slice(0, 4_000) : reason,
+    reasonLimit: failure.kind === 'runtime' ? 4_000 : undefined,
     retry: chinese ? '重试' : 'Retry',
     settings: chinese ? '连接设置…' : 'Connection settings…',
     quit: chinese ? '退出' : 'Quit',
@@ -5380,12 +5443,29 @@ function startSettingsServer(): Promise<number> {
 }
 
 function showLocalRuntimeStartupFailure(code: number | null, signal: NodeJS.Signals | null): void {
-  const reason = webUi?.lastError
   const chinese = localeChinese()
+  const command = webUi?.lastCommand
+  const version = command?.version ?? (command?.source === 'bundled' ? bundledDshVersion() ?? undefined : undefined)
+  const source = command === undefined
+    ? undefined
+    : command.source + (version === undefined ? '' : ' · dsh ' + version)
+  const diagnostic = sanitizeRuntimeOutput(webUi?.lastDiagnostic ?? webUi?.lastError ?? '')
+  const exitStatus = [
+    code === null ? undefined : (chinese ? '代码 ' : 'code ') + String(code),
+    signal === null ? undefined : (chinese ? '信号 ' : 'signal ') + signal,
+  ].filter((part): part is string => part !== undefined).join(chinese ? '、' : ', ')
+  const detail = [
+    source === undefined ? undefined : (chinese ? '运行时：' : 'Runtime: ') + source,
+    command === undefined ? undefined : (chinese ? '启动目标：' : 'Launch target: ') + command.label,
+    (chinese ? '退出状态：' : 'Exit status: ') + (exitStatus === '' ? (chinese ? '未知' : 'unknown') : exitStatus),
+    diagnostic === ''
+      ? undefined
+      : (chinese ? '诊断输出：\n' : 'Diagnostic output:\n') + diagnostic,
+  ].filter((line): line is string => line !== undefined).join('\n\n')
   showConnectionError({
     kind: 'runtime',
     headline: chinese ? '本地服务无法启动' : 'The local service could not start',
-    detail: (reason !== null && reason !== undefined ? reason + ' · ' : '') + String(code) + ' / ' + String(signal),
+    detail,
   })
 }
 

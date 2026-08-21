@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-**Keep your Agent safely resident on your desktop: the official Web UI untouched, long tasks no longer hostage to a terminal or a browser tab, curated plugins reviewed before install.**
+**A third-party DSH desktop client that prioritizes security and is developer-friendly. It features the official Web UI, keeps long-running tasks in the system tray, and supports push notifications; it also includes a secure marketplace offering over 600 curated plugins that undergo review before installation.**
 
 DSH Desktop is an independent Electron client for DeepSeek Harness (`dsh`). The window shows the official Web UI itself — not a look-alike; whatever the official product is, that is what the window shows. The real engineering lives outside the window: tasks keep running when you close it, the app stays resident in the tray, the Agent runs in a governed execution environment, plugins go through a review-before-install marketplace, and the connection and update paths are hardened layer by layer.
 

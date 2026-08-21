@@ -28,6 +28,7 @@ const RUNTIME_DIR = join(APP_DIR, '.runtime', 'node_modules')
 const PICKER_DIR = join(RUNTIME_DIR, '@deepseek-ai', 'dsh-host-directory-picker-native')
 const PICKER_PACKAGE_FILE = join(PICKER_DIR, 'package.json')
 const WORKER_FILE = join(PICKER_DIR, 'lib', 'worker.cjs')
+const KOFFI_NATIVE_FILE = join(RUNTIME_DIR, '@koromix', 'koffi-win32-x64', 'win32_x64', 'koffi.node')
 const EXPECTED_VERSION = '0.1.1-rc.2'
 
 if (!existsSync(PICKER_PACKAGE_FILE) || !existsSync(WORKER_FILE)) {
@@ -50,6 +51,55 @@ if (workerSource.includes('Buffer.from(koffi.view(address, 32768))')) {
 console.log('✓ deployed Win32 picker worker contains the Electron compatibility patch')
 
 if (process.platform !== 'win32') process.exit(0)
+
+/** Map one PE relative virtual address into the file that carries it. */
+function peOffset(sections, rva) {
+  const section = sections.find(item => rva >= item.virtualAddress
+    && rva < item.virtualAddress + Math.max(item.virtualSize, item.rawSize))
+  if (section === undefined) throw new Error('invalid PE RVA 0x' + rva.toString(16))
+  return section.rawOffset + rva - section.virtualAddress
+}
+
+/** Read the ordinary import directory from a 32/64-bit PE image. */
+function peImports(image) {
+  const pe = image.readUInt32LE(0x3c)
+  if (image.toString('ascii', pe, pe + 4) !== 'PE\0\0') throw new Error('Koffi native module is not a PE image')
+  const coff = pe + 4
+  const optional = coff + 20
+  const optionalSize = image.readUInt16LE(coff + 16)
+  const dataDirectories = optional + (image.readUInt16LE(optional) === 0x20b ? 112 : 96)
+  const sectionTable = optional + optionalSize
+  const sections = Array.from({ length: image.readUInt16LE(coff + 2) }, (_, index) => {
+    const offset = sectionTable + index * 40
+    return {
+      virtualSize: image.readUInt32LE(offset + 8),
+      virtualAddress: image.readUInt32LE(offset + 12),
+      rawSize: image.readUInt32LE(offset + 16),
+      rawOffset: image.readUInt32LE(offset + 20),
+    }
+  })
+  const importRva = image.readUInt32LE(dataDirectories + 8)
+  if (importRva === 0) return []
+  const imports = []
+  for (let descriptor = peOffset(sections, importRva);;) {
+    const nameRva = image.readUInt32LE(descriptor + 12)
+    if (image.readUInt32LE(descriptor) === 0 && nameRva === 0 && image.readUInt32LE(descriptor + 16) === 0) break
+    const nameOffset = peOffset(sections, nameRva)
+    const nameEnd = image.indexOf(0, nameOffset)
+    imports.push(image.toString('ascii', nameOffset, nameEnd))
+    descriptor += 20
+  }
+  return imports
+}
+
+if (!existsSync(KOFFI_NATIVE_FILE)) throw new Error('deployed runtime is missing ' + KOFFI_NATIVE_FILE)
+const koffiImports = peImports(await readFile(KOFFI_NATIVE_FILE))
+const externalMsvcRuntime = koffiImports.filter(name => /^(?:msvcp|vcruntime)\d.*\.dll$/i.test(name))
+if (externalMsvcRuntime.length > 0) {
+  throw new Error('deployed Koffi requires a Visual C++ Redistributable that clean Windows may not have: '
+    + externalMsvcRuntime.join(', '))
+}
+console.log('✓ deployed Koffi has no external Visual C++ runtime dependency')
 
 const probeHome = await mkdtemp(join(tmpdir(), 'dsh-picker-electron-smoke-'))
 const expectedPath = join(probeHome, '工作区-é')

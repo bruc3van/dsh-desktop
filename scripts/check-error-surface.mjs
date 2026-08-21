@@ -127,6 +127,43 @@ try {
   ).then(() => true, () => false)
   check('retry reports the next failure (connection refused)', refused,
     (await window.locator('.facts').innerText()).replace(/\n/g, ' | '))
+
+  // A GUI build has no visible stderr console. Preserve the failed runtime's
+  // output in the local error surface, but strip terminal decoration and
+  // credentials before showing it.
+  await app.close()
+  app = undefined
+  const failingRuntime = join(checkHome, 'failing-dsh.mjs')
+  writeFileSync(failingRuntime,
+    "process.stderr.write('\\u001b[31mError: missing VCRUNTIME140.dll\\u001b[0m\\n')\n"
+    + "process.stderr.write('DEEPSEEK_API_KEY=not-for-the-screen\\n')\n"
+    + "process.stderr.write('{\\\"token\\\":\\\"json-secret\\\"}\\n')\n"
+    + 'process.exit(1)\n')
+  writeFileSync(join(desktopHome, 'settings.json'),
+    JSON.stringify({ connectionMode: 'smart', smartRuntimes: ['bundled'] }, null, 2) + '\n')
+  app = await electron.launch({
+    args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(checkHome, 'runtime-chromium')],
+    env: {
+      ...electronEnv,
+      DSH_DESKTOP_DSH: failingRuntime,
+    },
+  })
+  const runtimeWindow = await app.firstWindow()
+  await runtimeWindow.waitForSelector('#error-retry', { timeout: 35_000 })
+  const runtimeFacts = await runtimeWindow.locator('.facts').innerText()
+  check('runtime exit code and diagnostic are shown',
+    /(?:code|\u4ee3\u7801) 1/.test(runtimeFacts) && runtimeFacts.includes('missing VCRUNTIME140.dll'),
+    runtimeFacts.replace(/\n/g, ' | '))
+  check('runtime source and launch target are shown',
+    runtimeFacts.includes('override') && runtimeFacts.includes(failingRuntime),
+    runtimeFacts.replace(/\n/g, ' | '))
+  check('runtime diagnostic strips terminal decoration',
+    !runtimeFacts.includes('[31m') && !runtimeFacts.includes('[0m'), runtimeFacts.replace(/\n/g, ' | '))
+  check('runtime diagnostic redacts credentials',
+    runtimeFacts.includes('[redacted]')
+      && !runtimeFacts.includes('not-for-the-screen')
+      && !runtimeFacts.includes('json-secret'),
+    runtimeFacts.replace(/\n/g, ' | '))
 } catch (error) {
   check('run', false, error instanceof Error ? error.message : String(error))
 } finally {
