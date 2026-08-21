@@ -17,6 +17,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { releaseNotesCss, renderReleaseNotes } from './release-notes.ts'
 import { installMacNotificationFallback } from './mac-notification-fallback.ts'
+import { installWindowsNotificationActivation } from './windows-notification-activation.ts'
 
 /** Connection facts mirrored from the main process. */
 interface ConnectionStatus {
@@ -136,6 +137,12 @@ const notificationFallback = {
   },
 }
 
+const notificationActivation = {
+  activate: (): void => {
+    ipcRenderer.send('desktop:notification:activate')
+  },
+}
+
 contextBridge.exposeInMainWorld('desktop', {
   platform: process.platform,
   versions: {
@@ -146,6 +153,7 @@ contextBridge.exposeInMainWorld('desktop', {
   connection,
   update,
   local,
+  ...process.platform === 'win32' && { notificationActivation },
   ...process.platform === 'darwin' && { notificationFallback },
   /** Open the client's native connection-settings window (tray-era fallback). */
   openConnectionSettings: (): void => { ipcRenderer.send('desktop:open-connection-settings') },
@@ -157,6 +165,9 @@ contextBridge.exposeInMainWorld('desktop', {
 // the Dock and an in-app toast. Windows and Linux retain the native API.
 if (process.platform === 'darwin') {
   contextBridge.executeInMainWorld({ func: installMacNotificationFallback })
+}
+if (process.platform === 'win32') {
+  contextBridge.executeInMainWorld({ func: installWindowsNotificationActivation })
 }
 
 /**

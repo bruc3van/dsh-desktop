@@ -2458,6 +2458,14 @@ function createWindow(): void {
     scheduleWindowHealthCheck('window focused')
     clearMacNotificationAttention()
   })
+  mainWindow.on('close', (event) => {
+    // Keep the Web UI renderer alive in the tray so its notification plugin
+    // can keep observing long-running sessions. A real quit sets `quitting`
+    // in before-quit and passes through; installer handoff must pass too.
+    if (process.platform !== 'win32' || quitting || installerHandoff) return
+    event.preventDefault()
+    mainWindow?.hide()
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
     mainWindowRequested = false
@@ -5605,6 +5613,10 @@ if (!gotLock) {
     ipcMain.on('desktop:notification:clear', (event, id: unknown) => {
       if (process.platform !== 'darwin' || !bridgeCaller(event).trusted || typeof id !== 'string' || id.length > 160) return
       clearMacNotificationAttention(id)
+    })
+    ipcMain.on('desktop:notification:activate', (event) => {
+      if (process.platform !== 'win32' || !bridgeCaller(event).trusted) return
+      showMainWindow()
     })
     mainWindowRequested = true
     createWindow()

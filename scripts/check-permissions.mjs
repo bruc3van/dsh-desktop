@@ -201,3 +201,45 @@ try {
   globalThis.window = originalWindow
   globalThis.document = originalDocument
 }
+
+// Windows keeps the real Web Notification UI, but its renderer click must
+// cross the preload bridge to restore/show the native BrowserWindow. Exercise
+// the serialized page-world hook with an EventTarget-backed native stand-in.
+let activations = 0
+let pluginClicks = 0
+class FakeNativeNotification extends EventTarget {
+  static permission = 'granted'
+  static requestPermission() { return Promise.resolve('granted') }
+  dispatchEvent(event) {
+    const dispatched = super.dispatchEvent(event)
+    this.onclick?.(event)
+    return dispatched
+  }
+}
+globalThis.window = {
+  desktop: {
+    notificationActivation: {
+      activate: () => { activations += 1 },
+    },
+  },
+  Notification: FakeNativeNotification,
+}
+
+try {
+  const activation = await bundledModule('../src/main/windows-notification-activation.ts')
+  const install = (0, eval)('(' + activation.installWindowsNotificationActivation.toString() + ')')
+  install()
+  install()
+  const notification = new globalThis.window.Notification('Session · Done')
+  notification.onclick = () => { pluginClicks += 1 }
+  notification.dispatchEvent(new Event('click'))
+  notification.dispatchEvent(new Event('click'))
+  check('Windows notification click activates the native window exactly once without swallowing the plugin click',
+    activations === 1 && pluginClicks === 2)
+  check('Windows notification activation preserves the native API surface',
+    notification instanceof FakeNativeNotification
+    && globalThis.window.Notification.permission === 'granted'
+    && await globalThis.window.Notification.requestPermission() === 'granted')
+} finally {
+  globalThis.window = originalWindow
+}

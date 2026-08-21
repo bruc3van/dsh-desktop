@@ -73,6 +73,7 @@ const UPGRADE_SAFE_INSTALL_MODE_LEAVE = `\
 
 ${INSTALL_MODE_LEAVE}`
 const GENERIC_UNINSTALL_FAILURE = 'MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY OneMoreAttempt'
+const UNUSED_UNINSTALL_RETRY_LABEL = '  OneMoreAttempt:'
 // electron-builder asks the user to retry or cancel once the legacy uninstall
 // has failed five times. That dialog made sense while a failure ended the
 // upgrade; now `customUnInstallCheck` removes the old directory itself right
@@ -160,7 +161,13 @@ export function patchNsisDetailsTemplates(installSection, extractAppPackage) {
  */
 export function patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiUserUi) {
   const directoryPatched = assistedInstaller.includes(UPGRADE_SAFE_DIRECTORY_NORMALIZATION)
-  const failurePatched = installUtil.includes(PRECISE_UNINSTALL_FAILURE)
+  // Replacing the only `IDRETRY OneMoreAttempt` branch also makes its label
+  // dead. makensis warning 6012 is fatal under electron-builder, so a template
+  // is complete only after both halves have been patched. Treat the residual
+  // label as migratable: a developer tree may already carry the older partial
+  // patch even though a clean CI checkout always starts from the generic line.
+  const retryLabelPresent = installUtil.includes(UNUSED_UNINSTALL_RETRY_LABEL)
+  const failurePatched = installUtil.includes(PRECISE_UNINSTALL_FAILURE) && !retryLabelPresent
   const modeLeavePatched = multiUserUi.includes(UPGRADE_SAFE_INSTALL_MODE_LEAVE)
   if (directoryPatched && failurePatched && modeLeavePatched) {
     return {
@@ -177,7 +184,9 @@ export function patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiU
     throw new Error('electron-builder NSIS assistedInstaller.nsh directory normalization changed, '
       + 'or this repository changed its replacement text; reinstall app-builder-lib and retry')
   }
-  if (!failurePatched && !installUtil.includes(GENERIC_UNINSTALL_FAILURE)) {
+  if (!failurePatched
+    && !installUtil.includes(GENERIC_UNINSTALL_FAILURE)
+    && !installUtil.includes(PRECISE_UNINSTALL_FAILURE)) {
     // Also what a developer tree hits after this repository edits its own
     // replacement text: the installed template still carries the previous
     // patch, so neither string matches. Reinstalling restores the pristine one.
@@ -187,13 +196,17 @@ export function patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiU
   if (!modeLeavePatched && !multiUserUi.includes(INSTALL_MODE_LEAVE)) {
     throw new Error('electron-builder NSIS multiUserUi.nsh install-mode Leave hook changed')
   }
+  let nextInstallUtil = installUtil.includes(PRECISE_UNINSTALL_FAILURE)
+    ? installUtil
+    : installUtil.replace(GENERIC_UNINSTALL_FAILURE, PRECISE_UNINSTALL_FAILURE)
+  if (retryLabelPresent) {
+    nextInstallUtil = removeStandaloneLine(nextInstallUtil, UNUSED_UNINSTALL_RETRY_LABEL)
+  }
   return {
     assistedInstaller: directoryPatched
       ? assistedInstaller
       : assistedInstaller.replace(DIRECTORY_NORMALIZATION, UPGRADE_SAFE_DIRECTORY_NORMALIZATION),
-    installUtil: failurePatched
-      ? installUtil
-      : installUtil.replace(GENERIC_UNINSTALL_FAILURE, PRECISE_UNINSTALL_FAILURE),
+    installUtil: nextInstallUtil,
     multiUserUi: modeLeavePatched
       ? multiUserUi
       : multiUserUi.replace(INSTALL_MODE_LEAVE, UPGRADE_SAFE_INSTALL_MODE_LEAVE),
@@ -361,6 +374,9 @@ export function checkNsisInstallDetails() {
     if (!upgrade.installUtil.includes('Old version uninstall failed (exit code $R0)')) {
       failures.push('fixture installUtil.nsh does not report the legacy uninstaller exit code')
     }
+    if (upgrade.installUtil.includes('OneMoreAttempt:')) {
+      failures.push('fixture installUtil.nsh leaves the unused OneMoreAttempt label behind')
+    }
     const upgradeAgain = patchNsisUpgradeTemplates(upgrade.assistedInstaller, upgrade.installUtil, upgrade.multiUserUi)
     if (upgradeAgain.changed) failures.push('patching already-patched upgrade templates was not a no-op')
     const upgradeSection = patchNsisUpgradeInstallSection(FIXTURE_UPGRADE_INSTALL_SECTION)
@@ -408,7 +424,10 @@ export const FIXTURE_EXTRACT_APP = `\
 `
 
 export const FIXTURE_ASSISTED_INSTALLER = DIRECTORY_NORMALIZATION
-export const FIXTURE_INSTALL_UTIL = GENERIC_UNINSTALL_FAILURE
+export const FIXTURE_INSTALL_UTIL = `${GENERIC_UNINSTALL_FAILURE}
+${UNUSED_UNINSTALL_RETRY_LABEL}
+    ExecWait 'legacy uninstaller'
+`
 export const FIXTURE_MULTI_USER_UI = INSTALL_MODE_LEAVE
 export const FIXTURE_UPGRADE_INSTALL_SECTION = INSTALL_SECTION_APP_EXE
 
@@ -422,6 +441,16 @@ function countOccurrences(source, search) {
     from = index + search.length
   }
   return count
+}
+
+/** Remove one complete template line while preserving its existing EOL style. */
+function removeStandaloneLine(source, line) {
+  for (const ending of ['\r\n', '\n']) {
+    const complete = line + ending
+    if (source.includes(complete)) return source.replace(complete, '')
+  }
+  if (source.endsWith(line)) return source.slice(0, -line.length)
+  throw new Error('electron-builder NSIS installUtil.nsh retry label shape changed')
 }
 
 function replaceAllCounted(source, search, replacement, expectedCount) {
