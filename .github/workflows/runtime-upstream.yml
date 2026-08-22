@@ -1,16 +1,23 @@
-# 每晚检查上游 @deepseek-ai/dsh 是否发布了比内置运行时更新的版本，有则开 issue。
+# 每天四次检查上游 @deepseek-ai/dsh 是否发布了比内置运行时更新的版本，有则开 issue。
 # 发现渠道从「有人想起来查 npm」变成主动信号：npx 用户当天就能拿到的新版本，
 # 内置运行时不应滞后太久（README 的承诺是「随应用内更新跟进」）。
 #
 # 只监控不升级：升级本身要过人工清单（picker 补丁对账、平台二进制对齐、
 # @deepseek-ai/* lockfile 逐条审查——见 pnpm-workspace.yaml 各处注释），
 # 自动提 PR 反而会绕过这些约束。
-name: 内置运行时上游监控 / Runtime upstream watch
+name: DSH新版本监控 / Runtime upstream watch
 
 on:
   schedule:
-    # 每天北京时间 22:00（UTC 14:00）。GitHub cron 只认 UTC。
-    - cron: "0 14 * * *"
+    # 每天北京时间 10:17 / 14:17 / 18:17 / 22:17（UTC 02/06/10/14:17）。
+    # GitHub cron 只认 UTC；避开北京 0~8 点的深夜窗口。
+    # 用 :17 而非整点：schedule 在每小时开头负载高峰会被延迟甚至丢弃，
+    # 错开分钟数能显著减少这种漂移（GitHub Actions 官方建议）。
+    # 同一版本只开一次 issue（下方按标题去重），一天多跑不会重复打扰。
+    - cron: "17 2 * * *"
+    - cron: "17 6 * * *"
+    - cron: "17 10 * * *"
+    - cron: "17 14 * * *"
   workflow_dispatch:
 
 permissions:
@@ -108,7 +115,7 @@ jobs:
           - [ ] 隐式契约：pnpm 的 `engines.node` 是否仍被 Electron 的 Node 满足（`pnpm run check:pnpm-engine` 是红色构建兜底）
           - [ ] 全量门禁：`build → prepare:runtime → check:picker → check:runtime-env → check:runtime-spawn → check:dsh-cli → check:smart-runtimes → check:local-web-port → check:runtime-resolution → check:bundled-plugin → check:runtime-lock → check:restart → check:pnpm-engine → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit`
 
-          — 本 issue 由 `.github/workflows/runtime-upstream.yml` 每日检查自动创建。
+          — 本 issue 由 `.github/workflows/runtime-upstream.yml` 每日定时检查自动创建。
           EOF
           )"
           BODY="${BODY//__LATEST__/$LATEST}"
