@@ -166,6 +166,30 @@ function logFor(app) {
 }
 
 /**
+ * How long a single evaluate() round-trip may take before mainProcessState()
+ * gives up on it. This is the one wait in the file that used to have no bound
+ * at all: it is called from inside firstWindow()'s polling loop, which only
+ * rechecks its own timeoutMs after this call returns. A wedged CDP channel —
+ * the process alive but not answering — used to hang that `await` forever,
+ * taking the loop's timeout with it; the script would then sit until the CI
+ * job's own 30-minute ceiling killed it, with none of its own timeouts (30s,
+ * 45s, 60s throughout this file) ever getting a chance to fire.
+ */
+const MAIN_PROCESS_STATE_TIMEOUT_MS = 8_000
+
+/** Reject with `message` if `promise` has not settled within `ms`. */
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { reject(new Error(message)) }, ms)
+    timer.unref()
+    promise.then(
+      value => { clearTimeout(timer); resolve(value) },
+      error => { clearTimeout(timer); reject(error) },
+    )
+  })
+}
+
+/**
  * What the main process itself says about its state. A window that never
  * arrives has three causes that look identical from outside — the process
  * quit, `whenReady` never resolved, or a window exists that Playwright never
@@ -181,14 +205,18 @@ async function mainProcessState(app) {
     }
   }
   try {
-    const state = await app.evaluate(({ app: electronApp, BrowserWindow }) => ({
-      ready: electronApp.isReady(),
-      windows: BrowserWindow.getAllWindows().map(window => ({
-        visible: window.isVisible(),
-        destroyed: window.isDestroyed(),
-        url: window.webContents.getURL(),
+    const state = await withTimeout(
+      app.evaluate(({ app: electronApp, BrowserWindow }) => ({
+        ready: electronApp.isReady(),
+        windows: BrowserWindow.getAllWindows().map(window => ({
+          visible: window.isVisible(),
+          destroyed: window.isDestroyed(),
+          url: window.webContents.getURL(),
+        })),
       })),
-    }))
+      MAIN_PROCESS_STATE_TIMEOUT_MS,
+      'evaluate() did not answer within ' + String(MAIN_PROCESS_STATE_TIMEOUT_MS) + 'ms',
+    )
     return {
       live: state.ready && state.windows.some(window => !window.destroyed),
       detail: 'electron alive: ' + JSON.stringify(state),
