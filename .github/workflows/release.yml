@@ -314,32 +314,28 @@ jobs:
       - name: 验证安装包内置运行时 / Smoke packaged runtime
         run: ${{ matrix.smoke }}
 
-      - name: 验证 Windows NSIS 实际安装结果 / Smoke installed Windows runtime
+      # 三个场景合起来才说明问题。安装器退出码 0 不能证明任何事：直接解压把写不
+      # 进去的文件直接丢掉且不置错误标志，所以守卫失效的表现是「装完了、能启动、
+      # 少了几个文件」。脚本因此断言两件真正有区别的事——实际走的是哪条分支（暂
+      # 存复制会在 %TEMP% 的 ns*.tmp 下建出 7z-out，快速路径不会），以及装出来
+      # 的树是否包含 win-unpacked 的每一个文件。
+      - name: 验证 NSIS 安装（空目录，直接解压）/ Smoke install, direct extract
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem -Path release -File -Filter '*.exe' | Select-Object -First 1
-          if ($null -eq $installer) {
-            throw 'NSIS installer not found under release/'
-          }
+        run: ./scripts/check-nsis-install.ps1 -Scenario fast -Smoke
 
-          $installDir = Join-Path $env:RUNNER_TEMP ('dsh-desktop-nsis-' + [guid]::NewGuid().ToString('N'))
-          $install = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
-          if ($install.ExitCode -ne 0) {
-            throw "NSIS installer exited with code $($install.ExitCode)"
-          }
+      # 卸载没能删干净时必须回退，否则旧版已卸载、新版只解压一半。
+      - name: 验证 NSIS 安装（有残留，暂存复制）/ Smoke install, staged fallback
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/check-nsis-install.ps1 -Scenario dirty -Smoke
 
-          $executable = Join-Path $installDir 'DSH Desktop.exe'
-          if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-            throw "Installed executable not found: $executable"
-          }
-          # Not `pnpm run smoke:package -- ...`: pnpm forwards the separator
-          # itself, so the script would receive a literal `--` as its target.
-          node scripts/smoke-package.mjs "$executable"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Installed NSIS runtime smoke failed with code $LASTEXITCODE"
-          }
+      # 安装路径深到最长打包路径会越过 MAX_PATH 时也必须回退。这一条是唯一只有
+      # 暂存复制才可能通过的场景：直接解压在这里会静默丢文件。
+      - name: 验证 NSIS 安装（超长路径，暂存复制）/ Smoke install, over-budget path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/check-nsis-install.ps1 -Scenario deep
 
       # Run last on Windows: this deliberately mutates the product's HKCU
       # installer state and desktop shortcuts; cleanup failures fail the step.

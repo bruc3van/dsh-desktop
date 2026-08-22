@@ -1,7 +1,10 @@
 ; Assisted NSIS shows an InstFiles list under the progress bar. electron-builder
 ; leaves that list empty (`SetDetailsPrint none`). ShowInstDetails keeps it open;
 ; `scripts/patch-nsis-install-details.mjs` turns printing back on and asks 7-Zip
-; to report extraction percent. Silent installs (`/S`) are unchanged.
+; to report extraction percent. That same beforePack hook adds a direct-extract
+; fast path ahead of the $PLUGINSDIR\7z-out staging copy, taken only when
+; $INSTDIR is empty; see customRemoveFiles at the bottom of this file for why
+; that guard is the load-bearing part. Silent installs (`/S`) are unchanged.
 !include LogicLib.nsh
 
 ; Whether customInit found a usable pre-rename installation in the selected
@@ -332,6 +335,13 @@ FunctionEnd
 ; and stopping. That case is already handled upstream — CHECK_APP_RUNNING closes
 ; the app before the uninstall section runs — and leftovers the installer writes
 ; over beat an upgrade that cannot proceed at all.
+; This is what the beforePack direct-extract fast path checks for, and note what
+; it deliberately does NOT promise: `RMDir /r` skips any file that will not go
+; and reports nothing, so a genuinely busy file leaves the directory non-empty.
+; That is why the fast path tests $INSTDIR for emptiness instead of assuming it,
+; and hands the non-empty case back to electron-builder's staged copy with its
+; retries. Extracting straight into a directory this left leftovers in is what
+; would turn a failed upgrade into an unbootable half install.
 !macro customRemoveFiles
   DetailPrint "Removing $INSTDIR"
   ; Move out of $INSTDIR so it can be removed.

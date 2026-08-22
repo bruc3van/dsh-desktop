@@ -8,7 +8,7 @@
 
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -121,9 +121,52 @@ function assertPackagedPnpm(packagedExecutable) {
   if (existsSync(artifacts)) throw new Error('packaged pnpm artifacts/ was not pruned: ' + artifacts)
 }
 
+/**
+ * The direct-extract fast path in the NSIS installer may only run when
+ * `$INSTDIR` is short enough that the deepest packed file still lands inside
+ * MAX_PATH — 7-Zip drops anything longer and sets no error flag, so the
+ * installer would exit 0 with files silently missing.
+ *
+ * beforePack computes that budget from `.runtime/node_modules`, which assumes
+ * the bundled runtime holds the packed tree's longest path. This re-derives the
+ * real maximum from what was actually packed and refuses a budget measured
+ * against anything shallower, so the assumption cannot rot into a fast path
+ * that truncates.
+ */
+async function assertPackedPathBudget() {
+  if (process.platform !== 'win32') return
+  const unpacked = join(RELEASE_DIR, 'win-unpacked')
+  if (!existsSync(unpacked)) return
+  const budgetFile = join(APP_DIR, '.build', 'nsis-path-budget.json')
+  if (!existsSync(budgetFile)) {
+    throw new Error('missing ' + budgetFile + ' — the electron-builder beforePack hook did not run')
+  }
+  const recorded = JSON.parse(await readFile(budgetFile, 'utf8'))
+  let longest = 0
+  let deepest = ''
+  for (const path of await walk(unpacked)) {
+    const relative = path.slice(unpacked.length + 1)
+    if (relative.length > longest) {
+      longest = relative.length
+      deepest = relative
+    }
+  }
+  if (longest > recorded.longestPackedPath) {
+    throw new Error('packed tree reaches ' + longest + ' characters but the installer budget was computed'
+      + ' for ' + recorded.longestPackedPath + ' (measured from ' + recorded.measuredFrom + ').'
+      + ' The fast path would extract into a directory too deep for this file and 7-Zip would drop it'
+      + ' without reporting anything. Longest packed path: ' + deepest)
+  }
+  const worstInstallDir = recorded.budget
+  console.log('✓ packed tree fits the installer path budget (' + longest + ' ≤ '
+    + recorded.longestPackedPath + '; fast path allowed up to a ' + worstInstallDir
+    + '-character install directory)')
+}
+
 await assertLocalePacks(executable)
 assertPackagedGateway(executable)
 assertPackagedPnpm(executable)
+await assertPackedPathBudget()
 
 const smokeHome = await mkdtemp(join(tmpdir(), 'dsh-desktop-package-smoke-'))
 const emptyPath = join(smokeHome, 'empty-path')

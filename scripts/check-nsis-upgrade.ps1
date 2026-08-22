@@ -174,6 +174,10 @@ function Wait-ForInstallerFamilyQuiet([datetime]$Deadline) {
 function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$TargetDir = '', [string]$LegacyDir = '') {
   Write-Step "run: $(Split-Path -Leaf $Path) $($Arguments -join ' ')"
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  # Every install and uninstall this script runs goes through here, so timing it
+  # here is what makes an upgrade's real cost visible: the uninstall deletes one
+  # full tree before the install writes the next, and both are paid per file.
+  $clock = [Diagnostics.Stopwatch]::StartNew()
   $process = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru
   try {
     Wait-ForProcess $process "Installer $Path" $TimeoutSeconds
@@ -218,10 +222,16 @@ function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeco
     }
     throw
   }
+  $clock.Stop()
   if ($process.ExitCode -ne 0) {
     throw "Installer $Path exited with code $($process.ExitCode)"
   }
-  Write-Step "done: $(Split-Path -Leaf $Path)"
+  $landed = ''
+  if ($TargetDir -ne '' -and (Test-Path -LiteralPath $TargetDir)) {
+    $files = @(Get-ChildItem -LiteralPath $TargetDir -Recurse -File -ErrorAction SilentlyContinue)
+    $landed = ", $($files.Count) files in $TargetDir"
+  }
+  Write-Step ("done: {0} ({1:N1}s{2})" -f (Split-Path -Leaf $Path), $clock.Elapsed.TotalSeconds, $landed)
 }
 
 function Remove-InstalledProduct {

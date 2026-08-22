@@ -7,6 +7,9 @@ directories:
 
 files:
   - .build/**/*
+  # beforePack records the installer's MAX_PATH budget here for
+  # scripts/smoke-package.mjs to re-check; it is build metadata, not app code.
+  - "!.build/nsis-path-budget.json"
   - resources/**/*
   # Build-time source for the .icns only; nothing reads it at runtime.
   - "!resources/icon-mac.png"
@@ -97,6 +100,24 @@ win:
 # electron-builder then silences it (`SetDetailsPrint none`) and extracts the
 # app 7z without a percent string. The include keeps that list open; beforePack
 # edits the templates so the list shows stage lines and 7-Zip's `N% (a / b MB)`.
+#
+# The same hook also splices a direct-extract fast path in front of that
+# template's staging copy. Upstream extracts into $PLUGINSDIR\7z-out and then
+# CopyFiles the tree into $INSTDIR, writing all ~11500 packaged files a second
+# time, and the installer pays per file, not per byte: locally, 283 MB in 20
+# files copies in 0.3 s while 124 MB in 12508 files takes 11.6 s. Measured A/B
+# on one machine: 105.7 s and 498.8 MB of peak TEMP before, 36.7 s and 94.5 MB
+# after.
+#
+# The fast path is guarded, not unconditional. The staging copy exists so a
+# locked target file can be retried, and customRemoveFiles in
+# resources/installer.nsh does not promise an empty $INSTDIR — RMDir /r skips
+# whatever is locked and says nothing. So the direct extract runs only when
+# $INSTDIR is genuinely empty; a leftover file, or an error partway through,
+# falls through to electron-builder's own body with its retries intact. That
+# body is left byte for byte as upstream wrote it and pinned by hash, so a
+# future electron-builder cannot quietly add a step the fast path would skip.
+#
 # Silent `/S` installs are unchanged. Re-check with `pnpm run check:nsis-details`
 # after bumping electron-builder — the templates are not a public API.
 beforePack: scripts/patch-nsis-install-details.mjs

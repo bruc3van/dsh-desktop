@@ -95,27 +95,59 @@ await prune(runtimeModules)
 console.log('[runtime] pruned ' + prunedFiles + ' development entries ('
   + (prunedBytes / 1e6).toFixed(1) + ' MB) from ' + relative(APP_DIR, runtimeModules))
 
-/**
- * pnpm ships a standalone Node executable under `artifacts/exe` (~18 MB) that
- * this client never launches: the Agent runs `pnpm.mjs` on Electron's Node.
- * The path is this exact relative location. Pruning a directory named
- * `artifacts` anywhere would be the same class of bug as pruning `doc/`
- * (`yaml` keeps runtime code under `dist/doc/`).
- */
-const pnpmArtifacts = join(runtimeModules, 'pnpm', 'artifacts')
-if (existsSync(pnpmArtifacts)) {
-  let artifactBytes = 0
-  const collect = async (directory) => {
-    const entries = await readdir(directory, { withFileTypes: true })
-    for (const entry of entries) {
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) await collect(path)
-      else if (entry.isFile()) artifactBytes += (await stat(path)).size
-    }
+/** Every file under `directory`, recursively. */
+async function collectFiles(directory, into = []) {
+  const entries = await readdir(directory, { withFileTypes: true })
+  for (const entry of entries) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) await collectFiles(path, into)
+    else if (entry.isFile()) into.push(path)
   }
-  await collect(pnpmArtifacts)
-  await rm(pnpmArtifacts, { recursive: true, force: true })
-  console.log('[runtime] pruned pnpm/artifacts (' + (artifactBytes / 1e6).toFixed(1) + ' MB)')
+  return into
+}
+
+/**
+ * Directories this closure ships and no runtime code path executes, each named
+ * by its exact relative location. Pruning by directory *name* anywhere would be
+ * the same class of bug as pruning `doc/` (see prune() above: `yaml` keeps
+ * runtime code under `dist/doc/`), so every entry here is a full path checked
+ * against the owning package's manifest.
+ *
+ * Windows install time is paid per file, not per byte — the NSIS installer
+ * creates each packaged file individually, and locally 283 MB in 20 files
+ * copies in 0.3 s while 124 MB in 12508 files takes 11.6 s — so what an entry
+ * is worth is the file count it removes, not the megabytes.
+ *
+ * - `@mixmark-io/domino/test`: mocha fixtures. The manifest resolves `main` to
+ *   `./lib` and mentions test/ only from its `mocha` devDependency script, so
+ *   nothing the client runs can reach it. 959 of the package's 1022 files sit
+ *   here — around 8% of the entire closure, and the single largest block of
+ *   dead files left in it.
+ * - `pnpm/artifacts`: a standalone Node executable (~18 MB) this client never
+ *   launches — the Agent runs `pnpm.mjs` on Electron's own Node.
+ */
+const PRUNED_DIRECTORIES = [
+  ['@mixmark-io', 'domino', 'test'],
+  ['pnpm', 'artifacts'],
+]
+
+for (const segments of PRUNED_DIRECTORIES) {
+  const label = segments.join('/')
+  const directory = join(runtimeModules, ...segments)
+  if (!existsSync(directory)) {
+    // Not fatal: upstream may legitimately stop shipping one of these, and a
+    // release should not fail over a directory that is already gone. Say it
+    // out loud so a rename surfaces in the build log rather than silently
+    // putting the files back into the installer.
+    console.log('[runtime] nothing to prune at ' + label + ' — upstream layout may have changed')
+    continue
+  }
+  const files = await collectFiles(directory)
+  let bytes = 0
+  for (const file of files) bytes += (await stat(file)).size
+  await rm(directory, { recursive: true, force: true })
+  console.log('[runtime] pruned ' + label + ' (' + files.length + ' files, '
+    + (bytes / 1e6).toFixed(1) + ' MB)')
 }
 
 const pnpmBin = join(runtimeModules, 'pnpm', 'bin', 'pnpm.mjs')
@@ -151,15 +183,6 @@ if (RUNTIME_TARGET !== undefined) {
   // Re-enabling a linux release means widening this shape too.
   if (!/^(darwin|win32)-(arm64|x64)$/.test(RUNTIME_TARGET)) {
     throw new Error('invalid DSH_RUNTIME_TARGET: ' + RUNTIME_TARGET + ' (expected e.g. win32-x64)')
-  }
-  const collectFiles = async (directory, into = []) => {
-    const entries = await readdir(directory, { withFileTypes: true })
-    for (const entry of entries) {
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) await collectFiles(path, into)
-      else if (entry.isFile()) into.push(path)
-    }
-    return into
   }
   const prebuilds = join(runtimeModules, 'node-pty', 'prebuilds')
   if (!existsSync(prebuilds)) {
@@ -202,5 +225,60 @@ if (RUNTIME_TARGET !== undefined) {
     console.log('[runtime] node-pty prebuilds kept ' + RUNTIME_TARGET + ' (' + keptFiles.length
       + ' files), removed ' + removedFiles + ' other-platform files ('
       + (removedBytes / 1e6).toFixed(1) + ' MB)')
+  }
+
+  /**
+   * node-pty also vendors ConPTY under `third_party/conpty/<version>/win10-*`,
+   * which the prebuilds prune above does not reach. Same reasoning: a win32-x64
+   * artifact has no use for the arm64 pair, and a darwin one has no use for
+   * either.
+   *
+   * There is a second reason to remove them rather than leave them as dead
+   * weight. Those two files are in `release/win-unpacked` and in no installed
+   * tree — not the one this repository builds, and not the shipped 0.3.1 —
+   * so electron-builder's 7z step drops them somewhere between the packed
+   * directory and the archive. That has never been root-caused. Taking them
+   * out at the source removes the instance; scripts/check-nsis-install.ps1
+   * compares the installed tree against win-unpacked file by file, which is
+   * what would catch it happening to anything else.
+   */
+  const conptyVendor = join(runtimeModules, 'node-pty', 'third_party', 'conpty')
+  if (existsSync(conptyVendor)) {
+    const wanted = RUNTIME_TARGET === 'win32-x64' ? 'win10-x64'
+      : RUNTIME_TARGET === 'win32-arm64' ? 'win10-arm64'
+      : undefined
+    let removedConptyFiles = 0
+    let removedConptyBytes = 0
+    let keptConpty = 0
+    for (const version of await readdir(conptyVendor, { withFileTypes: true })) {
+      if (!version.isDirectory()) continue
+      const versionDir = join(conptyVendor, version.name)
+      const platforms = (await readdir(versionDir, { withFileTypes: true }))
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+      // Same bar as the prebuilds prune: "delete everything that is not the
+      // target" is only a prune while the target is one of the things there.
+      if (wanted !== undefined && !platforms.includes(wanted)) {
+        throw new Error('node-pty vendors no ' + wanted + ' ConPTY under ' + versionDir
+          + ' (available: ' + (platforms.join(', ') || 'none') + ') — the layout changed; update this prune')
+      }
+      for (const platform of platforms) {
+        if (platform === wanted) {
+          keptConpty += (await collectFiles(join(versionDir, platform))).length
+          continue
+        }
+        const directory = join(versionDir, platform)
+        for (const file of await collectFiles(directory)) {
+          removedConptyBytes += (await stat(file)).size
+          removedConptyFiles += 1
+        }
+        await rm(directory, { recursive: true, force: true })
+      }
+    }
+    if (removedConptyFiles > 0) {
+      console.log('[runtime] node-pty vendored ConPTY kept ' + (wanted ?? 'nothing') + ' (' + keptConpty
+        + ' files), removed ' + removedConptyFiles + ' other-platform files ('
+        + (removedConptyBytes / 1e6).toFixed(1) + ' MB)')
+    }
   }
 }
