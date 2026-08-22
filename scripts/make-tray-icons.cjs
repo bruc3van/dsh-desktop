@@ -39,6 +39,18 @@ const LOG_FILE = join(APP_DIR, '.build', 'make-tray-icons.log')
 const SIZES = [16, 20, 24, 32, 40, 48]
 /** Clear margin around the glyph, as a fraction of the icon box. */
 const PADDING_RATIO = 0.06
+/**
+ * One rendered set per taskbar brightness, keyed by the resource prefix
+ * src/main/index.ts asks for. Windows draws the notification area from the
+ * SYSTEM colour mode, which the user can set independently of the app mode, so
+ * a white-only glyph disappears entirely on a light taskbar. Near-black rather
+ * than pure black for the light set: it matches the weight the shell's own
+ * icons carry there.
+ */
+const FILLS = [
+  { prefix: 'iconTray-', fill: '#ffffff' },
+  { prefix: 'iconTrayDark-', fill: '#181818' },
+]
 
 function log(message) {
   const line = '[icons] ' + message
@@ -52,9 +64,9 @@ function log(message) {
 
 /**
  * The glyph path, taken from the source artwork. The file carries one path plus
- * a prefers-color-scheme rule that recolours it; the tray variant is always the
- * white one (see createTray — the Windows taskbar can be dark while the app is
- * in light mode), so the rule is dropped and the fill is set explicitly.
+ * a prefers-color-scheme rule that recolours it; a tray icon is drawn over the
+ * taskbar rather than over a page, so the rule cannot apply and both fills are
+ * rasterised explicitly instead (see FILLS).
  */
 function readGlyphPath() {
   const svg = readFileSync(SOURCE_SVG, 'utf8')
@@ -86,6 +98,7 @@ async function renderSizes(glyph) {
     return await window.webContents.executeJavaScript(`(async () => {
       const glyph = ${JSON.stringify(glyph)}
       const sizes = ${JSON.stringify(SIZES)}
+      const fills = ${JSON.stringify(FILLS)}
       const padding = ${String(PADDING_RATIO)}
       const NS = 'http://www.w3.org/2000/svg'
 
@@ -110,9 +123,9 @@ async function renderSizes(glyph) {
         side,
       ].join(' ')
 
-      const draw = (size) => new Promise((resolve, reject) => {
+      const draw = (size, prefix, fill) => new Promise((resolve, reject) => {
         const markup = '<svg xmlns="' + NS + '" width="' + size + '" height="' + size + '"'
-          + ' viewBox="' + viewBox + '"><path d="' + glyph.d + '" fill="#ffffff" fill-rule="nonzero"/></svg>'
+          + ' viewBox="' + viewBox + '"><path d="' + glyph.d + '" fill="' + fill + '" fill-rule="nonzero"/></svg>'
         const image = new Image(size, size)
         image.onload = () => {
           const canvas = document.createElement('canvas')
@@ -121,14 +134,16 @@ async function renderSizes(glyph) {
           const context = canvas.getContext('2d')
           context.clearRect(0, 0, size, size)
           context.drawImage(image, 0, 0, size, size)
-          resolve({ size, data: canvas.toDataURL('image/png'), viewBox })
+          resolve({ size, prefix, data: canvas.toDataURL('image/png'), viewBox })
         }
-        image.onerror = () => { reject(new Error('could not rasterise at ' + size + 'px')) }
+        image.onerror = () => { reject(new Error('could not rasterise ' + prefix + size + ' at ' + size + 'px')) }
         image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(markup)
       })
 
       const rendered = []
-      for (const size of sizes) rendered.push(await draw(size))
+      for (const { prefix, fill } of fills) {
+        for (const size of sizes) rendered.push(await draw(size, prefix, fill))
+      }
       return rendered
     })()`, true)
   } finally {
@@ -149,8 +164,8 @@ app.whenReady().then(async () => {
   try {
     const rendered = await renderSizes(readGlyphPath())
     log('fitted viewBox ' + String(rendered[0].viewBox))
-    for (const { size, data } of rendered) {
-      const file = join(RESOURCES, 'iconTray-' + String(size) + '.png')
+    for (const { size, prefix, data } of rendered) {
+      const file = join(RESOURCES, prefix + String(size) + '.png')
       writeFileSync(file, Buffer.from(data.slice(data.indexOf(',') + 1), 'base64'))
       log('wrote ' + file)
     }

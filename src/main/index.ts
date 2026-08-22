@@ -2527,6 +2527,9 @@ function createWindow(): void {
     },
   })
   installPageContextMenu(mainWindow.webContents)
+  // Re-hooked with every window: a rebuilt window is a new HWND, and the tray
+  // outlives both, so the old hook would leave the glyph stuck after a recovery.
+  watchTaskbarTheme(mainWindow)
   mainWindow.once('ready-to-show', () => { mainWindow?.show() })
   mainWindow.on('show', () => { scheduleWindowHealthCheck('window shown') })
   mainWindow.on('focus', () => {
@@ -2753,10 +2756,8 @@ function openSettingsWindow(): void {
  */
 function createTray(): void {
   // macOS recolours a Template image to match the menu bar automatically.
-  // Windows renders the source pixels as-is. Always use the white glyph there:
-  // nativeTheme follows the app colour mode, which can be light while the
-  // Windows taskbar is dark, and would otherwise select an unreadable black
-  // icon for that supported mixed-theme configuration.
+  // Windows renders the source pixels as-is, so the glyph colour is chosen
+  // here — see windowsTaskbarPrefersDark for why nativeTheme cannot answer it.
   const icon = trayImage()
   if (icon.isEmpty()) return
   tray = new Tray(icon)
@@ -2773,14 +2774,45 @@ function createTray(): void {
   // Moving the window to a display with different scaling, or changing the
   // scaling itself, changes the notification-area slot size. Without this the
   // icon rendered for the old slot stays and gets stretched by the shell.
-  if (process.platform === 'win32') {
-    screen.on('display-metrics-changed', () => {
-      if (tray === null || tray.isDestroyed()) return
-      const next = trayImage()
-      if (!next.isEmpty()) tray.setImage(next)
-    })
-  }
+  if (process.platform === 'win32') screen.on('display-metrics-changed', refreshTrayImage)
   refreshTrayMenu()
+}
+
+/** Re-pick the tray glyph for the current taskbar brightness and display scale. */
+function refreshTrayImage(): void {
+  if (tray === null || tray.isDestroyed()) return
+  const next = trayImage()
+  if (!next.isEmpty()) tray.setImage(next)
+}
+
+/** Windows broadcasts this to every top-level window when a shell-wide setting changes. */
+const WM_SETTINGCHANGE = 0x001a
+/** Collapses the burst of messages one settings change produces. */
+let taskbarThemeProbe: NodeJS.Timeout | null = null
+
+/**
+ * The taskbar's colour mode has no Electron event, so listen for the broadcast.
+ *
+ * `nativeTheme`'s 'updated' does not fire for it at all — Chromium tracks the
+ * APP mode — which is what left a white glyph seated on a taskbar the user had
+ * just turned light, the one combination where it is invisible. Every
+ * shell-wide change instead reaches each top-level window as WM_SETTINGCHANGE,
+ * hidden ones included, so the client's own window still hears it while the
+ * client sits in the tray. The message says nothing usable about what changed
+ * and arrives for far more than colour, hence the debounced re-read: it costs
+ * one registry query and can only ever swap an icon.
+ */
+function watchTaskbarTheme(window: BrowserWindow): void {
+  if (process.platform !== 'win32') return
+  window.hookWindowMessage(WM_SETTINGCHANGE, () => {
+    if (taskbarThemeProbe !== null) return
+    taskbarThemeProbe = setTimeout(() => {
+      taskbarThemeProbe = null
+      taskbarPrefersDark = undefined
+      refreshTrayImage()
+    }, 150)
+    taskbarThemeProbe.unref()
+  })
 }
 
 /**
@@ -2810,6 +2842,46 @@ function trayIconSize(): number {
   return TRAY_ICON_SIZES.find(size => size >= wanted) ?? 48
 }
 
+/** Where the Windows shell keeps the two colour-mode switches. */
+const WINDOWS_PERSONALIZE_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize'
+
+/** Cached reading; cleared when the OS announces a theme change. */
+let taskbarPrefersDark: boolean | undefined
+
+/**
+ * Whether the notification area is dark, i.e. whether the white glyph reads.
+ *
+ * 设置 › 个性化 › 颜色 carries TWO switches — "Windows mode" (the taskbar) and
+ * "app mode" (window chrome) — and a user may set them differently. Only the
+ * first one paints the surface a tray icon sits on, and nativeTheme reports the
+ * second: `shouldUseDarkColors` follows the app mode, and this process
+ * overwrites it outright via `themeSource` whenever the Web UI pins an
+ * appearance (see syncThemeSource). Reading SystemUsesLightTheme is asking the
+ * same value the shell itself draws from, so it stays right in both the mixed
+ * configuration and the pinned one.
+ *
+ * A missing value means an older Windows with no separate system mode, where
+ * the taskbar is dark; every failure path lands on the same default, which is
+ * the icon the client shipped before this choice existed.
+ */
+function windowsTaskbarPrefersDark(): boolean {
+  if (taskbarPrefersDark !== undefined) return taskbarPrefersDark
+  let dark = true
+  try {
+    const query = spawnSync('reg', ['query', WINDOWS_PERSONALIZE_KEY, '/v', 'SystemUsesLightTheme'], {
+      encoding: 'utf8',
+      timeout: 4_000,
+      ...SPAWN_NO_WINDOW,
+    })
+    const value = /SystemUsesLightTheme\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(query.stdout ?? '')?.[1]
+    if (value !== undefined) dark = Number.parseInt(value, 16) === 0
+  } catch {
+    // reg.exe unavailable or blocked: keep the dark-taskbar default.
+  }
+  taskbarPrefersDark = dark
+  return dark
+}
+
 function trayImage(): Electron.NativeImage {
   if (process.platform !== 'win32') {
     // macOS recolours a Template image to match the menu bar, and reads the @2x
@@ -2817,7 +2889,8 @@ function trayImage(): Electron.NativeImage {
     return nativeImage.createFromPath(join(APP_DIR, 'resources', 'iconMenuTemplate.png'))
   }
   const size = trayIconSize()
-  const exact = nativeImage.createFromPath(join(APP_DIR, 'resources', 'iconTray-' + String(size) + '.png'))
+  const prefix = windowsTaskbarPrefersDark() ? 'iconTray-' : 'iconTrayDark-'
+  const exact = nativeImage.createFromPath(join(APP_DIR, 'resources', prefix + String(size) + '.png'))
   if (!exact.isEmpty()) return exact
   // A resource set older than this code: the 16px glyph still shows an icon.
   return nativeImage.createFromPath(join(APP_DIR, 'resources', 'iconTrayWhite.png'))
