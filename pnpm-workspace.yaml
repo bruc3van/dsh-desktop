@@ -17,7 +17,7 @@ minimumReleaseAgeExclude:
   # The bundled market is this project's own package, published from a tagged
   # GitHub Actions run with npm provenance; its release-day version is exempted
   # one version at a time, never by wildcard.
-  - dsh-desktop-safe-market@0.2.14
+  - dsh-desktop-safe-market@0.2.15
 
 # electron-builder 26.15.3 uses ElectronDownloadCacheMode, which was added in
 # @electron/get 3.1.0, while its published range still allows incompatible 3.0.0.
