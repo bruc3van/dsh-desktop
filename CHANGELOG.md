@@ -4,6 +4,9 @@
 
 ## [未发布]
 
+### 变更
+- 内置安全市场升至 [0.3.0](https://github.com/bruc3van/dsh-desktop-safe-market/releases/tag/v0.3.0)
+
 ### 修复
 - **重新兼容 DSH 0.1.2 已启动实例的自动连接**：0.1.2 起 Web API 全面要求浏览器会话认证，同时移除了旧的 `host.describe` 路由，旧客户端因此会把正在 `127.0.0.1:3080` 运行的实例判为不可用。桌面端现在从同一 `DSH_HOME` 的官方浏览器会话记录生成仅限当前回环地址、1 天有效的 HttpOnly 会话，使用新版 `settings.describe` 探测，并保留旧版探针回退；终端输出中的进程启动 token 只用于这次子进程导航，不会进入桌面日志或被持久化
 
