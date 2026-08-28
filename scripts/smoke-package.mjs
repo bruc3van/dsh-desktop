@@ -11,8 +11,9 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
+import * as esbuild from 'esbuild'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE_DIR = join(APP_DIR, 'release')
@@ -296,14 +297,47 @@ try {
   if (contract.status !== 0) {
     throw new Error('packaged runtime environment contract failed:\n' + (contract.stdout ?? '') + (contract.stderr ?? ''))
   }
-  const response = await fetch(url + '/api/host.describe', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId: 'package-smoke', method: 'host.describe', payload: {} }),
-    signal: AbortSignal.timeout(10_000),
+  // DSH 0.1.2 does not expose the process launch token after the desktop has
+  // consumed its readiness line. Exercise the same documented persistent
+  // browser-session admission the packaged main process uses, against this
+  // smoke's isolated DSH_HOME, without printing the cookie or its secret.
+  const authBundle = join(smokeHome, 'dsh-browser-session.mjs')
+  await esbuild.build({
+    entryPoints: [join(APP_DIR, 'src', 'main', 'dsh-browser-session.ts')],
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    outfile: authBundle,
+    logLevel: 'silent',
   })
+  const { createDshBrowserSessionCookie } = await import(pathToFileURL(authBundle).href)
+  const cookie = createDshBrowserSessionCookie(join(smokeHome, 'dsh'), url)
+  const response = cookie === undefined
+    ? await fetch(url + '/api/host.describe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId: 'package-smoke', method: 'host.describe', payload: {} }),
+        signal: AbortSignal.timeout(10_000),
+      })
+    : await fetch(url + '/api/settings/describe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: cookie.header },
+        body: JSON.stringify({
+          type: 'client-request',
+          rpcId: 'package-smoke',
+          method: 'settings/describe',
+          payload: { args: {} },
+        }),
+        signal: AbortSignal.timeout(10_000),
+      })
   const body = await response.json()
-  if (!response.ok || body?.result?.ok !== true) throw new Error('packaged Web UI probe failed')
+  const descriptor = body?.result?.value
+  const valid = cookie === undefined
+    ? typeof descriptor?.version === 'string' && typeof descriptor?.cwd === 'string'
+    : typeof descriptor?.writable === 'boolean'
+      && typeof descriptor?.hasDocument === 'boolean'
+      && Array.isArray(descriptor?.namespaces)
+  if (!response.ok || body?.result?.ok !== true || !valid) throw new Error('packaged Web UI probe failed')
   console.log('✓ packaged app selected its bundled @deepseek-ai/dsh runtime')
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
   console.log('✓ packaged resources include dsh-cli.mjs')
@@ -312,7 +346,8 @@ try {
   console.log('✓ bundled dsh shim reports a version')
   console.log('✓ bundled pnpm shim reports a version')
   console.log('✓ packaged runtime keeps ELECTRON_RUN_AS_NODE out of the Agent environment')
-  console.log('✓ packaged Web UI answered host.describe at ' + url)
+  console.log('✓ packaged Web UI answered '
+    + (cookie === undefined ? 'legacy host.describe' : 'authenticated settings.describe') + ' at ' + url)
 } catch (error) {
   console.error(output)
   throw error

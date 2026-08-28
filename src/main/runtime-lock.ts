@@ -106,7 +106,12 @@ export function writeRuntimeLock(home: string, lock: RuntimeLock): void {
 export function recordRuntimeLockUrl(home: string, url: string, childPid: number | undefined): void {
   const lock = readRuntimeLock(home)
   if (lock === undefined || lock.childPid !== childPid) return
-  writeRuntimeLock(home, { ...lock, url })
+  // A 0.1.2 readiness URL carries a process launch token. The record needs
+  // only the served origin for adoption/restart identity, so normalize at the
+  // persistence owner instead of trusting every caller to strip credentials.
+  const origin = originOf(url)
+  if (origin === '') return
+  writeRuntimeLock(home, { ...lock, url: origin })
 }
 
 /** Drop the record once the child is gone; absence means "nothing running". */

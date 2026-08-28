@@ -1,11 +1,11 @@
 /**
  * Electron main process for the DSH Desktop client.
  *
- * The client consumes ONLY the public interface of the official dsh Web UI:
- * it manages a local `dsh web` child (or connects to a configured Web UI
- * origin) and loads the **official Web UI** itself in the client window — the
- * interface, session titles/renaming, and every button interaction are the
- * official product's, by construction. The client's own surface is limited to
+ * The client consumes the official dsh Web UI and its documented browser-
+ * session record: it manages a local `dsh web` child (or connects to a
+ * configured Web UI origin) and loads the **official Web UI** itself in the
+ * client window — the interface, session titles/renaming, and every button
+ * interaction are the official product's, by construction. The client's own surface is limited to
  * the "连接" block appended to the official settings dialog, plus the small
  * native connection window it (and the loading surface) opens, served by a
  * minimal loopback server. Nothing here imports a harness package.
@@ -70,6 +70,7 @@ import {
 } from './local-web-port.ts'
 import { officialDshPackageVersion } from './official-dsh-bin.ts'
 import { permissionGrantedForContext, windowsAppUserModelId } from './permission-policy.ts'
+import { createDshBrowserSessionCookie } from './dsh-browser-session.ts'
 
 /** The built bundle sits at <project>/.build/main.mjs. */
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
@@ -1407,8 +1408,11 @@ class WebUiManager {
         // line; readiness parsing is unaffected (it trims), this is cosmetic.
         const line = raw.replace(/\r$/, '')
         if (line.trim() === '') continue
-        this.onLog(line)
         const url = parseReadiness(line)
+        // DSH 0.1.2 readiness carries a process launch token. Parse the raw
+        // value for navigation, but never copy that credential into desktop
+        // diagnostics or a terminal log.
+        this.onLog(sanitizeRuntimeOutput(line))
         if (url !== undefined && !readinessProbeStarted) {
           readinessProbeStarted = true
           void waitForWebUiReady(url).then(() => {
@@ -1431,7 +1435,7 @@ class WebUiManager {
       }
     })
     child.on('close', () => {
-      if (stdoutBuffer.trim() !== '') this.onLog(stdoutBuffer)
+      if (stdoutBuffer.trim() !== '') this.onLog(sanitizeRuntimeOutput(stdoutBuffer))
     })
     child.stderr.on('data', (chunk: Buffer) => {
       stderrTail = appendRuntimeOutputTail(stderrTail, chunk)
@@ -1706,44 +1710,80 @@ async function probeFetch(base: string, url: string, init: RequestInit): Promise
 /**
  * Probe one Web UI origin: a plain non-browser /api call (no browser markers,
  * so the trust fence passes over loopback). Returns the origin when a real
- * harness answers host.describe, undefined otherwise.
+ * harness answers either the legacy host.describe probe or the authenticated
+ * settings.describe probe shipped by DSH 0.1.2, undefined otherwise.
  */
 async function probeWebUi(base: string, timeoutMs = 1_500): Promise<string | undefined> {
   try {
-    const response = await probeFetch(base, base + '/api/host.describe', {
+    const origin = new URL(base).origin
+    const nativeCookie = originIsLoopback(origin)
+      ? createDshBrowserSessionCookie(childHome(), origin)
+      : undefined
+    if (nativeCookie !== undefined && app.isReady()) {
+      // Loopback probes use Node fetch and authenticate through the explicit
+      // Cookie header below. This copy belongs to Chromium: it admits the
+      // official Web UI loaded by the main window at the same origin.
+      await session.defaultSession.cookies.set({
+        url: origin,
+        name: nativeCookie.name,
+        value: nativeCookie.value,
+        path: '/',
+        httpOnly: true,
+        sameSite: 'strict',
+        expirationDate: nativeCookie.expiresAt / 1000,
+      })
+    }
+    const headers = {
+      'content-type': 'application/json',
+      ...nativeCookie !== undefined && { cookie: nativeCookie.header },
+    }
+    const legacyResponse = await probeFetch(origin, new URL('/api/host.describe', origin).href, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify({ type: 'client-request', rpcId: 'desktop-probe', method: 'host.describe', payload: {} }),
       signal: AbortSignal.timeout(timeoutMs),
     })
-    if (!response.ok) return undefined
-    const body = await response.json() as {
+    if (legacyResponse.ok) {
+      const body = await legacyResponse.json() as {
+        result?: { ok?: boolean; value?: { version?: unknown; cwd?: unknown } }
+      }
+      const value = body.result?.value
+      if (body.result?.ok === true && value !== null && typeof value === 'object'
+        && typeof value.version === 'string' && value.version !== ''
+        && typeof value.cwd === 'string' && value.cwd !== '') return origin
+      // A removed endpoint normally returns 404, but a future/transitioning
+      // host may retain the route and answer an error envelope with HTTP 200.
+      // That is not a legacy match; still give the authenticated descriptor
+      // its chance before concluding this is not DSH.
+    }
+
+    const settingsResponse = await probeFetch(origin, new URL('/api/settings/describe', origin).href, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId: 'desktop-probe',
+        method: 'settings/describe',
+        payload: { args: {} },
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (!settingsResponse.ok) return undefined
+    const body = await settingsResponse.json() as {
       result?: {
         ok?: boolean
-        value?: { version?: unknown; cwd?: unknown }
+        value?: { writable?: unknown; hasDocument?: unknown; namespaces?: unknown }
       }
     }
-    if (body.result?.ok !== true) return undefined
-    // `ok` alone is what ANY local HTTP server could say; the official
-    // harness also describes itself. Requiring the describe core — the
-    // version and working directory every describe implementation has
-    // carried — keeps an unrelated process squatting on the port from being
-    // adopted as the official instance (and handed loopback trust, with
-    // every local detail and no confirmation dialogs) just by answering one
-    // request. The check stays to these two fields on purpose: extra fields
-    // have come and gone across upstream releases, and a shape drift must
-    // degrade loudly (below), never silently stop adopting the user's own
-    // running instance — which would start a second writer beside it.
-    const value = body.result.value
-    if (value === null || typeof value !== 'object') {
-      console.warn('[desktop] host.describe answered ok without a describe value on ' + base + '; not adopting it')
+    const value = body.result?.value
+    if (body.result?.ok !== true || value === null || typeof value !== 'object'
+      || typeof value.writable !== 'boolean'
+      || typeof value.hasDocument !== 'boolean'
+      || !Array.isArray(value.namespaces)) {
+      console.warn('[desktop] settings.describe on ' + base + ' lacks the official settings descriptor; not adopting it')
       return undefined
     }
-    if (typeof value.version !== 'string' || value.version === '' || typeof value.cwd !== 'string' || value.cwd === '') {
-      console.warn('[desktop] host.describe on ' + base + ' lacks version/cwd; not adopting it as the official harness')
-      return undefined
-    }
-    return new URL(base).origin
+    return origin
   } catch {
     return undefined
   }
@@ -4477,7 +4517,8 @@ function resetRuntimeRecoveryBudget(): void {
 function markLocalRuntimeReady(url: string): void {
   childTarget = url
   // With an origin attached, a survivor of this client can be adopted by the
-  // next start rather than merely detected and killed.
+  // next start rather than merely detected and killed. Runtime-lock owns the
+  // origin normalization so the readiness token never reaches disk.
   recordRuntimeLockUrl(childHome(), url, webUi?.pid())
   // A first-ever DSH_HOME has no web profile until the child creates it
   // during boot, so the pre-spawn offer is a no-op. Take the seat now so
@@ -4622,6 +4663,7 @@ function resolveRuntime(force = false): void {
     if (probed !== undefined) {
       configuredTarget = probed
       probeConnected = true
+      console.log('[desktop] reusing running dsh web: ' + probed)
       childTarget = undefined
       probedRecoveryReloads = 0
       reseatForAdoptedRuntime()
@@ -5205,7 +5247,9 @@ function launchWindow(generation = connectionGeneration, force = false): void {
   updateLoadingStatus('正在启动本地 dsh 服务…', 'Starting the local dsh service…')
   void webUi?.ready().then((url) => {
     if (generation !== connectionGeneration || quitting) return
-    console.log('[desktop] dsh runtime ready: ' + url)
+    // The 0.1.2 readiness URL carries a process credential. Status logs need
+    // only the origin and must never turn that token into durable diagnostics.
+    console.log('[desktop] dsh runtime ready: ' + appOrigin(url))
     markLocalRuntimeReady(url)
     if (!mainWindowRequested) return
     if (configuredTarget === undefined) loadMainWindow(url, force)

@@ -11,7 +11,7 @@
  *
  * Parsing is deliberately loose. The patch layer is a free-form YAML array that
  * may carry `!!js` expressions, and no reading of it needs to be exact: what
- * confirms an origin is `host.describe` replying on it, not this file. A wrong
+ * confirms an origin is an official API descriptor replying on it, not this file. A wrong
  * number costs one probe that goes unanswered.
  *
  * Deliberately loose, but never unbounded: every port listed becomes one

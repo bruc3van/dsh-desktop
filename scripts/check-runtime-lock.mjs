@@ -57,11 +57,12 @@ if (written.url !== undefined) throw new Error('a runtime that never reported re
 // has to survive the record — including the read-modify-write below.
 if (written.source !== 'bundled') throw new Error('the spawning source did not read back: ' + JSON.stringify(written))
 
-recordRuntimeLockUrl(home, 'http://127.0.0.1:31104', 4242)
+recordRuntimeLockUrl(home, 'http://127.0.0.1:31104/?token=must-not-persist#fragment', 4242)
 const adopted = readRuntimeLock(home)
 if (adopted?.url !== 'http://127.0.0.1:31104' || adopted.childPid !== 4242 || adopted.source !== 'bundled') {
-  throw new Error('recording an origin must preserve the pid and source: ' + JSON.stringify(adopted))
+  throw new Error('recording an origin must strip credentials and preserve the pid/source: ' + JSON.stringify(adopted))
 }
+console.log('✓ the runtime record persists only the origin, never a readiness token')
 
 // Readiness belongs to one child. A record naming a different one is a
 // different runtime, and pointing the next start at the wrong harness is how

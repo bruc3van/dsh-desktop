@@ -6,6 +6,8 @@
 
 The `dsh` Web UI is the official product surface. The desktop client must remain an **independent third-party shell** with its own identity and connection settings while running real harness sessions. It therefore composes only public product boundaries: the `dsh` CLI starts a local Web UI when needed, and the window loads the Web UI origin directly. No internal harness package is imported.
 
+DSH 0.1.2 made the complete Web API browser-session authenticated and removed the former public `host.describe` probe. Native Smart discovery therefore reads only the documented, versioned `client-connection/browser-session` signing record from the shared `DSH_HOME/.credentials.yaml`, mints a one-day cookie bound to the target loopback authority, installs it as HttpOnly in Electron, and probes `settings.describe`. Missing or future-format records and non-loopback origins fail closed; older runtimes keep the `host.describe` fallback. The per-process launch token remains non-persistent and is redacted from desktop logs.
+
 ## Decision
 
 The client (this repository, `dsh-desktop`) has three runtime layers:
@@ -25,7 +27,7 @@ The current release matrix covers separate macOS Apple Silicon and Intel package
 
 ## Consequences
 
-- `pnpm run dev` builds and launches the client; `pnpm run shot` / `pnpm run audit` / `pnpm run e2e` drive Playwright-based verification. `pnpm run check:picker` verifies the deployed patch and, on Windows, its Unicode COM-path conversion under Electron's Node. `pnpm run smoke:package` launches the packaged app with an empty PATH, requires explicit bundled-CLI selection, and probes `host.describe`.
+- `pnpm run dev` builds and launches the client; `pnpm run shot` / `pnpm run audit` / `pnpm run e2e` drive Playwright-based verification. `pnpm run check:picker` verifies the deployed patch and, on Windows, its Unicode COM-path conversion under Electron's Node. `pnpm run smoke:package` launches the packaged app with an empty PATH, requires explicit bundled-CLI selection, and runs the authenticated `settings.describe` probe.
 - The client works identically against a local `dsh web` or any reachable Web UI instance (the Web UI origin is the only coupling), on macOS, Windows, and Linux; local and probed modes show that instance's stock official UI. Official dsh currently targets local use only (`127.0.0.1` by default; the network-exposing `0.0.0.0` bind is rejected), so remote instances are outside official support.
 - Sessions run the Web UI's composition (the official web profile) — content search, the `/` command and skill menus, background tasks, message actions (fork, feedback), plan-mode, pending-queue rows, agent presets, the permission selector, the goal chip, the model catalog, and session titles/renaming — because the interface IS the official web app.
 - The model-visible orientation is set by the official web profile's own surface prompt (the "Web GUI" identity); the client adds nothing of its own.

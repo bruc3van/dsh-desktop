@@ -6,6 +6,8 @@
 
 `dsh` Web UI 是官方产品表面。桌面客户端需要保持为**独立第三方壳层**：拥有自己的产品身份与连接设置，同时运行真实 harness 会话。因此它只组合公开产品边界：需要本地运行时便通过 `dsh` CLI 启动 Web UI，主窗口直接加载 Web UI 源站，不导入任何 harness 内部包。
 
+DSH 0.1.2 为完整 Web API 增加了浏览器会话认证，并移除了原有的公开 `host.describe` 探针。因此，本机智能发现只从共享的 `DSH_HOME/.credentials.yaml` 读取已文档化、带版本的 `client-connection/browser-session` 签名记录，为目标回环 authority 生成 1 天 cookie，作为 HttpOnly cookie 写入 Electron，再调用 `settings.describe`。记录缺失或版本未知、以及非回环地址都会失败关闭；旧运行时继续使用 `host.describe` 回退。每进程启动 token 仍不持久化，并在进入桌面日志前打码。
+
 ## 决策
 
 客户端（本仓库 `dsh-desktop`）包含三层运行时结构：
@@ -25,7 +27,7 @@
 
 ## 后果
 
-- `pnpm run dev` 构建并启动客户端；`pnpm run shot` / `pnpm run audit` / `pnpm run e2e` 驱动 Playwright 验证。`pnpm run check:picker` 验证部署后的补丁，并在 Windows 上通过 Electron Node 检查 Unicode COM 路径读取。`pnpm run smoke:package` 在空 PATH 下启动打包应用，要求它明确选择内置 CLI 并通过 `host.describe` 探针。
+- `pnpm run dev` 构建并启动客户端；`pnpm run shot` / `pnpm run audit` / `pnpm run e2e` 驱动 Playwright 验证。`pnpm run check:picker` 验证部署后的补丁，并在 Windows 上通过 Electron Node 检查 Unicode COM 路径读取。`pnpm run smoke:package` 在空 PATH 下启动打包应用，要求它明确选择内置 CLI 并通过已认证的 `settings.describe` 探针。
 - 客户端对本地 `dsh web` 与任何可达的 Web UI 实例表现一致（唯一耦合是 Web UI 源站），macOS / Windows / Linux 均支持；本地与探测连接均呈现对应实例的原生官方界面。官方 dsh 目前只面向本机使用（默认监听 `127.0.0.1`，暴露到网络的 `0.0.0.0` 绑定会被拒绝），远程实例不在官方支持范围内。
 - 会话运行 Web UI 自己的组合（官方 web profile）——内容搜索、`/` 命令与技能菜单、后台任务、消息操作（fork、反馈）、plan 模式、待处理队列、agent 预设、权限选择器、goal 芯片、模型目录，以及会话标题/重命名——因为界面本身就是官方 web 应用。
 - 模型可见的身份由官方 web profile 自己的 surface prompt（"Web GUI"）设定；客户端不附加任何自己的部分。

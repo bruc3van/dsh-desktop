@@ -75,7 +75,7 @@ export interface SeatRuntime {
   /**
    * A local instance the client did not start is answering on this machine's
    * conventional origin, and is ASSUMED — not proven — to be serving this
-   * home's profile (the probe reads host.describe but keeps only the origin:
+   * home's profile (the probe reads an official API descriptor but keeps only the origin:
    * the describe value's version is validated, not carried here, and the
    * home is not in it at all). An instance that boots a dsh profile and
    * answers is the compatibility evidence the gate exists to establish, so
