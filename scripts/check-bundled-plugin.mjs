@@ -542,12 +542,22 @@ console.log('\n# the pinned market carries what the docs promise')
   // escape hatch it documents.
   const require_ = createRequire(join(APP_DIR, 'dsh-runtime', 'package.json'))
   let body = ''
+  let resolvedVersion
+  let pinnedVersion
   try {
-    body = readFileSync(join(dirname(require_.resolve(BUNDLED_PLUGIN_NAME + '/package.json')), 'lib', 'plugin.js'), 'utf8')
+    const runtimeManifest = JSON.parse(readFileSync(join(APP_DIR, 'dsh-runtime', 'package.json'), 'utf8'))
+    pinnedVersion = runtimeManifest.dependencies?.[BUNDLED_PLUGIN_NAME]
+    const packagePath = require_.resolve(BUNDLED_PLUGIN_NAME + '/package.json')
+    const packageManifest = JSON.parse(readFileSync(packagePath, 'utf8'))
+    resolvedVersion = packageManifest.version
+    body = readFileSync(join(dirname(packagePath), 'lib', 'plugin.js'), 'utf8')
   } catch (error) {
     check('the pinned market is resolvable', false, String(error))
   }
   if (body !== '') {
+    check('the resolved market is the exact version pinned by the runtime closure',
+      typeof pinnedVersion === 'string' && resolvedVersion === pinnedVersion,
+      'resolved ' + String(resolvedVersion) + ', pinned ' + String(pinnedVersion))
     check('the pinned market can list and remove its own in-box seat',
       body.includes('dsh-desktop-seat.json') && body.includes('inBox'),
       'the pinned dsh-desktop-safe-market does not read the ownership marker — bump the version in '

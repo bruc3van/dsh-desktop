@@ -6,7 +6,7 @@
 
 `dsh` Web UI 是官方产品表面。桌面客户端需要保持为**独立第三方壳层**：拥有自己的产品身份与连接设置，同时运行真实 harness 会话。因此它只组合公开产品边界：需要本地运行时便通过 `dsh` CLI 启动 Web UI，主窗口直接加载 Web UI 源站，不导入任何 harness 内部包。
 
-DSH 0.1.2 为完整 Web API 增加了浏览器会话认证，并移除了原有的公开 `host.describe` 探针。因此，本机智能发现只从共享的 `DSH_HOME/.credentials.yaml` 读取已文档化、带版本的 `client-connection/browser-session` 签名记录，为目标回环 authority 生成 1 天 cookie，作为 HttpOnly cookie 写入 Electron，再调用 `settings.describe`。记录缺失或版本未知、以及非回环地址都会失败关闭；旧运行时继续使用 `host.describe` 回退。每进程启动 token 仍不持久化，并在进入桌面日志前打码。
+DSH 0.1.2-alpha.1 为完整 Web API 增加了浏览器会话认证，并移除了原有的公开 `host.describe` 探针。因此，本机智能发现只从共享的 `DSH_HOME/.credentials.yaml` 读取已文档化、带版本的 `client-connection/browser-session` 签名记录，为目标回环 authority 生成 1 天 cookie，作为 HttpOnly cookie 写入 Electron，再调用 `settings.describe`。记录缺失或版本未知、以及非回环地址都会失败关闭；旧运行时继续使用 `host.describe` 回退。若回环地址返回 401，则视为仍有实例占用但其内存密钥与磁盘记录不一致，阻止本地回退并提示重启原实例；绝不把认证失败解释为可以启动第二个会话数据写入者。每进程启动 token 仍不持久化，并在进入桌面日志前打码。
 
 ## 决策
 

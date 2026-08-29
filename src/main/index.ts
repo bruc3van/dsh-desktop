@@ -1650,12 +1650,19 @@ function smartProbeUrls(extraPorts: readonly number[] = []): string[] {
   return webProbeOrigins(defaultWebProbeUrl(), source, extras)
 }
 
-/** The first origin a real harness answers on, or undefined when none does. */
-async function probeSmartTargets(extraPorts: readonly number[] = []): Promise<string | undefined> {
+type WebUiProbeResult =
+  | { kind: 'verified'; url: string }
+  | { kind: 'authentication-required'; url: string }
+  | { kind: 'unavailable' }
+
+/** The first verified Harness, or an authenticated origin that must block a spawn. */
+async function probeSmartTargets(extraPorts: readonly number[] = []): Promise<WebUiProbeResult> {
   const urls = smartProbeUrls(extraPorts)
+  let authenticationRequired: WebUiProbeResult | undefined
   for (const url of urls) {
-    const answered = await probeWebUi(url)
-    if (answered !== undefined) return answered
+    const result = await inspectWebUi(url)
+    if (result.kind === 'verified') return result
+    if (result.kind === 'authentication-required') authenticationRequired ??= result
   }
   // A busy instance answers slowly (its event loop is mid-request, a GC
   // pause, a plugin reload). One unanswered probe must not declare "nothing
@@ -1666,10 +1673,11 @@ async function probeSmartTargets(extraPorts: readonly number[] = []): Promise<st
   // port refuses instantly rather than spending the probe timeout.
   await new Promise(resolve => setTimeout(resolve, 300))
   for (const url of urls) {
-    const answered = await probeWebUi(url, 1_000)
-    if (answered !== undefined) return answered
+    const result = await inspectWebUi(url, 1_000)
+    if (result.kind === 'verified') return result
+    if (result.kind === 'authentication-required') authenticationRequired ??= result
   }
-  return undefined
+  return authenticationRequired ?? { kind: 'unavailable' }
 }
 
 /** The current Web UI origin: the probed/configured address, or the local child's URL. */
@@ -1698,8 +1706,9 @@ function currentTarget(): string | undefined {
 async function probeFetch(base: string, url: string, init: RequestInit): Promise<Response> {
   if (originIsLoopback(base) || !app.isReady()) return await fetch(url, init)
   try {
-    // The probe asks a public question and needs no identity; the session's
-    // cookies for that origin are not part of the question.
+    // Configured remote origins are not eligible for native DSH_HOME
+    // admission. Do not forward Electron session cookies to an arbitrary
+    // configured host while asking whether it implements the expected API.
     return await net.fetch(url, { credentials: 'omit', ...init })
   } catch (error) {
     if (init.signal?.aborted === true) throw error
@@ -1708,12 +1717,12 @@ async function probeFetch(base: string, url: string, init: RequestInit): Promise
 }
 
 /**
- * Probe one Web UI origin: a plain non-browser /api call (no browser markers,
- * so the trust fence passes over loopback). Returns the origin when a real
- * harness answers either the legacy host.describe probe or the authenticated
- * settings.describe probe shipped by DSH 0.1.2, undefined otherwise.
+ * Probe one Web UI origin with the legacy public descriptor and, on loopback,
+ * the authenticated descriptor introduced in DSH 0.1.2-alpha.1. The result
+ * distinguishes a verified Harness, an origin whose DSH credential was
+ * rejected, and an unavailable or unrelated service.
  */
-async function probeWebUi(base: string, timeoutMs = 1_500): Promise<string | undefined> {
+async function inspectWebUi(base: string, timeoutMs = 1_500): Promise<WebUiProbeResult> {
   try {
     const origin = new URL(base).origin
     const nativeCookie = originIsLoopback(origin)
@@ -1750,7 +1759,7 @@ async function probeWebUi(base: string, timeoutMs = 1_500): Promise<string | und
       const value = body.result?.value
       if (body.result?.ok === true && value !== null && typeof value === 'object'
         && typeof value.version === 'string' && value.version !== ''
-        && typeof value.cwd === 'string' && value.cwd !== '') return origin
+        && typeof value.cwd === 'string' && value.cwd !== '') return { kind: 'verified', url: origin }
       // A removed endpoint normally returns 404, but a future/transitioning
       // host may retain the route and answer an error envelope with HTTP 200.
       // That is not a legacy match; still give the authenticated descriptor
@@ -1768,7 +1777,11 @@ async function probeWebUi(base: string, timeoutMs = 1_500): Promise<string | und
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })
-    if (!settingsResponse.ok) return undefined
+    if (!settingsResponse.ok) {
+      return legacyResponse.status === 401 || settingsResponse.status === 401
+        ? { kind: 'authentication-required', url: origin }
+        : { kind: 'unavailable' }
+    }
     const body = await settingsResponse.json() as {
       result?: {
         ok?: boolean
@@ -1781,12 +1794,18 @@ async function probeWebUi(base: string, timeoutMs = 1_500): Promise<string | und
       || typeof value.hasDocument !== 'boolean'
       || !Array.isArray(value.namespaces)) {
       console.warn('[desktop] settings.describe on ' + base + ' lacks the official settings descriptor; not adopting it')
-      return undefined
+      return { kind: 'unavailable' }
     }
-    return origin
+    return { kind: 'verified', url: origin }
   } catch {
-    return undefined
+    return { kind: 'unavailable' }
   }
+}
+
+/** Compatibility wrapper for call sites that only act on a verified Harness. */
+async function probeWebUi(base: string, timeoutMs = 1_500): Promise<string | undefined> {
+  const result = await inspectWebUi(base, timeoutMs)
+  return result.kind === 'verified' ? result.url : undefined
 }
 
 /**
@@ -1870,16 +1889,19 @@ let probedRecoveryReloads = 0
 const PROBED_RECOVERY_RELOAD_CAP = 2
 
 /**
- * Whether a probed origin answers at least once across a short grace window.
+ * Classify a probed origin across a short grace window.
  * "One probe that goes unanswered" is how a wrong port is dismissed; a live
  * instance is owed more patience than that.
  */
-async function probeWithGrace(base: string): Promise<boolean> {
+async function probeWithGrace(base: string): Promise<WebUiProbeResult> {
+  let authenticationRequired: WebUiProbeResult | undefined
   for (let attempt = 0; attempt < PROBED_FALLBACK_GRACE_ATTEMPTS; attempt++) {
     if (attempt > 0) await new Promise(resolve => setTimeout(resolve, PROBED_FALLBACK_GRACE_INTERVAL_MS))
-    if (await probeWebUi(base) !== undefined) return true
+    const result = await inspectWebUi(base)
+    if (result.kind === 'verified') return result
+    if (result.kind === 'authentication-required') authenticationRequired ??= result
   }
-  return false
+  return authenticationRequired ?? { kind: 'unavailable' }
 }
 
 /**
@@ -1900,7 +1922,8 @@ async function handleProbedInstanceFailure(reason: string): Promise<void> {
     const failedTarget = configuredTarget
     if (failedTarget === undefined) return
     const generation = connectionGeneration
-    if (await probeWithGrace(failedTarget)) {
+    const probe = await probeWithGrace(failedTarget)
+    if (probe.kind === 'verified') {
       if (generation !== connectionGeneration || !probeConnected || currentTarget() !== failedTarget) return
       if (probedRecoveryReloads >= PROBED_RECOVERY_RELOAD_CAP) {
         probedRecoveryReloads = 0
@@ -1918,6 +1941,10 @@ async function handleProbedInstanceFailure(reason: string): Promise<void> {
     // does not describe — the same generation guard the recovery path above
     // already carries.
     if (generation !== connectionGeneration || !probeConnected || currentTarget() !== failedTarget) return
+    if (probe.kind === 'authentication-required') {
+      refuseUnauthenticatedProbeTarget(probe.url)
+      return
+    }
     fallbackFromProbedInstance(reason)
   } finally {
     probedFallbackInFlight = false
@@ -1944,9 +1971,11 @@ async function recoverBlankWindow(reason: string, force = false): Promise<void> 
     // second writer (see handleProbedInstanceFailure).
     if (probeConnected) {
       const generation = connectionGeneration
-      if (!await probeWithGrace(target)) {
+      const probe = await probeWithGrace(target)
+      if (probe.kind !== 'verified') {
         if (generation === connectionGeneration && probeConnected && currentTarget() === target) {
-          fallbackFromProbedInstance(reason)
+          if (probe.kind === 'authentication-required') refuseUnauthenticatedProbeTarget(probe.url)
+          else fallbackFromProbedInstance(reason)
         }
         return
       }
@@ -3061,7 +3090,8 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
  * to an instance the user just started is one click instead of typing it.
  */
 async function probeDefaultWebUi(): Promise<{ url: string | null }> {
-  return { url: await probeWebUi(defaultWebProbeUrl()) ?? null }
+  const result = await inspectWebUi(defaultWebProbeUrl())
+  return { url: result.kind === 'verified' ? result.url : null }
 }
 
 /** Who is calling the desktop bridge, from the main process's point of view. */
@@ -4589,6 +4619,31 @@ function refuseOccupiedProbeTarget(url: string): void {
 }
 
 /**
+ * A loopback service answered the authenticated DSH routes with 401. Treat it
+ * as occupied, never as empty: the running Harness may still hold the previous
+ * browser-session secret in memory after its credentials document changed.
+ * Starting another writer against the same DSH_HOME would risk session loss.
+ */
+function refuseUnauthenticatedProbeTarget(url: string): void {
+  configuredTarget = undefined
+  probeConnected = false
+  childTarget = undefined
+  console.warn('[desktop] refusing local runtime: a loopback service requires different DSH browser credentials at ' + url)
+  const chinese = localeChinese()
+  showConnectionError({
+    kind: 'runtime',
+    headline: chinese ? '无法认证正在运行的 dsh' : 'The running dsh could not be authenticated',
+    detail: chinese
+      ? '本机地址返回了 dsh 浏览器会话认证失败：' + url
+      : 'The local address rejected the DSH browser-session credential: ' + url,
+    url,
+    hint: chinese
+      ? '运行中的 dsh 可能仍在使用凭据文件修改前的会话密钥。为避免两个进程同时写入同一份会话数据，本次没有启动新的运行时。请先退出并重新启动原 dsh，再重试。'
+      : 'The running dsh may still hold the browser-session secret from before its credentials file changed. No new runtime was started, because two writers could corrupt the same session data. Quit and restart the original dsh, then retry.',
+  })
+}
+
+/**
  * Smart mode, in order: an official instance already running on this machine,
  * then a dsh the user installed themselves, then the bundled runtime. The
  * detection step runs only here — on the branch that is actually about to
@@ -4627,8 +4682,12 @@ function resolveRuntime(force = false): void {
       updateLoadingStatus('正在确认会话数据未被占用…', 'Checking that this session data is not already in use…')
       const occupied = await probeSmartTargets()
       if (quitting || generation !== connectionGeneration) return
-      if (occupied !== undefined) {
-        refuseOccupiedProbeTarget(occupied)
+      if (occupied.kind === 'verified') {
+        refuseOccupiedProbeTarget(occupied.url)
+        return
+      }
+      if (occupied.kind === 'authentication-required') {
+        refuseUnauthenticatedProbeTarget(occupied.url)
         return
       }
     }
@@ -4660,15 +4719,19 @@ function resolveRuntime(force = false): void {
     }
     const probed = await probeSmartTargets()
     if (quitting || generation !== connectionGeneration) return
-    if (probed !== undefined) {
-      configuredTarget = probed
+    if (probed.kind === 'verified') {
+      configuredTarget = probed.url
       probeConnected = true
-      console.log('[desktop] reusing running dsh web: ' + probed)
+      console.log('[desktop] reusing running dsh web: ' + probed.url)
       childTarget = undefined
       probedRecoveryReloads = 0
       reseatForAdoptedRuntime()
       if (webUi !== undefined) void webUi.stop()
       launchWindow(generation, force)
+      return
+    }
+    if (probed.kind === 'authentication-required') {
+      refuseUnauthenticatedProbeTarget(probed.url)
       return
     }
     await startLocal(true)
@@ -4715,7 +4778,7 @@ async function instanceOccupyingLocalSpawn(
   if (devFlag('DSH_DESKTOP_SKIP_PROBE')) return undefined
   if (smartRuntimeEnabled(ids, 'probe')) return undefined
   const probed = await probeSmartTargets(extraPorts)
-  if (probed !== undefined && !isOwnManagedOrigin(probed)) return probed
+  if (probed.kind !== 'unavailable' && !isOwnManagedOrigin(probed.url)) return probed.url
   const target = currentTarget()
   if (target === undefined || !originIsLoopback(target)) return undefined
   if (isOwnManagedOrigin(target)) return undefined

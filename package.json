@@ -28,6 +28,7 @@
     "check:smart-runtimes": "node scripts/check-smart-runtimes.mjs",
     "check:local-web-port": "node scripts/check-local-web-port.mjs",
     "check:dsh-browser-session": "node scripts/check-dsh-browser-session.mjs",
+    "check:auth-occupancy": "node scripts/check-auth-occupancy.mjs",
     "check:identity": "node scripts/check-identity.mjs",
     "check:permissions": "node scripts/check-permissions.mjs",
     "check:release-artifacts": "node scripts/check-release-artifacts.mjs",
@@ -36,8 +37,8 @@
     "check:pnpm-engine": "node scripts/check-pnpm-engine.mjs",
     "check:pnpm-runtime": "node scripts/check-pnpm-runtime.mjs",
     "check:nsis-details": "node scripts/patch-nsis-install-details.mjs",
-    "pack": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:local-web-port && npm run check:dsh-browser-session && npm run check:bundled-plugin && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --dir && npm run check:pnpm-runtime",
-    "dist": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:local-web-port && npm run check:dsh-browser-session && npm run check:bundled-plugin && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --publish never && npm run check:pnpm-runtime",
+    "pack": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:local-web-port && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:bundled-plugin && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --dir && npm run check:pnpm-runtime",
+    "dist": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:local-web-port && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:bundled-plugin && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --publish never && npm run check:pnpm-runtime",
     "dev": "npm run build && electron .",
     "start": "electron .",
     "shot": "node scripts/shot.mjs",
@@ -57,10 +58,12 @@
     "lint": "oxlint -c .oxlintrc.json src scripts"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "electron": "^39.0.0",
     "electron-builder": "26.15.3",
     "esbuild": "^0.25.0",
+    "js-yaml": "^4.1.0",
     "oxlint": "^1.0.0",
     "playwright-core": "^1.49.0",
     "typescript": "^6.0.3"

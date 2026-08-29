@@ -1,7 +1,7 @@
 /**
  * Native DSH browser-session admission for the desktop shell.
  *
- * DSH 0.1.2 authenticates every Host API request. Its per-process launch
+ * DSH 0.1.2-alpha.1 and later authenticate every Host API request. Their process launch
  * token is intentionally printed once and never persisted, while the signing
  * secret for restart-stable browser sessions lives in the shared DSH home.
  * The desktop shell already runs as the same operating-system user and uses
@@ -14,12 +14,15 @@
 import { createHash, createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { JSON_SCHEMA, load as parseYaml } from 'js-yaml'
 
 const AUTH_RECORD_KEY = 'client-connection/browser-session'
 const SECRET_BYTES = 32
 const COOKIE_PREFIX = 'dsh-auth-'
 const COOKIE_PAYLOAD_VERSION = 1
 const STORED_SECRET_VERSION = 1
+const CREDENTIAL_DOCUMENT_VERSION = 1
+const MAX_CREDENTIAL_DOCUMENT_BYTES = 1024 * 1024
 /** DSH accepts at least one day; this stays below its 30-day default. */
 const NATIVE_COOKIE_LIFETIME_MS = 24 * 60 * 60 * 1000
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/
@@ -46,30 +49,10 @@ function decodeBase64Url(value: string): Buffer | undefined {
   return encodeBase64Url(decoded) === value ? decoded : undefined
 }
 
-function scalar(value: string): string | undefined {
-  const trimmed = value.trim()
-  const quote = trimmed[0]
-  if ((quote === '"' || quote === "'") && trimmed.at(-1) === quote) {
-    return trimmed.slice(1, -1)
-  }
-  return trimmed === '' ? undefined : trimmed
-}
-
-/** The exact owner record block, without treating refs or another record as authority. */
-function browserSessionRecord(source: string): string | undefined {
-  const lines = source.replaceAll('\r\n', '\n').split('\n')
-  const header = new RegExp(`^  (?:${AUTH_RECORD_KEY}|["']${AUTH_RECORD_KEY}["']):\\s*$`, 'u')
-  const start = lines.findIndex(line => header.test(line))
-  if (start < 0) return undefined
-  let end = lines.length
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (line !== undefined && /^  \S/u.test(line)) {
-      end = index
-      break
-    }
-  }
-  return lines.slice(start + 1, end).join('\n')
+function object(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
 }
 
 /**
@@ -84,14 +67,24 @@ export function readDshBrowserSessionSecret(dshHome: string): Buffer | undefined
   } catch {
     return undefined
   }
-  const record = browserSessionRecord(source)
-  if (record === undefined
-    || !/^    kind:\s*grant\s*$/mu.test(record)
-    || !/^    payload:\s*$/mu.test(record)
-    || !new RegExp(`^      version:\\s*${String(STORED_SECRET_VERSION)}\\s*$`, 'mu').test(record)) return undefined
-  const secretLine = /^      secret:\s*(.+?)\s*$/mu.exec(record)?.[1]
-  const encoded = secretLine === undefined ? undefined : scalar(secretLine)
-  if (encoded === undefined) return undefined
+  if (Buffer.byteLength(source, 'utf8') > MAX_CREDENTIAL_DOCUMENT_BYTES) return undefined
+  let root: Record<string, unknown> | undefined
+  try {
+    // JSON_SCHEMA admits the mapping/scalar shapes the official credential
+    // document persists, without constructing arbitrary YAML-specific types.
+    // js-yaml rejects duplicate mapping keys by default.
+    root = object(parseYaml(source, { schema: JSON_SCHEMA }))
+  } catch {
+    return undefined
+  }
+  const records = object(root?.records)
+  const record = object(records?.[AUTH_RECORD_KEY])
+  const payload = object(record?.payload)
+  if (root?.version !== CREDENTIAL_DOCUMENT_VERSION
+    || record?.kind !== 'grant'
+    || payload?.version !== STORED_SECRET_VERSION) return undefined
+  const encoded = payload.secret
+  if (typeof encoded !== 'string') return undefined
   const secret = decodeBase64Url(encoded)
   return secret?.byteLength === SECRET_BYTES ? secret : undefined
 }

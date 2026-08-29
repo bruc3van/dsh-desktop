@@ -1,4 +1,4 @@
-/** Unit checks for native admission to DSH 0.1.2's authenticated Web API. */
+/** Unit checks for native admission to DSH 0.1.2-alpha.1+'s authenticated Web API. */
 
 import { createHash, createHmac } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -50,6 +50,42 @@ if (!readDshBrowserSessionSecret(home)?.equals(secret)) {
   throw new Error('the exact browser-session owner secret was not read')
 }
 
+for (const compatible of [
+  [
+    'version: 1',
+    'records:',
+    `  "client-connection/browser-session": { kind: grant, payload: { version: 1, secret: ${encodedSecret} } }`,
+    '',
+  ].join('\n'),
+  [
+    'version: 1',
+    'records:',
+    '    client-connection/browser-session: # user-preserved formatting is valid YAML',
+    '      kind: grant',
+    '      payload:',
+    '        version: 1',
+    `        secret: '${encodedSecret}'`,
+    '',
+  ].join('\n'),
+]) {
+  writeFileSync(join(home, '.credentials.yaml'), compatible)
+  if (!readDshBrowserSessionSecret(home)?.equals(secret)) {
+    throw new Error('a valid DSH YAML spelling of the browser-session record was rejected')
+  }
+}
+console.log('✓ quoted, inline, commented, and re-indented DSH credential YAML is accepted')
+
+writeFileSync(join(home, '.credentials.yaml'), [
+  'version: 1',
+  'records:',
+  '  client-connection/browser-session:',
+  '    kind: grant',
+  '    payload:',
+  '      version: 1',
+  `      secret: ${encodedSecret}`,
+  '',
+].join('\n'))
+
 const now = 1_800_000_000_000
 const cookie = createDshBrowserSessionCookie(home, 'http://127.0.0.1:3080/?ignored=yes', now)
 if (cookie === undefined) throw new Error('a valid loopback credential minted no cookie')
@@ -81,6 +117,7 @@ console.log('✓ native admission is limited to loopback HTTP')
 
 for (const invalid of [
   '',
+  'records:\n  client-connection/browser-session:\n    kind: grant\n    payload:\n      version: 1\n      secret: ' + encodedSecret,
   'records:\n  client-connection/browser-session:\n    kind: api-key\n    payload:\n      version: 1\n      secret: ' + encodedSecret,
   'records:\n  client-connection/browser-session:\n    kind: grant\n    payload:\n      version: 2\n      secret: ' + encodedSecret,
   'records:\n  client-connection/browser-session:\n    kind: grant\n    payload:\n      version: 1\n      secret: short',
