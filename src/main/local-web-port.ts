@@ -1,9 +1,8 @@
 /**
  * The bind address of a `dsh web` child this client starts.
  *
- * Default is `--port 0` (the OS picks a free port) so a client-started
- * runtime never occupies the official 3080 and almost never sits on Smart
- * mode's probe list. A user may pin a specific port in connection settings;
+ * Automatic mode prefers 3080, then 13080, then `--port 0` (an OS-assigned
+ * free port). A user may pin a specific port in connection settings;
  * that preference lives in the client's own settings.json and is passed as
  * `--port` on this spawn only — never written into the shared profile patch
  * layer, which would also retarget a `dsh web` the user starts themselves.
@@ -14,11 +13,17 @@
  * @module dsh-desktop/local-web-port
  */
 
-/** OS-assigned free port. The spawn default, and the saved "random" choice. */
-export const RANDOM_LOCAL_WEB_PORT = 0
+/** OS-assigned free port. The last automatic fallback and saved "automatic" choice. */
+export const AUTOMATIC_LOCAL_WEB_PORT = 0
 
 /** The official Web UI's default listen port. Pinning it occupies that seat. */
 export const OFFICIAL_WEB_PORT = 3080
+
+/** Stable fallback when the official Web UI port is already occupied. */
+export const SECONDARY_WEB_PORT = 13080
+
+/** Stable ports tried by automatic mode before asking the OS for any free port. */
+export const AUTOMATIC_LOCAL_WEB_PORTS = [OFFICIAL_WEB_PORT, SECONDARY_WEB_PORT] as const
 
 /** First runtime that understands `--no-open` (and that opens a browser without it). */
 export const NO_OPEN_SINCE = '0.1.0-rc.8'
@@ -26,8 +31,8 @@ export const NO_OPEN_SINCE = '0.1.0-rc.8'
 /**
  * Canonicalize a stored or submitted value to a bind port.
  *
- * Missing, blank, or 0 become random. Out-of-range, non-integer, or a
- * privileged port this process cannot bind also become random — boot must
+ * Missing, blank, or 0 become automatic. Out-of-range, non-integer, or a
+ * privileged port this process cannot bind also become automatic — boot must
  * not fail closed on a hand-edited file, and must not walk the source
  * ladder against a bind that will always return EACCES.
  */
@@ -35,7 +40,7 @@ export function normalizeLocalWebPort(
   value: unknown,
   platform: NodeJS.Platform = process.platform,
 ): number {
-  return parseLocalWebPort(value, platform) ?? RANDOM_LOCAL_WEB_PORT
+  return parseLocalWebPort(value, platform) ?? AUTOMATIC_LOCAL_WEB_PORT
 }
 
 /**
@@ -44,22 +49,22 @@ export function normalizeLocalWebPort(
  * Returns `undefined` when the input is not a port this client will spawn
  * with (non-integer, out of range, a non-numeric string, or a privileged
  * port on POSIX). Callers must refuse that save rather than writing a
- * document next boot would silently widen back to random.
+ * document next boot would silently widen back to automatic selection.
  *
- * Empty / missing / 0 is persistable: it means random.
+ * Empty / missing / 0 is persistable: it means automatic selection.
  */
 export function parseLocalWebPort(
   value: unknown,
   platform: NodeJS.Platform = process.platform,
 ): number | undefined {
-  if (value === undefined || value === null || value === '') return RANDOM_LOCAL_WEB_PORT
+  if (value === undefined || value === null || value === '') return AUTOMATIC_LOCAL_WEB_PORT
   if (typeof value === 'number') {
     if (!Number.isInteger(value) || value < 0 || value > 65535) return undefined
     return canBindLocalWebPort(value, platform) ? value : undefined
   }
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
-  if (trimmed === '') return RANDOM_LOCAL_WEB_PORT
+  if (trimmed === '') return AUTOMATIC_LOCAL_WEB_PORT
   if (!/^\d+$/.test(trimmed)) return undefined
   const port = Number(trimmed)
   if (!Number.isInteger(port) || port < 0 || port > 65535) return undefined
@@ -68,7 +73,7 @@ export function parseLocalWebPort(
 
 /**
  * Ports 1–1023 need extra privilege on macOS/Linux. Windows does not.
- * Random (0) is always allowed.
+ * Automatic (0) is always allowed.
  */
 export function canBindLocalWebPort(
   port: number,
@@ -84,9 +89,19 @@ export function localWebPortRangeLabel(platform: NodeJS.Platform = process.platf
   return platform === 'win32' ? '1–65535' : '1024–65535'
 }
 
-/** True when the pinned port is the official default, which this client otherwise avoids. */
+/** True when the user explicitly pins the official default port. */
 export function isOfficialWebPort(port: number): boolean {
   return port === OFFICIAL_WEB_PORT
+}
+
+/** Pick the first available stable port, then fall back to an OS-assigned port. */
+export async function selectAutomaticLocalWebPort(
+  available: (port: number) => boolean | Promise<boolean>,
+): Promise<number> {
+  for (const port of AUTOMATIC_LOCAL_WEB_PORTS) {
+    if (await available(port)) return port
+  }
+  return AUTOMATIC_LOCAL_WEB_PORT
 }
 
 /**
@@ -97,7 +112,7 @@ export function isOfficialWebPort(port: number): boolean {
  * commander, and those older builds never opened a browser anyway.
  */
 export function webSpawnArgs(port: number, noOpen: boolean): string[] {
-  const bind = port > 0 && port <= 65535 ? port : RANDOM_LOCAL_WEB_PORT
+  const bind = port > 0 && port <= 65535 ? port : AUTOMATIC_LOCAL_WEB_PORT
   const args = ['web', '--port', String(bind)]
   if (noOpen) args.push('--no-open')
   return args

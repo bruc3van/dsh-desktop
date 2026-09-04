@@ -37,7 +37,7 @@ interface ConnectionStatus {
   npxCacheOutdated?: boolean
   /** Smart-mode sources currently enabled. Missing means all four. */
   smartRuntimes?: Array<'probe' | 'installed' | 'npx' | 'bundled'>
-  /** Bind port for a client-started dsh. 0 = random. */
+  /** Bind port for a client-started dsh. 0 = automatic. */
   localWebPort?: number
   /** Which DSH_HOME family the desktop runtime uses. */
   dshDataMode?: 'shared' | 'isolated'
@@ -80,7 +80,7 @@ const connection = {
       smartRuntimes: Array<'probe' | 'installed' | 'npx' | 'bundled'>
       error?: string
     }>,
-  /** Bind port for a client-started dsh. 0 / blank = random. */
+  /** Bind port for a client-started dsh. 0 / blank = automatic. */
   setLocalWebPort: (port: number | string): Promise<{
     saved: boolean
     localWebPort: number
@@ -767,7 +767,7 @@ function injectEnhance(panel: Element): void {
     + '<p class="dsh-enhance-note" id="dsh-enhance-runtimeNote">关掉的来源会跳过。至少保留一种。</p>'
     + '<p class="dsh-enhance-note" style="margin-top:14px">本地服务端口</p>'
     + '<div class="dsh-enhance-row dsh-enhance-runtimes" role="radiogroup" aria-label="本地服务端口">'
-    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" id="dsh-enhance-port-random" type="button">随机</button>'
+    + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" id="dsh-enhance-port-random" type="button">自动</button>'
     + '<button class="dsh-enhance-button dsh-enhance-runtime" id="dsh-enhance-port-fixed" type="button">固定</button>'
     + '</div>'
     + '<div id="dsh-enhance-port-block" hidden>'
@@ -776,7 +776,7 @@ function injectEnhance(panel: Element): void {
     + '<button class="dsh-enhance-button" id="dsh-enhance-port-save" type="button">保存</button>'
     + '</div>'
     + '</div>'
-    + '<p class="dsh-enhance-note" id="dsh-enhance-portNote">仅影响客户端自己启动的 dsh。默认随机，不占用 3080。被占用时不会换口。</p>'
+    + '<p class="dsh-enhance-note" id="dsh-enhance-portNote">仅影响客户端自己启动的 dsh。自动依次尝试 3080、13080，均被占用时使用随机端口；固定端口不自动回退。</p>'
     + '</div>'
     + '<div class="dsh-enhance-custom" id="dsh-enhance-custom" hidden>'
     + '<div class="dsh-enhance-row" style="margin-top:10px">'
@@ -890,7 +890,7 @@ function injectEnhance(panel: Element): void {
       paintPort(result.localWebPort)
       portNoteEl.textContent = result.saved
         ? (result.applied === true
-          ? (result.localWebPort > 0 ? '已固定端口，正在重新启动本地服务…' : '已改回随机端口，正在重新启动本地服务…')
+          ? (result.localWebPort > 0 ? '已固定端口，正在重新启动本地服务…' : '已改回自动端口，正在重新启动本地服务…')
           : '已保存')
         : ('保存失败：' + (result.error ?? '未知错误'))
     }, (error: unknown) => {

@@ -20,7 +20,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { createServer } from 'node:http'
-import { createConnection } from 'node:net'
+import { createConnection, createServer as createTcpServer } from 'node:net'
 import { createRequire } from 'node:module'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
@@ -66,6 +66,7 @@ import {
   NO_OPEN_SINCE,
   normalizeLocalWebPort,
   parseLocalWebPort,
+  selectAutomaticLocalWebPort,
   webSpawnArgs,
 } from './local-web-port.ts'
 import { officialDshPackageVersion } from './official-dsh-bin.ts'
@@ -144,9 +145,9 @@ interface ClientSettings {
    */
   smartRuntimes?: SmartRuntimeId[]
   /**
-   * Bind port for a `dsh web` this client starts. Missing or 0 means
-   * `--port 0` (OS-assigned). A positive value is passed as `--port` on that
-   * spawn only — never written into the shared profile patch layer.
+   * Bind port for a `dsh web` this client starts. Missing or 0 means automatic:
+   * 3080, then 13080, then an OS-assigned port. A positive value is passed as
+   * `--port` on that spawn only — never written into the shared profile patch layer.
    */
   localWebPort?: number
   /** Shared official ~/.dsh, or the client-owned isolated DSH home. */
@@ -597,9 +598,18 @@ function enabledSmartRuntimes(): SmartRuntimeId[] {
   return normalizeSmartRuntimes(loadSettings().smartRuntimes)
 }
 
-/** The bind port a client-started `dsh web` will request. 0 = random. */
+/** The saved bind choice for a client-started `dsh web`. 0 = automatic. */
 function configuredLocalWebPort(): number {
   return normalizeLocalWebPort(loadSettings().localWebPort)
+}
+
+/** Resolved bind for the next managed-child spawn. Recomputed before retries. */
+let selectedLocalWebPort = 0
+
+/** The bind passed to the managed child after automatic selection. */
+function localWebSpawnPort(): number {
+  const configured = configuredLocalWebPort()
+  return configured > 0 ? configured : selectedLocalWebPort
 }
 
 /** True when this runtime's CLI accepts `--no-open` (and would open a browser without it). */
@@ -1361,7 +1371,7 @@ class WebUiManager {
     this.lastCommand = dsh
     applyBundledPluginSeat(dsh)
     const pnpm = bundledPnpmEntry()
-    const port = configuredLocalWebPort()
+    const port = localWebSpawnPort()
     const version = dsh.version ?? (dsh.source === 'bundled' ? bundledDshVersion() ?? undefined : undefined)
     const child = spawn(dsh.command, [...dsh.args, ...webSpawnArgs(port, runtimeSupportsNoOpen(version))], {
       cwd: childHome(),
@@ -1864,6 +1874,35 @@ function loopbackPortHeld(port: number): Promise<boolean> {
     socket.once('timeout', () => { finish(false) })
     socket.once('error', () => { finish(false) })
   })
+}
+
+/** Check whether the managed child can bind this IPv4 loopback port. */
+function loopbackPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createTcpServer()
+    let settled = false
+    const finish = (available: boolean): void => {
+      if (settled) return
+      settled = true
+      server.removeAllListeners()
+      if (server.listening) server.close(() => { resolve(available) })
+      else resolve(available)
+    }
+    server.once('error', () => { finish(false) })
+    server.once('listening', () => { finish(true) })
+    server.listen({ host: '127.0.0.1', port })
+  })
+}
+
+/** Resolve the configured or automatic bind for the next managed-child spawn. */
+async function prepareLocalWebPort(): Promise<number> {
+  const configured = configuredLocalWebPort()
+  if (configured > 0) return configured
+  const selected = await selectAutomaticLocalWebPort(loopbackPortAvailable)
+  console.log('[desktop] automatic local web port: ' + (selected === 0
+    ? 'OS-assigned (3080 and 13080 are occupied)'
+    : String(selected)))
+  return selected
 }
 
 /**
@@ -4440,7 +4479,7 @@ function settingsPageScript(): string {
     + 'body:JSON.stringify({localWebPort:value})});const j=await r.json();'
     + 'if(j.saved){paintPort(j.localWebPort);$("port-note").textContent=j.applied?(j.localWebPort?'
     + t('已固定端口，正在重新启动本地服务…', 'Port pinned; restarting the local service…') + ':'
-    + t('已改回随机端口，正在重新启动本地服务…', 'Back to a random port; restarting the local service…') + '):'
+    + t('已改回自动端口，正在重新启动本地服务…', 'Back to automatic port selection; restarting the local service…') + '):'
     + t('已保存', 'Saved') + '}else{$("port-note").textContent=' + t('保存失败：', 'Save failed: ')
     + '+(j.error||' + t('未知错误', 'unknown error') + ');paintPort(j.localWebPort)}}'
     + 'catch(e){$("port-note").textContent=' + t('保存失败：', 'Save failed: ') + '+e.message}}'
@@ -4603,7 +4642,7 @@ function settingsPageHtml(): string {
     + '<p class="note" id="runtime-note">' + h('关掉的来源会跳过。至少保留一种。', 'Sources you turn off are skipped. Keep at least one.') + '</p>'
     + '<p class="note" style="margin-top:14px">' + h('本地服务端口', 'Local service port') + '</p>'
     + '<div class="runtime-picks" role="radiogroup" aria-label="' + h('本地服务端口', 'Local service port') + '">'
-    + '<button type="button" id="port-random" class="primary">' + h('随机', 'Random') + '</button>'
+    + '<button type="button" id="port-random" class="primary">' + h('自动', 'Automatic') + '</button>'
     + '<button type="button" id="port-fixed">' + h('固定', 'Fixed') + '</button>'
     + '</div>'
     + '<div id="port-fixed-block" hidden>'
@@ -4612,7 +4651,7 @@ function settingsPageHtml(): string {
     + '<button id="port-save">' + h('保存', 'Save') + '</button>'
     + '</div>'
     + '</div>'
-    + '<p class="note" id="port-note">' + h('仅影响客户端自己启动的 dsh。默认随机，不占用 3080。被占用时不会换口。', 'Only a dsh this client starts. Random by default, so 3080 stays free. A taken port is not replaced.') + '</p>'
+    + '<p class="note" id="port-note">' + h('仅影响客户端自己启动的 dsh。自动依次尝试 3080、13080，均被占用时使用随机端口；固定端口不自动回退。', 'Only a dsh this client starts. Automatic mode tries 3080, then 13080, then an OS-assigned port. A pinned port does not fall back.') + '</p>'
     + '</div>'
     + '<div id="custom-block" hidden>'
     + '<div class="custom-row">'
@@ -4678,9 +4717,27 @@ async function startLocalRuntime(generation: number, force = false): Promise<voi
   const survivor = await adoptOrClearSurvivingRuntime()
   if (generation !== connectionGeneration || quitting) return
   if (settleSurvivingRuntime(survivor, generation, force)) return
+  const port = await prepareLocalWebPort()
+  if (generation !== connectionGeneration || quitting) return
+  selectedLocalWebPort = port
   configuredTarget = undefined
   probeConnected = false
   launchWindow(generation, force)
+}
+
+/** Re-resolve automatic mode before every retry or runtime-source fallback. */
+async function respawnLocalRuntime(generation: number): Promise<void> {
+  const port = await prepareLocalWebPort()
+  if (generation !== connectionGeneration || quitting || configuredTarget !== undefined) return
+  selectedLocalWebPort = port
+  if (mainWindowRequested) {
+    launchWindow(generation)
+    return
+  }
+  void webUi?.ready().then((url) => {
+    if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
+    markLocalRuntimeReady(url)
+  }, () => {})
 }
 
 /**
@@ -5108,8 +5165,8 @@ function applyConnectionSettings(settings: ClientSettings, force = false): void 
 
 /**
  * True when `url` is the managed child this process is serving — never a
- * user-started instance. Client-started runtimes default to `--port 0`, so they
- * almost never sit on the probe list; a pinned local port still has to be
+ * user-started instance. Client-started runtimes in automatic mode prefer
+ * 3080 and 13080 before an OS-assigned port; a pinned local port still has to be
  * recognised as ours, so toggling installed / npx / bundled is not mistaken
  * for occupancy of a process we can already stop.
  */
@@ -5297,8 +5354,8 @@ function warnPinnedPortHeld(port: number): void {
   showClientNotice({
     heading: chinese ? '该端口已被占用' : 'That port is already in use',
     hint: chinese
-      ? '固定端口被占用时客户端不会换口。请关掉占用方，或改用其他端口 / 随机端口。'
-      : 'This client will not pick another port when the one you pinned is taken. Free it, or choose a different or random port.',
+      ? '固定端口被占用时客户端不会换口。请关掉占用方，或改用其他端口 / 自动端口。'
+      : 'This client will not pick another port when the one you pinned is taken. Free it, or choose a different port or automatic mode.',
     addressLabel: chinese ? '端口' : 'Port',
     address: pinnedPortAddress(port),
     action: chinese ? '知道了' : 'OK',
@@ -5311,8 +5368,8 @@ function showPinnedPortStartupFailure(port: number): void {
     kind: 'runtime',
     headline: chinese ? '该端口已被占用' : 'That port is already in use',
     detail: chinese
-      ? '已固定为 ' + String(port) + '，被占用时不会换口。请关掉占用方，或在连接设置里改用其他端口 / 随机端口。'
-      : 'Pinned to ' + String(port) + ', and this client will not pick another port. Free it, or choose a different or random port in Connection settings.',
+      ? '已固定为 ' + String(port) + '，被占用时不会换口。请关掉占用方，或在连接设置里改用其他端口 / 自动端口。'
+      : 'Pinned to ' + String(port) + ', and this client will not pick another port. Free it, or choose a different port or automatic mode in Connection settings.',
   })
 }
 
@@ -5487,8 +5544,8 @@ async function requestLocalWebPortSave(value: unknown, remoteCaller: boolean): P
       saved: false,
       localWebPort: configuredLocalWebPort(),
       error: chinese
-        ? '请输入 ' + localWebPortRangeLabel() + ' 之间的端口，或留空使用随机端口'
-        : 'Enter a port from ' + localWebPortRangeLabel() + ', or leave it blank for a random port',
+        ? '请输入 ' + localWebPortRangeLabel() + ' 之间的端口，或留空使用自动端口'
+        : 'Enter a port from ' + localWebPortRangeLabel() + ', or leave it blank for automatic selection',
     }
   }
   // Claim this request before either confirmation dialog. A later port choice
@@ -5502,7 +5559,7 @@ async function requestLocalWebPortSave(value: unknown, remoteCaller: boolean): P
         ? '这会决定客户端自己启动的 dsh 绑在哪个端口。请求来自：'
         : 'This chooses which port a client-started dsh binds to. Requested by: ')
       + (currentTarget() ?? '') + '\n'
-      + (chinese ? '新端口：' : 'New port: ') + (parsed === 0 ? (chinese ? '随机' : 'random') : String(parsed)),
+      + (chinese ? '新端口：' : 'New port: ') + (parsed === 0 ? (chinese ? '自动' : 'automatic') : String(parsed)),
     )
     if (!confirmed) return cancelled
     if (epoch !== localWebPortSaveEpoch) {
@@ -5513,8 +5570,8 @@ async function requestLocalWebPortSave(value: unknown, remoteCaller: boolean): P
     const confirmed = await confirmSensitiveAction(
       chinese ? '这会占用官方默认端口 3080' : 'This occupies the official default port 3080',
       chinese
-        ? '终端里的 dsh web 将无法再使用默认端口。客户端启动的服务默认使用随机端口，正是为了把 3080 留给你自己启动的实例。'
-        : 'A dsh web you start in a terminal will no longer be able to use the default port. Client-started runtimes default to a random port so 3080 stays free for an instance you start yourself.',
+        ? '终端里的 dsh web 将无法再使用默认端口。自动模式在 3080 被占用时会回退到 13080 或随机端口；固定为 3080 后不会自动回退。'
+        : 'A dsh web you start in a terminal will no longer be able to use the default port. Automatic mode falls back to 13080 or an OS-assigned port when 3080 is occupied; pinning 3080 disables that fallback.',
     )
     if (!confirmed) return cancelled
     if (epoch !== localWebPortSaveEpoch) {
@@ -6168,15 +6225,7 @@ function boot(): void {
               'The desktop plugin failed to load; retrying without it…',
             )
           }
-          webUi?.spawn()
-          if (mainWindowRequested) {
-            launchWindow(generation)
-            return
-          }
-          void webUi?.ready().then((url) => {
-            if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
-            markLocalRuntimeReady(url)
-          }, () => {})
+          void respawnLocalRuntime(generation)
           return
         }
         // Loader import/apply errors are deterministic for this data home.
@@ -6197,15 +6246,7 @@ function boot(): void {
             updateLoadingStatus('本机 dsh 启动失败，正在改用其他来源…',
               'The installed dsh did not start; trying the next enabled runtime…')
           }
-          webUi?.spawn()
-          if (mainWindowRequested) {
-            launchWindow(generation)
-            return
-          }
-          void webUi?.ready().then((url) => {
-            if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
-            markLocalRuntimeReady(url)
-          }, () => {})
+          void respawnLocalRuntime(generation)
           return
         }
         if (retryable && launchBudget > 0) {
@@ -6223,15 +6264,7 @@ function boot(): void {
           }
           setTimeout(() => {
             if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
-            webUi?.spawn()
-            if (mainWindowRequested) {
-              launchWindow(generation)
-              return
-            }
-            void webUi?.ready().then((url) => {
-              if (quitting || configuredTarget !== undefined || generation !== connectionGeneration) return
-              markLocalRuntimeReady(url)
-            }, () => {})
+            void respawnLocalRuntime(generation)
           }, delayMs)
           return
         }

@@ -1,8 +1,8 @@
 /**
  * Unit check for `src/main/local-web-port.ts` and the `--no-open` version gate.
  *
- * Client-started runtimes default to `--port 0`. A pinned port must round-trip
- * through settings without silently becoming random, and `--no-open` must be
+ * Automatic mode prefers 3080, then 13080, then `--port 0`. A pinned port must round-trip
+ * through settings without silently becoming automatic, and `--no-open` must be
  * a spawn-time flag, not a stored preference. An override next to an
  * unrelated `package.json` must not be treated as official dsh. Bundled
  * through esbuild so this check does not depend on the host Node's
@@ -30,14 +30,17 @@ await esbuild.build({
   outfile,
 })
 const {
-  RANDOM_LOCAL_WEB_PORT,
+  AUTOMATIC_LOCAL_WEB_PORT,
   OFFICIAL_WEB_PORT,
+  SECONDARY_WEB_PORT,
+  AUTOMATIC_LOCAL_WEB_PORTS,
   NO_OPEN_SINCE,
   normalizeLocalWebPort,
   parseLocalWebPort,
   canBindLocalWebPort,
   localWebPortRangeLabel,
   isOfficialWebPort,
+  selectAutomaticLocalWebPort,
   webSpawnArgs,
 } = await import(pathToFileURL(outfile).href)
 
@@ -51,20 +54,30 @@ const equal = (name, actual, expected) =>
     JSON.stringify(actual) + (JSON.stringify(actual) === JSON.stringify(expected) ? '' : ' ≠ ' + JSON.stringify(expected)))
 
 console.log('\n# defaults')
-check('random is 0', RANDOM_LOCAL_WEB_PORT === 0)
+check('automatic is stored as 0', AUTOMATIC_LOCAL_WEB_PORT === 0)
 check('the official default is 3080', OFFICIAL_WEB_PORT === 3080)
+check('the stable fallback is 13080', SECONDARY_WEB_PORT === 13080)
+equal('automatic mode has the required priority', AUTOMATIC_LOCAL_WEB_PORTS, [3080, 13080])
 check('--no-open starts at rc.8', NO_OPEN_SINCE === '0.1.0-rc.8')
 check('3080 is the official port', isOfficialWebPort(3080) === true)
 check('a pinned port is not the official port', isOfficialWebPort(13080) === false)
-check('random is not the official port', isOfficialWebPort(0) === false)
+check('automatic is not a pinned official port', isOfficialWebPort(0) === false)
+
+console.log('\n# automatic selection')
+equal('automatic mode uses 3080 when available',
+  await selectAutomaticLocalWebPort(() => true), 3080)
+equal('automatic mode falls back to 13080 when 3080 is occupied',
+  await selectAutomaticLocalWebPort(port => port !== 3080), 13080)
+equal('automatic mode falls back to an OS-assigned port when both stable ports are occupied',
+  await selectAutomaticLocalWebPort(() => false), 0)
 
 console.log('\n# parse: persistable values')
-check('missing is random', parseLocalWebPort(undefined) === 0)
-check('null is random', parseLocalWebPort(null) === 0)
-check('empty string is random', parseLocalWebPort('') === 0)
-check('whitespace is random', parseLocalWebPort('  ') === 0)
-check('numeric 0 is random', parseLocalWebPort(0) === 0)
-check('string 0 is random', parseLocalWebPort('0') === 0)
+check('missing is automatic', parseLocalWebPort(undefined) === 0)
+check('null is automatic', parseLocalWebPort(null) === 0)
+check('empty string is automatic', parseLocalWebPort('') === 0)
+check('whitespace is automatic', parseLocalWebPort('  ') === 0)
+check('numeric 0 is automatic', parseLocalWebPort(0) === 0)
+check('string 0 is automatic', parseLocalWebPort('0') === 0)
 check('a pinned integer is kept', parseLocalWebPort(13080) === 13080)
 check('a pinned numeric string is kept', parseLocalWebPort('13080') === 13080)
 check('a trimmed numeric string is kept', parseLocalWebPort(' 8080 ') === 8080)
@@ -87,11 +100,11 @@ check('an object is not persistable', parseLocalWebPort({}) === undefined)
 check('an array is not persistable', parseLocalWebPort([13080]) === undefined)
 check('NaN is not persistable', parseLocalWebPort(Number.NaN) === undefined)
 
-console.log('\n# normalize: missing / garbage fail open to random')
-equal('undefined becomes random', normalizeLocalWebPort(undefined), 0)
-equal('garbage becomes random', normalizeLocalWebPort('nope'), 0)
+console.log('\n# normalize: missing / garbage fail open to automatic')
+equal('undefined becomes automatic', normalizeLocalWebPort(undefined), 0)
+equal('garbage becomes automatic', normalizeLocalWebPort('nope'), 0)
 equal('a valid pin is kept', normalizeLocalWebPort('13080'), 13080)
-equal('a privileged port fail-opens to random on macOS', normalizeLocalWebPort(80, 'darwin'), 0)
+equal('a privileged port fail-opens to automatic on macOS', normalizeLocalWebPort(80, 'darwin'), 0)
 equal('a privileged port is kept on Windows', normalizeLocalWebPort(80, 'win32'), 80)
 check('Windows range starts at 1', localWebPortRangeLabel('win32') === '1–65535')
 check('POSIX range starts at 1024', localWebPortRangeLabel('darwin') === '1024–65535')
@@ -127,6 +140,15 @@ check('startLocal reclaims a leftover before refusing a pinned port',
     : pinnedFailAt < 0 ? 'showPinnedPortStartupFailure missing from startLocal'
     : pinnedFailAt <= adoptAt ? 'pinned-port refusal ran before the runtime lock'
     : undefined)
+const startRuntimeAt = indexSource.indexOf('async function startLocalRuntime')
+const startRuntimeEnd = indexSource.indexOf('function settleSurvivingRuntime', startRuntimeAt)
+const startRuntimeBody = startRuntimeAt >= 0 && startRuntimeEnd > startRuntimeAt
+  ? indexSource.slice(startRuntimeAt, startRuntimeEnd)
+  : ''
+const prepareAt = startRuntimeBody.indexOf('prepareLocalWebPort()')
+check('startLocal resolves the automatic port before launching a local runtime',
+  prepareAt >= 0,
+  prepareAt < 0 ? 'prepareLocalWebPort missing from local startup' : undefined)
 const reuseProbeAt = indexSource.indexOf('probeSmartTargets()', startLocalEnd)
 const beforeReuseProbe = startLocalEnd >= 0 && reuseProbeAt > startLocalEnd
   ? indexSource.slice(startLocalEnd, reuseProbeAt)
@@ -161,6 +183,10 @@ check('a pre-spawn resolution failure bypasses the pinned-port occupancy message
   pinnedGateAt < 0 ? 'the failed-spawn port gate does not require a selected source'
     : heldProbeAt < 0 ? 'the guarded occupancy probe is missing'
     : undefined)
+const retryPortSelections = indexSource.match(/respawnLocalRuntime\(generation\)/g)?.length ?? 0
+check('every retry and source fallback re-resolves automatic mode',
+  retryPortSelections === 3,
+  String(retryPortSelections) + ' retry path(s) use respawnLocalRuntime; expected 3')
 
 console.log('\n# override version: official manifest only, --version first')
 const officialBinOutfile = join(outDir, 'official-dsh-bin.mjs')

@@ -9,6 +9,8 @@
  * a known address. Extra flags such as `--no-open` are ignored.
  * DSH_FIXTURE_FAIL=1 makes `web` exit immediately, standing in for an
  * installed runtime that is present but cannot start.
+ * DSH_FIXTURE_FAIL_DELAY_MS delays that exit after the diagnostic so a test
+ * can occupy the selected port before the desktop starts its fallback source.
  * DSH_FIXTURE_DELAY_MS delays the readiness line so a source toggle can land
  * while the child is still booting.
  * @module desktop/scripts/fixtures/fake-dsh
@@ -31,6 +33,10 @@ if (args[0] !== 'web') {
 
 if (process.env.DSH_FIXTURE_FAIL === '1') {
   process.stderr.write('fake-dsh: refusing to start (DSH_FIXTURE_FAIL)\n')
+  const failDelayMs = Number(process.env.DSH_FIXTURE_FAIL_DELAY_MS)
+  if (Number.isFinite(failDelayMs) && failDelayMs > 0) {
+    await new Promise(resolve => setTimeout(resolve, failDelayMs))
+  }
   process.exit(1)
 }
 

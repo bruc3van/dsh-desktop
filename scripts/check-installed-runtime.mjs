@@ -527,6 +527,36 @@ try {
 
 // 2b. A Smart-mode child must really bind the configured local port. Reserve
 //     an ephemeral port first so the check does not depend on a magic number.
+//
+// Before that, exercise the automatic retry boundary: the first source selects
+// 3080, then fails after announcing its diagnostic. If another process takes
+// 3080 before the source fallback, the fallback must reselect 13080 rather than
+// reusing the stale bind.
+const retryTakeover = createServer((_req, res) => { res.end('occupied during retry') })
+try {
+  app = await openApp('automatic-retry-port', {
+    DSH_DESKTOP_SKIP_PROBE: '1',
+    DSH_FIXTURE_FAIL: '1',
+    DSH_FIXTURE_FAIL_DELAY_MS: '1000',
+  })
+  const record = logFor(app)
+  const diagnosticDeadline = Date.now() + 15_000
+  while (Date.now() < diagnosticDeadline && !/fake-dsh: refusing to start/.test(record.text())) {
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  await new Promise((resolve, reject) => {
+    retryTakeover.once('error', reject)
+    retryTakeover.listen(3080, '127.0.0.1', resolve)
+  })
+  const fallback = await waitForStatus(app,
+    s => s.runtimeSource === 'bundled' && s.targetUrl !== '', 60_000)
+  check('an automatic source fallback reselects 13080 when 3080 becomes occupied',
+    new URL(fallback.targetUrl).origin === 'http://127.0.0.1:13080', fallback.targetUrl)
+} finally {
+  await closeApp(app)
+  await new Promise(resolve => retryTakeover.close(resolve))
+}
+
 const portAllocator = createServer()
 await new Promise((resolve, reject) => {
   portAllocator.once('error', reject)

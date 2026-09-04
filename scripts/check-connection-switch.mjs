@@ -302,7 +302,7 @@ try {
   }
   const racedSettings = JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8'))
   if (racedSettings.localWebPort !== undefined) {
-    throw new Error('the earlier pin overwrote the later random port: ' + JSON.stringify(racedSettings))
+    throw new Error('the earlier pin overwrote the later automatic port choice: ' + JSON.stringify(racedSettings))
   }
   const smartSettings = JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8'))
   if (smartSettings.serverUrl !== remoteOrigin || smartSettings.connectionMode !== 'smart') {
@@ -346,8 +346,8 @@ try {
   console.log('✓ enhanced connection card shows the saved remote address under Custom')
   console.log('✓ Smart-mode source toggles persist without leaving Connect mode')
   console.log('✓ native settings selects Custom for a pinned address')
-  console.log('✓ an out-of-range saved port is shown as random')
-  console.log('✓ a later random-port click wins over an in-flight pin')
+  console.log('✓ an out-of-range saved port is shown as automatic')
+  console.log('✓ a later automatic-port click wins over an in-flight pin')
   console.log('✓ switching to Smart mode keeps the remote address')
   console.log('✓ shortcut switches back to the saved remote origin')
   console.log('✓ saving an unchanged selection still reconnects the window')
