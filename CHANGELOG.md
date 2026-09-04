@@ -5,7 +5,8 @@
 ## [未发布]
 
 ### 变更
-- 内置安全市场升至 [0.3.0](https://github.com/bruc3van/dsh-desktop-safe-market/releases/tag/v0.3.0)；若桌面端正在复用一个已经运行的外部 dsh，为避免热替换已加载代码，市场会在该 dsh 下次重启后升级
+- 内置运行时升至 [`@deepseek-ai/dsh@0.1.2-rc.1`](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-rc.1)，并同步迁移 Windows 目录选择器的 Electron 兼容补丁
+- 内置安全市场升至 [0.4.0](https://github.com/bruc3van/dsh-desktop-safe-market/releases/tag/v0.4.0)；若桌面端正在复用一个已经运行的外部 dsh，为避免热替换已加载代码，市场会在该 dsh 下次重启后升级
 
 ### 修复
 - **重新兼容 DSH 0.1.2-alpha.1 及后续版本已启动实例的自动连接**：新版 Web API 全面要求浏览器会话认证，同时移除了旧的 `host.describe` 路由，旧客户端因此会把正在 `127.0.0.1:3080` 运行的实例判为不可用。桌面端现在从同一 `DSH_HOME` 的官方浏览器会话记录生成仅限当前回环地址、1 天有效的 HttpOnly 会话，使用新版 `settings.describe` 探测，并保留旧版探针回退；终端输出中的进程启动 token 只用于这次子进程导航，不会进入桌面日志或被持久化

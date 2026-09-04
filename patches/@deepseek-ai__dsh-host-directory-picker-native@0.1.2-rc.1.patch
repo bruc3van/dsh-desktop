@@ -1,5 +1,5 @@
 diff --git a/lib/worker.cjs b/lib/worker.cjs
-index 14f4584c748bbec5a1a0282afe486c098668dfe6..2b85b2058374a544722d1488bbce17aef7f23c5f 100644
+index 904b565d1c7a33f2c3f5523ef148b29adec7289c..2b85b2058374a544722d1488bbce17aef7f23c5f 100644
 --- a/lib/worker.cjs
 +++ b/lib/worker.cjs
 @@ -13,16 +13,16 @@
@@ -18,7 +18,7 @@ index 14f4584c748bbec5a1a0282afe486c098668dfe6..2b85b2058374a544722d1488bbce17ae
 -function readUtf16(koffi, address) {
 -	const bytes = Buffer.from(koffi.view(address, 32768));
 -	let end = 0;
--	while (end + 1 < bytes.length && bytes[end] !== 0) end += 2;
+-	while (end + 1 < bytes.length && !(bytes[end] === 0 && bytes[end + 1] === 0)) end += 2;
 -	return bytes.toString("utf16le", 0, end);
 +function readUtf16(address, lstrlenW, copyMemory) {
 +	const byteLength = lstrlenW(address) * 2;

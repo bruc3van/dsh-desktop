@@ -29,7 +29,7 @@ const PICKER_DIR = join(RUNTIME_DIR, '@deepseek-ai', 'dsh-host-directory-picker-
 const PICKER_PACKAGE_FILE = join(PICKER_DIR, 'package.json')
 const WORKER_FILE = join(PICKER_DIR, 'lib', 'worker.cjs')
 const KOFFI_NATIVE_FILE = join(RUNTIME_DIR, '@koromix', 'koffi-win32-x64', 'win32_x64', 'koffi.node')
-const EXPECTED_VERSION = '0.1.1-rc.2'
+const EXPECTED_VERSION = '0.1.2-rc.1'
 
 if (!existsSync(PICKER_PACKAGE_FILE) || !existsSync(WORKER_FILE)) {
   throw new Error('deployed dsh runtime is missing; run `pnpm run prepare:runtime` before `pnpm run check:picker`')

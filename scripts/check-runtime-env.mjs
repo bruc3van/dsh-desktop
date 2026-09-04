@@ -158,8 +158,13 @@ const AUDITED_INDIRECT = new Map([
   ]],
   ['@deepseek-ai/dsh-tool-fs-search/lib/index.js', [
     {
+      label: 'pkg ripgrep executable parsing',
+      context: 'const executable = parse(process.execPath);',
+      expected: 1,
+    },
+    {
       label: 'pkg ripgrep sidecar derivation',
-      context: 'const executableSidecar = `${process.execPath}-rg`;\n\t\tif ("pkg" in process && existsSync(executableSidecar)) return executableSidecar;',
+      context: 'const executableSidecar = process.platform === "win32" ? join(executable.dir, `${executable.name}-rg.exe`) : `${process.execPath}-rg`;',
       expected: 1,
     },
   ]],
@@ -214,7 +219,9 @@ function auditExecPathSource(relative, source) {
 }
 
 const fsSearchAuditPath = '@deepseek-ai/dsh-tool-fs-search/lib/index.js'
-const fsSearchExpectedContext = AUDITED_INDIRECT.get(fsSearchAuditPath)[0].context
+const fsSearchExpectedContext = AUDITED_INDIRECT.get(fsSearchAuditPath)
+  .map(rule => rule.context)
+  .join('\n')
 check('an audited indirect execPath context is accepted exactly once',
   auditExecPathSource(fsSearchAuditPath, fsSearchExpectedContext).offenders.length === 0)
 check('a dangerous execPath call added to an audited file is still rejected',
@@ -222,7 +229,7 @@ check('a dangerous execPath call added to an audited file is still rejected',
     fsSearchExpectedContext + '\nexecFile(process.execPath, ["--version"]);').offenders.length === 1)
 check('duplicating an audited execPath context is rejected',
   auditExecPathSource(fsSearchAuditPath,
-    fsSearchExpectedContext + '\n' + fsSearchExpectedContext).offenders.length === 1)
+    fsSearchExpectedContext + '\n' + fsSearchExpectedContext).offenders.length === 2)
 
 async function scanRuntimeExecPathSites(runtimeModules) {
   const offenders = []

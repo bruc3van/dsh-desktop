@@ -96,7 +96,8 @@ check('official web ui title', /deepseek harness/i.test(title), title)
 const bootManifestType = await window.evaluate(() => typeof window.__DSH_BOOT__)
 check('boot manifest injected', bootManifestType === 'object', bootManifestType)
 check('sidebar rendered', await window.getByRole('button', { name: /设置|Settings/ }).first().isVisible().catch(() => false), 'Settings button')
-check('composer rendered', await window.locator('textarea').first().isVisible().catch(() => false), 'textarea')
+const composer = window.locator('[data-composer-input][role="textbox"][aria-multiline="true"]')
+check('composer rendered', await composer.first().isVisible().catch(() => false), 'composer textbox')
 check('session list seat', (await window.getByRole('button', { name: /新建会话|New Session/i }).count()) > 0, 'New Session button')
 
 // The native connection page is security-sensitive and previously regressed
