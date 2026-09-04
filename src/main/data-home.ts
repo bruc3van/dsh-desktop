@@ -39,13 +39,32 @@ export function normalizePluginPackageName(value: unknown): string | undefined {
     : undefined
 }
 
-/** Extract the actionable package name from the narrow diagnostics that trigger isolation. */
+/** Extract every package-shaped plugin named by a compatibility diagnostic. */
+export function pluginCompatibilityFailureNames(diagnostic: string): string[] {
+  const names: string[] = []
+  const add = (value: unknown): void => {
+    const normalized = normalizePluginPackageName(value)
+    if (normalized !== undefined && !names.includes(normalized)) names.push(normalized)
+  }
+  for (const match of diagnostic.matchAll(/failed to (?:import|apply) loader entry \S+ \((?!cordis:)([^)]+)\)/gi)) {
+    add(match[1])
+  }
+  for (const match of diagnostic.matchAll(/bundle package ["']([^"']+)["'] (?:was not found|does not declare dsh\.bundle)\b/gi)) {
+    add(match[1])
+  }
+  // Current DSH reports every enabled entry left without a fiber in this
+  // final summary. Some entries use aliases rather than package names, so the
+  // caller must still intersect these candidates with the profile manifest
+  // before offering any destructive action.
+  for (const match of diagnostic.matchAll(/plugin\(s\) failed to (?:load|activate):\s*([^;\n]+)/gi)) {
+    for (const value of match[1]?.split(',') ?? []) add(value.trim())
+  }
+  return names
+}
+
+/** Backward-compatible first result for callers that only display one name. */
 export function pluginCompatibilityFailureName(diagnostic: string): string | undefined {
-  const loaderName = /failed to (?:import|apply) loader entry \S+ \((?!cordis:)([^)]+)\)/i.exec(diagnostic)?.[1]
-  const normalizedLoaderName = normalizePluginPackageName(loaderName)
-  if (normalizedLoaderName !== undefined) return normalizedLoaderName
-  const bundleName = /bundle package ["']([^"']+)["'] (?:was not found|does not declare dsh\.bundle)\b/i.exec(diagnostic)?.[1]
-  return normalizePluginPackageName(bundleName)
+  return pluginCompatibilityFailureNames(diagnostic)[0]
 }
 
 export type ClientHomeMigrationResult = 'not-needed' | 'moved' | 'copied'

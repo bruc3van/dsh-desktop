@@ -10,6 +10,7 @@ import {
   normalizeDshDataMode,
   normalizePluginPackageName,
   pluginCompatibilityFailureName,
+  pluginCompatibilityFailureNames,
 } from '../src/main/data-home.ts'
 
 function check(name, condition) {
@@ -47,6 +48,11 @@ for (const diagnostic of [
 const wrappedDiagnostic = 'Error: dsh: plugin tree failed to load: failed to apply loader entry include (cordis:include): failed to import loader entry better-sidebar (dsh-better-sidebar): missing named export'
 check('extracts the failing package from a nested loader diagnostic', pluginCompatibilityFailureName(wrappedDiagnostic) === 'dsh-better-sidebar')
 check('extracts a scoped bundle package', pluginCompatibilityFailureName('Bundle package "@scope/old-plugin" was not found') === '@scope/old-plugin')
+check('extracts every distinct plugin from one startup failure', JSON.stringify(pluginCompatibilityFailureNames([
+  'failed to import loader entry first (plugin-one): missing export',
+  'failed to apply loader entry second (@scope/plugin-two): missing export',
+  'dsh: plugin(s) failed to load: plugin-one, @scope/plugin-two; see errors above',
+].join('\n'))) === JSON.stringify(['plugin-one', '@scope/plugin-two']))
 check('does not report the cordis include entry as a plugin package', pluginCompatibilityFailureName('failed to apply loader entry include (cordis:include): invalid settings') === undefined)
 check('rejects a path-shaped plugin value', normalizePluginPackageName('/tmp/plugin.js') === undefined)
 check('rejects arbitrary diagnostic text as a plugin value', normalizePluginPackageName('plugin failed; remove everything') === undefined)

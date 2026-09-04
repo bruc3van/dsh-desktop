@@ -70,6 +70,7 @@ import {
 } from './local-web-port.ts'
 import { officialDshPackageVersion } from './official-dsh-bin.ts'
 import { permissionGrantedForContext, windowsAppUserModelId } from './permission-policy.ts'
+import { killProcessTree } from './process-tree.ts'
 import { createDshBrowserSessionCookie } from './dsh-browser-session.ts'
 import {
   dshHomeForMode,
@@ -78,7 +79,7 @@ import {
   migrateLegacyClientHome,
   normalizeDshDataMode,
   normalizePluginPackageName,
-  pluginCompatibilityFailureName,
+  pluginCompatibilityFailureNames,
   type DshDataMode,
 } from './data-home.ts'
 
@@ -150,10 +151,12 @@ interface ClientSettings {
   localWebPort?: number
   /** Shared official ~/.dsh, or the client-owned isolated DSH home. */
   dshDataMode?: DshDataMode
-  /** Why the isolated environment was selected without an explicit user choice. */
+  /** Why compatibility recovery selected the isolated environment. */
   dshDataFallbackReason?: 'plugin-compatibility'
   /** Package named by the compatibility diagnostic, when it was safe to extract. */
   dshDataFallbackPlugin?: string
+  /** All packages named by the compatibility diagnostic, in diagnostic order. */
+  dshDataFallbackPlugins?: string[]
   /** The one-time compatibility fallback explanation has been acknowledged. */
   dshDataFallbackNoticeShown?: boolean
 }
@@ -237,6 +240,12 @@ function patchSettings(patch: Partial<ClientSettings> = {}, unset: readonly (key
   if (!skip.has('dshDataFallbackPlugin')) {
     const plugin = normalizePluginPackageName(merged.dshDataFallbackPlugin)
     if (plugin !== undefined) next.dshDataFallbackPlugin = plugin
+  }
+  if (!skip.has('dshDataFallbackPlugins') && Array.isArray(merged.dshDataFallbackPlugins)) {
+    const plugins = [...new Set(merged.dshDataFallbackPlugins
+      .map(normalizePluginPackageName)
+      .filter((plugin): plugin is string => plugin !== undefined))]
+    if (plugins.length > 0) next.dshDataFallbackPlugins = plugins
   }
   if (!skip.has('dshDataFallbackNoticeShown') && merged.dshDataFallbackNoticeShown !== undefined) {
     next.dshDataFallbackNoticeShown = merged.dshDataFallbackNoticeShown
@@ -609,24 +618,6 @@ function selectedInstalledDsh(): InstalledDsh | undefined {
     return npxInstalledDsh
   }
   return undefined
-}
-
-/**
- * Force-kill a child, without waiting. On Windows the direct child may be the
- * cmd.exe wrapper around a `.cmd` shim, so the whole tree is terminated —
- * killing the wrapper alone would leave the real process running. On POSIX
- * this reaches the direct child only, which is all its callers spawn.
- * SIGKILL rather than SIGTERM: this is the deadline path, and a shim that
- * ignores SIGTERM would otherwise linger.
- */
-function killProcessTree(child: ChildProcess): void {
-  const pid = child.pid
-  if (pid !== undefined && process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', ...SPAWN_NO_WINDOW })
-      .on('error', () => { child.kill('SIGKILL') })
-    return
-  }
-  child.kill('SIGKILL')
 }
 
 /**
@@ -3056,28 +3047,234 @@ function restartApp(): void {
 let compatibilityFallbackScheduled = false
 let dataModeRestartScheduled = false
 
-/** Switch once from the shared home after DSH names a plugin boot failure. */
-function schedulePluginCompatibilityFallback(): boolean {
+function compatibilityFallbackPlugins(settings: ClientSettings): string[] {
+  const plugins = Array.isArray(settings.dshDataFallbackPlugins)
+    ? settings.dshDataFallbackPlugins.map(normalizePluginPackageName)
+    : []
+  const legacy = normalizePluginPackageName(settings.dshDataFallbackPlugin)
+  return [...new Set([...plugins, legacy].filter((plugin): plugin is string => plugin !== undefined))]
+}
+
+/** Only direct profile plugins explicitly named by the diagnostic may be removed. */
+function removableProfilePlugins(home: string, candidates: readonly string[]): string[] {
+  try {
+    const manifest = JSON.parse(readFileSync(join(home, 'profiles', WEB_PROFILE, 'package.json'), 'utf8')) as {
+      dependencies?: unknown
+      dsh?: { profile?: { bundles?: unknown } }
+    }
+    const dependencies = manifest.dependencies !== null && typeof manifest.dependencies === 'object'
+      ? new Set(Object.keys(manifest.dependencies))
+      : new Set<string>()
+    const bundles = Array.isArray(manifest.dsh?.profile?.bundles)
+      ? new Set(manifest.dsh.profile.bundles.filter((value): value is string => typeof value === 'string'))
+      : new Set<string>()
+    return candidates.filter(name => dependencies.has(name) && bundles.has(name))
+  } catch {
+    return []
+  }
+}
+
+function profilePluginsRemoved(home: string, plugins: readonly string[]): boolean {
+  try {
+    const manifest = JSON.parse(readFileSync(join(home, 'profiles', WEB_PROFILE, 'package.json'), 'utf8')) as {
+      dependencies?: unknown
+      dsh?: { profile?: { bundles?: unknown } }
+    }
+    const dependencies = manifest.dependencies !== null && typeof manifest.dependencies === 'object'
+      ? new Set(Object.keys(manifest.dependencies))
+      : new Set<string>()
+    const bundles = Array.isArray(manifest.dsh?.profile?.bundles)
+      ? new Set(manifest.dsh.profile.bundles.filter((value): value is string => typeof value === 'string'))
+      : new Set<string>()
+    return plugins.every(name => !dependencies.has(name) && !bundles.has(name))
+  } catch {
+    return false
+  }
+}
+
+/** Run the same official CLI and pnpm path as a user-issued `dsh plugin remove`. */
+function removeProfilePlugins(command: DshCommand, plugins: readonly string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const pnpm = bundledPnpmEntry()
+    const args = [...command.args, 'plugin', '--profile', WEB_PROFILE, 'remove', ...plugins]
+    // The official CLI waits synchronously on pnpm. Give that CLI and all of
+    // its descendants a private POSIX process group so a timeout cannot leave
+    // an orphan package manager modifying the shared profile in the background.
+    const detachedProcessGroup = process.platform !== 'win32'
+    const child = spawn(command.command, args, {
+      cwd: childHome(),
+      env: {
+        ...process.env,
+        DSH_HOME: childHome(),
+        PATH: childPath(),
+        ...command.entry !== undefined && { DSH_DESKTOP_RUNTIME_ENTRY: command.entry },
+        ...pnpm !== undefined && { [PNPM_ENTRY_VARIABLE]: pnpm },
+        ...app.isPackaged && command.command === process.execPath && { ELECTRON_RUN_AS_NODE: '1' },
+      },
+      stdio: 'ignore',
+      ...SPAWN_NO_WINDOW,
+      detached: detachedProcessGroup,
+      ...command.shell === true && { shell: true },
+    })
+    let settled = false
+    let timedOut = false
+    let stopConfirmationTimer: NodeJS.Timeout | undefined
+    const settle = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (stopConfirmationTimer !== undefined) clearTimeout(stopConfirmationTimer)
+      if (error === undefined) resolve()
+      else reject(error)
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      killProcessTree(child, detachedProcessGroup)
+      // Prefer the real exit event: it confirms the command tree was stopped
+      // before recovery presents another action against the same profile.
+      stopConfirmationTimer = setTimeout(() => {
+        settle(new Error('plugin removal timed out and process termination could not be confirmed'))
+      }, 10_000)
+    }, 120_000)
+    child.once('error', error => { settle(error) })
+    child.once('exit', code => {
+      if (timedOut) {
+        settle(new Error('plugin removal timed out'))
+        return
+      }
+      if (code !== 0) {
+        settle(new Error('plugin removal exited with code ' + String(code)))
+        return
+      }
+      settle(profilePluginsRemoved(childHome(), plugins)
+        ? undefined
+        : new Error('plugin removal did not update the profile manifest'))
+    })
+  })
+}
+
+/** Let the user remove every confirmed failing plugin together or use isolation. */
+function schedulePluginCompatibilityFallback(code: number | null, signal: NodeJS.Signals | null): boolean {
   if (compatibilityFallbackScheduled || !dshDataModeSelectable()) return false
   const settings = loadSettings()
   if (selectedDshDataMode(settings) !== 'shared') return false
   const diagnostic = sanitizeRuntimeOutput(webUi?.lastDiagnostic ?? webUi?.lastError ?? '')
   if (!isPluginCompatibilityFailure(diagnostic)) return false
-  const plugin = pluginCompatibilityFailureName(diagnostic)
+  const candidates = pluginCompatibilityFailureNames(diagnostic)
+  const plugins = removableProfilePlugins(childHome(), candidates)
+  const command = webUi?.lastCommand
   compatibilityFallbackScheduled = true
-  patchSettings({
-    dshDataMode: 'isolated',
-    dshDataFallbackReason: 'plugin-compatibility',
-    ...(plugin !== undefined && { dshDataFallbackPlugin: plugin }),
-    dshDataFallbackNoticeShown: false,
-  }, plugin === undefined ? ['dshDataFallbackPlugin'] : [])
-  console.warn('[desktop] shared DSH home failed on plugin compatibility; restarting with the isolated home')
   showLoadingDocument()
   updateLoadingStatus(
-    '检测到插件兼容问题，正在切换到桌面端独立环境…',
-    'A plugin compatibility problem was detected; switching to the isolated desktop environment…',
+    '检测到插件兼容问题，正在等待你的选择…',
+    'A plugin compatibility problem was detected; waiting for your choice…',
   )
-  setTimeout(restartApp, 500)
+  void (async () => {
+    const chinese = localeChinese()
+    const canRemove = command !== undefined && plugins.length > 0
+    const listedPlugins = canRemove ? plugins : candidates
+    const pluginList = listedPlugins.length === 0
+      ? (chinese ? '启动诊断未能安全确认可卸载的插件包。' : 'The startup diagnostic did not safely identify a removable plugin package.')
+      : listedPlugins.map(name => '• ' + name).join('\n')
+    const buttons = canRemove
+      ? (chinese ? ['卸载全部并重试', '使用独立环境', '取消'] : ['Remove all and retry', 'Use isolated environment', 'Cancel'])
+      : (chinese ? ['使用独立环境', '取消'] : ['Use isolated environment', 'Cancel'])
+    const isolatedIndex = canRemove ? 1 : 0
+    const cancelIndex = buttons.length - 1
+    const forced = devOverride('DSH_DESKTOP_PLUGIN_RECOVERY_CHOICE')
+    let response: number
+    if (forced === 'remove' && canRemove) response = 0
+    else if (forced === 'isolated') response = canRemove ? 1 : 0
+    else if (forced === 'cancel') response = canRemove ? 2 : 1
+    else {
+      const options: Electron.MessageBoxOptions = {
+        type: 'warning',
+        title: 'DSH Desktop',
+        message: chinese ? '共享环境中的插件与当前 DSH 不兼容' : 'Plugins in the shared environment are incompatible with this DSH version',
+        detail: (canRemove
+          ? (chinese
+              ? '原来的对话、凭据和模型配置没有丢失。你可以一次卸载下面列出的插件并重试，或保留它们并使用桌面端独立环境。\n\n'
+              : 'Your conversations, credentials, and model configuration are still intact. Remove all plugins listed below and retry, or keep them and use the isolated desktop environment.\n\n')
+          : (chinese
+              ? '原来的对话、凭据和模型配置没有丢失。启动诊断无法安全确认可卸载的直接依赖；你仍可保留现有数据并使用桌面端独立环境。\n\n'
+              : 'Your conversations, credentials, and model configuration are still intact. The startup diagnostic did not safely identify a removable direct dependency; you can still keep the existing data and use the isolated desktop environment.\n\n'))
+          + pluginList,
+        buttons,
+        // Starting recovery must never make destructive removal the action
+        // triggered by a habitual Enter keypress.
+        defaultId: isolatedIndex,
+        cancelId: cancelIndex,
+        noLink: true,
+      }
+      const owner = mainWindow
+      const answer = owner === null || owner.isDestroyed()
+        ? await dialog.showMessageBox(options)
+        : await dialog.showMessageBox(owner, options)
+      response = answer.response
+    }
+    if (response === cancelIndex) {
+      compatibilityFallbackScheduled = false
+      showLocalRuntimeStartupFailure(code, signal)
+      return
+    }
+    if (response === isolatedIndex) {
+      patchSettings({
+        dshDataMode: 'isolated',
+        dshDataFallbackReason: 'plugin-compatibility',
+        dshDataFallbackPlugins: candidates,
+        dshDataFallbackNoticeShown: true,
+      }, ['dshDataFallbackPlugin'])
+      console.warn('[desktop] shared DSH home failed on plugin compatibility; the user selected the isolated home')
+      updateLoadingStatus(
+        '已选择桌面端独立环境，正在重启客户端…',
+        'The isolated desktop environment was selected; restarting the client…',
+      )
+      setTimeout(restartApp, 500)
+      return
+    }
+    if (!canRemove || command === undefined) {
+      showLocalRuntimeStartupFailure(code, signal)
+      return
+    }
+    updateLoadingStatus(
+      '正在卸载不兼容插件…',
+      'Removing incompatible plugins…',
+    )
+    try {
+      await removeProfilePlugins(command, plugins)
+      patchSettings({}, [
+        'dshDataFallbackReason',
+        'dshDataFallbackPlugin',
+        'dshDataFallbackPlugins',
+        'dshDataFallbackNoticeShown',
+      ])
+      console.log('[desktop] incompatible profile plugins removed: ' + plugins.join(', '))
+      updateLoadingStatus(
+        '不兼容插件已卸载，正在用共享环境重试…',
+        'The incompatible plugins were removed; retrying the shared environment…',
+      )
+      setTimeout(restartApp, 500)
+    } catch (error) {
+      console.warn('[desktop] incompatible plugin removal failed: '
+        + (error instanceof Error ? error.message : String(error)))
+      await dialog.showMessageBox({
+        type: 'error',
+        title: 'DSH Desktop',
+        message: chinese ? '未能卸载不兼容插件' : 'Could not remove the incompatible plugins',
+        detail: chinese
+          ? '卸载可能只完成了一部分。客户端没有切换数据环境；请检查共享环境中的插件状态后重试，或在设置中选择桌面端独立环境。'
+          : 'Removal may have completed only partially. The client did not switch data environments; inspect the shared profile before retrying, or select the isolated desktop environment in Settings.',
+        buttons: [chinese ? '知道了' : 'OK'],
+      })
+      compatibilityFallbackScheduled = false
+      showLocalRuntimeStartupFailure(code, signal)
+    }
+  })().catch((error: unknown) => {
+    console.warn('[desktop] compatibility recovery prompt failed: '
+      + (error instanceof Error ? error.message : String(error)))
+    compatibilityFallbackScheduled = false
+    showLocalRuntimeStartupFailure(code, signal)
+  })
   return true
 }
 
@@ -3088,10 +3285,10 @@ function promptPluginCompatibilityFallback(): void {
     || settings.dshDataFallbackNoticeShown === true
     || selectedDshDataMode(settings) !== 'isolated') return
   const chinese = localeChinese()
-  const plugin = normalizePluginPackageName(settings.dshDataFallbackPlugin)
-  const pluginDetail = plugin === undefined
+  const plugins = compatibilityFallbackPlugins(settings)
+  const pluginDetail = plugins.length === 0
     ? ''
-    : chinese ? `\n\n问题插件：${plugin}` : `\n\nProblem plugin: ${plugin}`
+    : chinese ? `\n\n问题插件：${plugins.join('、')}` : `\n\nProblem plugins: ${plugins.join(', ')}`
   const options: Electron.MessageBoxOptions = {
     type: 'warning',
     title: 'DSH Desktop',
@@ -3190,6 +3387,7 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     dshDataModeSelectable: dshDataModeSelectable(),
     dshDataFallbackReason: settings.dshDataFallbackReason,
     dshDataFallbackPlugin: normalizePluginPackageName(settings.dshDataFallbackPlugin),
+    dshDataFallbackPlugins: compatibilityFallbackPlugins(settings),
     ...includeLocalDetail && { dshDataHome: childHome() },
     ...includeLocalDetail && webUi?.pid() !== undefined && { childPid: webUi.pid() },
     ...includeLocalDetail && webUi?.lastError !== null && webUi?.lastError !== undefined && { lastError: webUi.lastError },
@@ -4191,7 +4389,7 @@ function settingsPageScript(): string {
     + '+(s.installedDshVersion?' + t(' · 本机 dsh ', ' · installed dsh ') + '+s.installedDshVersion:"");'
     + 'const c=await(await fetch("desktop/settings")).json();$("url").value=c.serverUrl??"";'
     + 'paintRuntimes(c.smartRuntimes);paintMode(s.selectedMode);paintPort(s.localWebPort);'
-    + 'paintDataMode(s.dshDataMode,s.dshDataHome,s.dshDataFallbackReason,s.dshDataFallbackPlugin,s.dshDataModeSelectable);'
+    + 'paintDataMode(s.dshDataMode,s.dshDataHome,s.dshDataFallbackReason,s.dshDataFallbackPlugins,s.dshDataModeSelectable);'
     + 'renderUpdate(await(await fetch("desktop/update")).json());'
     + '}catch(e){$("status").textContent=' + t('状态不可用', 'Status unavailable') + '}}'
     + '$("save").onclick=async()=>{try{'
@@ -4252,7 +4450,7 @@ function settingsPageScript(): string {
     + '$("port-save").onclick=()=>{const v=$("port").value.trim();if(!v){$("port-note").textContent='
     + t('请输入端口', 'Enter a port') + ';return}void savePort(v)};'
     + 'let dataMode="shared";'
-    + 'function paintDataMode(mode,path,reason,plugin,selectable){dataMode=mode==="isolated"?"isolated":"shared";'
+    + 'function paintDataMode(mode,path,reason,plugins,selectable){dataMode=mode==="isolated"?"isolated":"shared";'
     + '$("data-shared").classList.toggle("primary",dataMode==="shared");$("data-isolated").classList.toggle("primary",dataMode==="isolated");'
     + '$("data-shared").setAttribute("aria-checked",String(dataMode==="shared"));$("data-isolated").setAttribute("aria-checked",String(dataMode==="isolated"));'
     + '$("data-shared").disabled=selectable===false;$("data-isolated").disabled=selectable===false;'
@@ -4261,8 +4459,8 @@ function settingsPageScript(): string {
     + '$("data-note").textContent=selectable===false?'
     + t('当前由 DSH_HOME 开发环境变量控制。', 'Currently controlled by the DSH_HOME development override.')
     + ':reason==="plugin-compatibility"?'
-    + '(' + t('因共享环境中的插件与当前 DSH 不兼容，已自动切换。建议重新安装兼容版本；解决后可切回共享环境。', 'Automatically switched because a plugin in the shared environment is incompatible with the current DSH. Reinstall a compatible version, then switch back after resolving it.')
-    + '+(plugin?' + t(' 问题插件：', ' Problem plugin: ') + '+plugin:""))'
+    + '(' + t('因共享环境中的插件与当前 DSH 不兼容，当前使用独立环境。解决后可切回共享环境。', 'The isolated environment is in use because plugins in the shared environment are incompatible with the current DSH. Switch back after resolving them.')
+    + '+(plugins&&plugins.length?' + t(' 问题插件：', ' Problem plugins: ') + '+plugins.join(' + t('、', ', ') + '):""))'
     + ':dataMode==="shared"?'
     + t('与命令行和浏览器版 DSH 共用对话、凭据、模型配置与插件。', 'Shares conversations, credentials, model configuration and plugins with the DSH CLI and browser UI.')
     + ':' + t('使用桌面端独立的数据、凭据与插件。切换会重启客户端。', 'Uses isolated desktop data, credentials and plugins. Switching restarts the client.') + '}'
@@ -5363,7 +5561,7 @@ function requestDshDataModeSave(value: unknown): {
   if (value === current) return { saved: true, dshDataMode: current, applied: false }
   patchSettings(
     { dshDataMode: value },
-    ['dshDataFallbackReason', 'dshDataFallbackPlugin', 'dshDataFallbackNoticeShown'],
+    ['dshDataFallbackReason', 'dshDataFallbackPlugin', 'dshDataFallbackPlugins', 'dshDataFallbackNoticeShown'],
   )
   dataModeRestartScheduled = true
   // A process restart makes the selected home immutable for the lifetime of
@@ -5985,7 +6183,7 @@ function boot(): void {
         // Preserve and act on that diagnosis before source rejection, command
         // resolution, or generic retries can replace it with a secondary
         // error or run the same broken profile again.
-        if (!wasReady && schedulePluginCompatibilityFallback()) return
+        if (!wasReady && schedulePluginCompatibilityFallback(code, signal)) return
         const failedInstalled = webUi?.lastSource === 'installed' && !pathInstalledDshRejected
         const failedNpx = webUi?.lastSource === 'npx' && !npxInstalledDshRejected
         if (!wasReady && (failedInstalled || failedNpx)) {
