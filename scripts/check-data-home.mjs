@@ -8,6 +8,8 @@ import {
   isPluginCompatibilityFailure,
   migrateLegacyClientHome,
   normalizeDshDataMode,
+  normalizePluginPackageName,
+  pluginCompatibilityFailureName,
 } from '../src/main/data-home.ts'
 
 function check(name, condition) {
@@ -24,6 +26,8 @@ check('a spawnable runtime can start an isolated environment', hasIsolatedRuntim
 for (const diagnostic of [
   'Error: plugin(s) failed to load: example.entry',
   'Error: plugin(s) failed to activate: example.entry',
+  'Error: dsh: plugin tree failed to load: failed to apply loader entry include (cordis:include): failed to import loader entry better-sidebar (dsh-better-sidebar)',
+  'failed to import loader entry better-sidebar (dsh-better-sidebar): missing named export',
   'Bundle package "old-plugin" was not found',
   "Bundle package 'old-plugin' does not declare dsh.bundle",
 ]) {
@@ -34,9 +38,18 @@ for (const diagnostic of [
   'EACCES: permission denied',
   'Cannot find the bundled dsh runtime',
   'settings.yaml is invalid',
+  'Error: dsh: plugin tree failed to load: settings.yaml is invalid',
+  'Error: dsh: plugin tree failed to load: failed to apply loader entry include (cordis:include): settings.yaml is invalid',
 ]) {
   check('does not isolate an unrelated failure: ' + diagnostic, !isPluginCompatibilityFailure(diagnostic))
 }
+
+const wrappedDiagnostic = 'Error: dsh: plugin tree failed to load: failed to apply loader entry include (cordis:include): failed to import loader entry better-sidebar (dsh-better-sidebar): missing named export'
+check('extracts the failing package from a nested loader diagnostic', pluginCompatibilityFailureName(wrappedDiagnostic) === 'dsh-better-sidebar')
+check('extracts a scoped bundle package', pluginCompatibilityFailureName('Bundle package "@scope/old-plugin" was not found') === '@scope/old-plugin')
+check('does not report the cordis include entry as a plugin package', pluginCompatibilityFailureName('failed to apply loader entry include (cordis:include): invalid settings') === undefined)
+check('rejects a path-shaped plugin value', normalizePluginPackageName('/tmp/plugin.js') === undefined)
+check('rejects arbitrary diagnostic text as a plugin value', normalizePluginPackageName('plugin failed; remove everything') === undefined)
 
 const work = mkdtempSync(join(tmpdir(), 'dsh-desktop-data-home-'))
 try {

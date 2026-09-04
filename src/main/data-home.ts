@@ -24,7 +24,28 @@ export function hasIsolatedRuntimeSource(runtimeIds: readonly string[]): boolean
  */
 export function isPluginCompatibilityFailure(diagnostic: string): boolean {
   return /plugin\(s\) failed to (?:load|activate)\b/i.test(diagnostic)
+    || /failed to (?:import|apply) loader entry \S+ \((?!cordis:)[^)]+\)/i.test(diagnostic)
     || /bundle package ["'].+?["'] (?:was not found|does not declare dsh\.bundle)\b/i.test(diagnostic)
+}
+
+const NPM_PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i
+
+/** Keep only a package-shaped identifier; diagnostics can otherwise contain paths or arbitrary text. */
+export function normalizePluginPackageName(value: unknown): string | undefined {
+  return typeof value === 'string'
+    && value.length <= 214
+    && NPM_PACKAGE_NAME_PATTERN.test(value)
+    ? value
+    : undefined
+}
+
+/** Extract the actionable package name from the narrow diagnostics that trigger isolation. */
+export function pluginCompatibilityFailureName(diagnostic: string): string | undefined {
+  const loaderName = /failed to (?:import|apply) loader entry \S+ \((?!cordis:)([^)]+)\)/i.exec(diagnostic)?.[1]
+  const normalizedLoaderName = normalizePluginPackageName(loaderName)
+  if (normalizedLoaderName !== undefined) return normalizedLoaderName
+  const bundleName = /bundle package ["']([^"']+)["'] (?:was not found|does not declare dsh\.bundle)\b/i.exec(diagnostic)?.[1]
+  return normalizePluginPackageName(bundleName)
 }
 
 export type ClientHomeMigrationResult = 'not-needed' | 'moved' | 'copied'

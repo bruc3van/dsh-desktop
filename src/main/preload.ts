@@ -45,6 +45,7 @@ interface ConnectionStatus {
   dshDataHome?: string
   dshDataModeSelectable?: boolean
   dshDataFallbackReason?: 'plugin-compatibility'
+  dshDataFallbackPlugin?: string
 }
 
 /** The connection bridge: read/save the Web UI origin through the main process. */
@@ -835,6 +836,7 @@ function injectEnhance(panel: Element): void {
       ? '当前由 DSH_HOME 开发环境变量控制。'
       : status.dshDataFallbackReason === 'plugin-compatibility'
         ? '因共享环境中的插件与当前 DSH 不兼容，已自动切换。建议重新安装兼容版本；解决后可切回共享环境。'
+          + (status.dshDataFallbackPlugin === undefined ? '' : ` 问题插件：${status.dshDataFallbackPlugin}`)
         : dataMode === 'shared'
           ? '与命令行和浏览器版 DSH 共用对话、凭据、模型配置与插件。'
           : '使用桌面端独立的数据、凭据与插件。切换会重启客户端。'
