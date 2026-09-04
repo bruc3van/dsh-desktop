@@ -105,9 +105,12 @@ try {
   check('the data environment choices are present', settings !== null
     && await settings.locator('#data-shared').count() === 1
     && await settings.locator('#data-isolated').count() === 1)
-  check('an explicit DSH_HOME fixture locks the data environment choices', settings !== null
-    && await settings.locator('#data-shared').isDisabled()
-    && await settings.locator('#data-isolated').isDisabled())
+  const dataChoicesLocked = settings === null ? false : await settings.waitForFunction(
+    () => document.getElementById('data-shared')?.disabled === true
+      && document.getElementById('data-isolated')?.disabled === true,
+    { timeout: 10_000 },
+  ).then(() => true, () => false)
+  check('an explicit DSH_HOME fixture locks the data environment choices', dataChoicesLocked)
   // A download that cannot reach the release assets host leaves the manual page
   // as the only way forward, so the update section carries a link to it.
   const releasesHref = settings === null
