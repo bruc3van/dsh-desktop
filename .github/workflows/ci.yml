@@ -91,6 +91,9 @@ jobs:
       - name: 验证本地服务端口契约 / Verify local-bind port preference
         run: pnpm run check:local-web-port
 
+      - name: 验证数据环境与迁移契约 / Verify data-home and migration contract
+        run: pnpm run check:data-home
+
       - name: 验证内置插件接入 / Verify bundled plugin seat
         run: pnpm run check:bundled-plugin
 
@@ -179,6 +182,10 @@ jobs:
       - name: 验证连接失败界面 / Verify connection failure surface
         if: ${{ !cancelled() }}
         run: pnpm run check:error-surface
+
+      - name: 验证插件故障隔离恢复 / Verify plugin-failure isolation recovery
+        if: ${{ !cancelled() }}
+        run: pnpm run check:plugin-isolation
 
   # 唯一一个真正打包的作业。Windows 侧早有等价门禁——release.yml 会静默装一遍
   # NSIS 包、再对装出来的 exe 跑冒烟；macOS 侧此前什么都没有：smoke:package 跑的

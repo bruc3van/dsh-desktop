@@ -62,7 +62,7 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 - 市场版本固定在 `dsh-runtime/package.json` 的 `dsh-desktop-safe-market` npm 依赖上（精确版本号），与官方运行时同处发布闭包、随安装包交付——升级该依赖版本即升级客户端内置的市场。该包由上游打 tag 后经 GitHub Actions 带 provenance 发布；刚发布的版本还没达到 pnpm 的最小发布年龄，因此每次升级要同时把这个**精确版本**加进 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`——一次只放一版，不用通配符。
 - 客户端向它**启动**的每一个运行时接入市场（内置 / PATH 上的 dsh / npx 缓存都算）：把插件**复制**到 `<DSH_HOME>/profiles/node_modules`，并往 profile 的 `dsh.profile.bundles` 写一个条目。复制而非软链是跨运行时的关键——Node 按 realpath 解析，软链会让插件的 `@deepseek-ai/*` 落回客户端闭包，把第二份 Service 类交给正在服务的运行时。副本目录带 `.dsh-desktop-seat.json` 标记归属；老客户端留下的软链会被自动换成副本。
 - 把关的是版本闸（`runtimeRefusal()`）：插件按客户端自带的 dsh 编译，更旧的运行时可能缺它 import 的导出，拒绝；更新的放行；版本读不出来也拒绝，不猜。复用实例与固定地址仍撤回——客户端不掌握它们的启动时机。新增 / 已存在 / 用户自装 / 旧覆盖抬升 / 撤回 / 弃置 / 异族目录 / 缺失插件 / 无 profile / 升级重新复制 / 旧软链替换 / 版本闸各情形的契约由 `check:bundled-plugin` 回归固定。
-- 移除路径有两条，覆盖不同时刻：客户端连接设置里的「安全市场」开关（关掉即撤条目 + 删副本，选择持久写进 `~/.dsh-desktop/settings.json`——座位每次启动都会重新接入，没有持久记号的移除会自我撤销）；以及市场自己的已安装面板，它会列出带 `.dsh-desktop-seat.json` 标记的座位并允许卸载——那是客户端已被卸载后仅剩的入口。
+- 移除路径有两条，覆盖不同时刻：客户端连接设置里的「安全市场」开关（关掉即撤条目 + 删副本，选择持久写进 `~/.bruc3van-dsh-desktop/settings.json`——座位每次启动都会重新接入，没有持久记号的移除会自我撤销）；以及市场自己的已安装面板，它会列出带 `.dsh-desktop-seat.json` 标记的座位并允许卸载——那是客户端已被卸载后仅剩的入口。
 - 源码运行想固定用内置闭包（而不是你自己的 dsh）：`DSH_DESKTOP_SKIP_INSTALLED_DSH=1 pnpm run dev`。市场本身不再需要这个开关。
 - 市场的目录管线（每日自动采集 + 人工精选）、「先审查、再安装」提示词与安全边界在市场仓库维护；接入实现见 `src/main/bundled-plugin.ts`。
 
@@ -71,8 +71,8 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 发布版本时直接推送版本 tag；GitHub Actions 会以 tag 为唯一版本来源，并在构建时写入 `package.json`：
 
 ```sh
-git tag v0.3.2
-git push origin v0.3.2
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 GitHub Actions 会校验 tag 格式，并以 tag 作为发布版本分别构建：

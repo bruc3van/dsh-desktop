@@ -62,7 +62,7 @@ In addition, `scripts/` contains a family of regression checks for connection an
 - The market's version is pinned by the exact `dsh-desktop-safe-market` npm dependency in `dsh-runtime/package.json`; it shares the release closure with the official runtime and ships in the installer, so bumping that dependency is how the client's bundled market is upgraded. The package is published from a tagged upstream release with npm provenance; because a release-day version is younger than pnpm's minimum release age, each bump also adds that exact version to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` — one version at a time, never a wildcard.
 - The client seats the market into every runtime it **starts** — the bundled one, a `dsh` on PATH, an npx-cached one alike: the plugin is **copied** into `<DSH_HOME>/profiles/node_modules` and its name goes into the profile's `dsh.profile.bundles`. Copying rather than linking is what makes that work across runtimes — Node resolves from the realpath, so a link sent the plugin's `@deepseek-ai/*` imports back into the client's closure and handed the serving runtime a second copy of the Service classes. The copy carries a `.dsh-desktop-seat.json` ownership marker; a link left by an older client is replaced by a copy.
 - The gate is a version check (`runtimeRefusal()`): the plugin is built against the dsh this client ships, so an older runtime — which may not export what it imports — is refused, a newer one is allowed, and an unreadable version is refused rather than guessed. A reused instance or a pinned address still releases the seat, because the client does not control their boot. The add / already-present / user-owned / stale-overlay-lifted / withdraw / abandon / foreign-directory / missing-plugin / no-profile / upgrade-re-copies / older-client-link-replaced / version-gate contracts are pinned by `check:bundled-plugin`.
-- There are two removal paths, covering different moments: the seating switch in the client's connection settings (turning it off withdraws the entry and deletes the copy, and the choice is durable in `~/.dsh-desktop/settings.json` — the seat is re-offered on every start, so an unrecorded removal would undo itself); and the market's own installed panel, which lists a seat carrying `.dsh-desktop-seat.json` and can uninstall it — the only door left once the client is gone.
+- There are two removal paths, covering different moments: the seating switch in the client's connection settings (turning it off withdraws the entry and deletes the copy, and the choice is durable in `~/.bruc3van-dsh-desktop/settings.json` — the seat is re-offered on every start, so an unrecorded removal would undo itself); and the market's own installed panel, which lists a seat carrying `.dsh-desktop-seat.json` and can uninstall it — the only door left once the client is gone.
 - To pin a source run to the bundled closure rather than your own dsh: `DSH_DESKTOP_SKIP_INSTALLED_DSH=1 pnpm run dev`. The market itself no longer needs that switch.
 - The market's catalog pipeline (daily collection plus manual curation), the review-before-install prompt, and its security boundaries live in the market's repository; the seat implementation is `src/main/bundled-plugin.ts`.
 
@@ -71,8 +71,8 @@ In addition, `scripts/` contains a family of regression checks for connection an
 To release a version, push its tag directly. GitHub Actions treats the tag as the single version source and writes it to `package.json` during the build:
 
 ```sh
-git tag v0.3.2
-git push origin v0.3.2
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 GitHub Actions validates the tag format, uses the tag as the release version, then builds:

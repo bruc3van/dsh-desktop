@@ -97,11 +97,17 @@ try {
   // official dialog's enhanced 连接 block.
   await window.locator('#error-settings').click()
   const settings = await app.waitForEvent('window', { timeout: 10_000 }).catch(() => null)
-  // Either spelling of the title: the connection page follows the client
+  // Either spelling of the title: the settings page follows the client
   // locale, and the runner's locale is not this check's business.
   const settingsTitle = settings === null ? null : await settings.locator('.page-title').innerText()
-  check('the settings seat opens the connection window',
-    settingsTitle === '连接设置' || settingsTitle === 'Connection settings', String(settingsTitle))
+  check('the settings seat opens the desktop settings window',
+    settingsTitle === 'DSH Desktop 设置' || settingsTitle === 'DSH Desktop settings', String(settingsTitle))
+  check('the data environment choices are present', settings !== null
+    && await settings.locator('#data-shared').count() === 1
+    && await settings.locator('#data-isolated').count() === 1)
+  check('an explicit DSH_HOME fixture locks the data environment choices', settings !== null
+    && await settings.locator('#data-shared').isDisabled()
+    && await settings.locator('#data-isolated').isDisabled())
   // A download that cannot reach the release assets host leaves the manual page
   // as the only way forward, so the update section carries a link to it.
   const releasesHref = settings === null

@@ -160,6 +160,10 @@ await desktopTab.click()
 const enhancedCardVisible = await settingsDialog.locator('#dsh-desktop-enhance').waitFor({ state: 'visible', timeout: 3000 })
   .then(() => true, () => false)
 check('desktop connection card', enhancedCardVisible, '#dsh-desktop-enhance')
+check('desktop data environment choices',
+  await settingsDialog.locator('#dsh-enhance-data-shared').count() === 1
+    && await settingsDialog.locator('#dsh-enhance-data-isolated').count() === 1,
+  '#dsh-enhance-data-shared / #dsh-enhance-data-isolated')
 const updateCardVisible = await settingsDialog.locator('#dsh-desktop-update').waitFor({ state: 'visible', timeout: 3_000 })
   .then(() => true, () => false)
 check('desktop update card', updateCardVisible, '#dsh-desktop-update')

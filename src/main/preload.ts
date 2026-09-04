@@ -39,6 +39,12 @@ interface ConnectionStatus {
   smartRuntimes?: Array<'probe' | 'installed' | 'npx' | 'bundled'>
   /** Bind port for a client-started dsh. 0 = random. */
   localWebPort?: number
+  /** Which DSH_HOME family the desktop runtime uses. */
+  dshDataMode?: 'shared' | 'isolated'
+  /** Resolved local path; absent for a configured remote caller. */
+  dshDataHome?: string
+  dshDataModeSelectable?: boolean
+  dshDataFallbackReason?: 'plugin-compatibility'
 }
 
 /** The connection bridge: read/save the Web UI origin through the main process. */
@@ -85,6 +91,17 @@ const connection = {
       applied?: boolean
       error?: string
     }>,
+  setDshDataMode: (mode: 'shared' | 'isolated'): Promise<{
+    saved: boolean
+    dshDataMode: 'shared' | 'isolated'
+    applied?: boolean
+    error?: string
+  }> => ipcRenderer.invoke('desktop:data-mode:set', mode) as Promise<{
+    saved: boolean
+    dshDataMode: 'shared' | 'isolated'
+    applied?: boolean
+    error?: string
+  }>,
 }
 
 interface UpdateInfo {
@@ -674,6 +691,11 @@ function injectEnhance(panel: Element): void {
         + 'border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-marketRow{justify-content:space-between;gap:12px}',
       '#' + ENHANCE_ID + ' .dsh-enhance-marketLabel{font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#0F1115)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-dataBlock{margin:16px 0 0;padding:16px 0 0;'
+        + 'border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-dataModes{flex-wrap:wrap;margin-top:8px}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-dataModes .dsh-enhance-button{min-height:44px}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-dataPath{margin:8px 0 0;font-size:12px;color:var(--dsw-alias-label-tertiary,#8A9099);overflow-wrap:anywhere;word-break:break-word}',
       '#' + ENHANCE_ID + ' .dsh-enhance-toggle{position:relative;flex-shrink:0;width:40px;height:22px;padding:0;'
         + 'border:none;border-radius:999px;background:var(--dsw-alias-border-l2,#D8D8D4);cursor:pointer;'
         + 'transition:background .15s ease,opacity .15s ease}',
@@ -770,6 +792,15 @@ function injectEnhance(panel: Element): void {
     + '</div>'
     + '<p class="dsh-enhance-note" id="dsh-enhance-marketNote"></p>'
     + '</div>'
+    + '<div class="dsh-enhance-dataBlock">'
+    + '<div class="dsh-enhance-title">数据环境</div>'
+    + '<div class="dsh-enhance-row dsh-enhance-dataModes" role="radiogroup" aria-label="DSH 数据环境">'
+    + '<button class="dsh-enhance-button dsh-enhance-switch" id="dsh-enhance-data-shared" type="button" role="radio" aria-checked="true">共享环境</button>'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-data-isolated" type="button" role="radio" aria-checked="false">桌面端独立环境</button>'
+    + '</div>'
+    + '<p class="dsh-enhance-dataPath" id="dsh-enhance-dataPath"></p>'
+    + '<p class="dsh-enhance-note" id="dsh-enhance-dataNote" aria-live="polite">正在读取数据环境…</p>'
+    + '</div>'
   const statusEl = block.querySelector('#dsh-enhance-status') as HTMLElement
   const urlEl = block.querySelector('#dsh-enhance-url') as HTMLInputElement
   const noteEl = block.querySelector('#dsh-enhance-note') as HTMLElement
@@ -784,6 +815,63 @@ function injectEnhance(panel: Element): void {
   const portEl = block.querySelector('#dsh-enhance-port') as HTMLInputElement
   const portNoteEl = block.querySelector('#dsh-enhance-portNote') as HTMLElement
   const runtimeDefaultNote = '关掉的来源会跳过。至少保留一种。'
+  const dataSharedEl = block.querySelector('#dsh-enhance-data-shared') as HTMLButtonElement
+  const dataIsolatedEl = block.querySelector('#dsh-enhance-data-isolated') as HTMLButtonElement
+  const dataPathEl = block.querySelector('#dsh-enhance-dataPath') as HTMLElement
+  const dataNoteEl = block.querySelector('#dsh-enhance-dataNote') as HTMLElement
+  let dataMode: 'shared' | 'isolated' = 'shared'
+  const paintDataMode = (status: ConnectionStatus): void => {
+    dataMode = status.dshDataMode === 'isolated' ? 'isolated' : 'shared'
+    dataSharedEl.classList.toggle('dsh-enhance-switch', dataMode === 'shared')
+    dataIsolatedEl.classList.toggle('dsh-enhance-switch', dataMode === 'isolated')
+    dataSharedEl.setAttribute('aria-checked', dataMode === 'shared' ? 'true' : 'false')
+    dataIsolatedEl.setAttribute('aria-checked', dataMode === 'isolated' ? 'true' : 'false')
+    dataSharedEl.disabled = status.dshDataModeSelectable === false
+    dataIsolatedEl.disabled = status.dshDataModeSelectable === false
+    const probe = block.querySelector('[data-smart-runtime="probe"]') as HTMLButtonElement | null
+    if (probe !== null) probe.disabled = dataMode === 'isolated'
+    dataPathEl.textContent = status.dshDataHome ?? ''
+    dataNoteEl.textContent = status.dshDataModeSelectable === false
+      ? '当前由 DSH_HOME 开发环境变量控制。'
+      : status.dshDataFallbackReason === 'plugin-compatibility'
+        ? '因共享环境中的插件与当前 DSH 不兼容，已自动切换。建议重新安装兼容版本；解决后可切回共享环境。'
+        : dataMode === 'shared'
+          ? '与命令行和浏览器版 DSH 共用对话、凭据、模型配置与插件。'
+          : '使用桌面端独立的数据、凭据与插件。切换会重启客户端。'
+  }
+  const saveDataMode = (mode: 'shared' | 'isolated'): void => {
+    if (mode === dataMode) return
+    dataSharedEl.disabled = true
+    dataIsolatedEl.disabled = true
+    dataNoteEl.textContent = '正在保存并重启客户端…'
+    void connection.setDshDataMode(mode).then((result) => {
+      if (!result.saved) {
+        dataSharedEl.disabled = false
+        dataIsolatedEl.disabled = false
+        dataNoteEl.textContent = '切换失败：' + (result.error ?? '未知错误')
+        return
+      }
+      dataMode = result.dshDataMode
+      if (result.applied === true) {
+        dataNoteEl.textContent = '已保存，正在重启客户端…'
+        return
+      }
+      void connection.getStatus().then((status) => {
+        paintDataMode(status)
+        dataNoteEl.textContent = '当前已经是这个环境'
+      }, () => {
+        dataSharedEl.disabled = false
+        dataIsolatedEl.disabled = false
+        dataNoteEl.textContent = '当前已经是这个环境'
+      })
+    }, (error: unknown) => {
+      dataSharedEl.disabled = false
+      dataIsolatedEl.disabled = false
+      dataNoteEl.textContent = '切换失败：' + (error instanceof Error ? error.message : String(error))
+    })
+  }
+  dataSharedEl.addEventListener('click', () => { saveDataMode('shared') })
+  dataIsolatedEl.addEventListener('click', () => { saveDataMode('isolated') })
   const paintPort = (port: number | undefined): void => {
     const n = port !== undefined && port > 0 ? port : 0
     const fixed = n > 0
@@ -998,6 +1086,7 @@ function injectEnhance(panel: Element): void {
     paintMode(status.selectedMode)
     paintRuntimes(status.smartRuntimes)
     paintPort(status.localWebPort)
+    paintDataMode(status)
   }).catch(() => { statusEl.textContent = '连接状态不可用' })
   panel.appendChild(block)
 }

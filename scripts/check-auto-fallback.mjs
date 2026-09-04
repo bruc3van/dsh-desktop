@@ -52,7 +52,7 @@ const probeOrigin = 'http://127.0.0.1:' + String(address.port)
 /** Node that is not this client's Electron binary (the `~/.dsh-desktop/bin` shim). */
 function systemNode() {
   const rejected = (path) =>
-    /[\\/]\.dsh-desktop[\\/]bin[\\/]/i.test(path)
+    /[\\/]\.(?:bruc3van-)?dsh-desktop[\\/]bin[\\/]/i.test(path)
     || /DSH Desktop/i.test(path)
     || /electron\.exe$/i.test(path)
   if (process.platform === 'win32') {

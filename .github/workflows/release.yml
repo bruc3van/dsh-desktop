@@ -116,6 +116,9 @@ jobs:
       - name: 验证本地服务端口契约 / Verify local-bind port preference
         run: pnpm run check:local-web-port
 
+      - name: 验证数据环境与迁移契约 / Verify data-home and migration contract
+        run: pnpm run check:data-home
+
       - name: 验证内置插件接入 / Verify bundled plugin seat
         run: pnpm run check:bundled-plugin
 
@@ -310,6 +313,9 @@ jobs:
 
       - name: 验证连接失败界面 / Verify connection failure surface
         run: pnpm run check:error-surface
+
+      - name: 验证插件故障隔离恢复 / Verify plugin-failure isolation recovery
+        run: pnpm run check:plugin-isolation
 
       - name: 验证安装包内置运行时 / Smoke packaged runtime
         run: ${{ matrix.smoke }}

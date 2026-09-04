@@ -126,10 +126,11 @@ The desktop shell and the Harness runtime keep separate responsibilities:
 
 | Data | Default location | Owner |
 |---|---|---|
-| Conversations, credentials, model configuration, and official Harness state | `~/.dsh` | Official `dsh` runtime |
-| Desktop connection preference | `~/.dsh-desktop/settings.json` | Desktop client |
+| Shared conversations, credentials, model configuration, plugins, and official Harness state | `~/.dsh` | Official `dsh` runtime |
+| Desktop settings, command shims, and update downloads | `~/.bruc3van-dsh-desktop` | Desktop client |
+| Isolated desktop conversations, credentials, model configuration, and plugins | `~/.bruc3van-dsh-desktop/dsh` | Official `dsh` runtime |
 
-Override these locations with `DSH_HOME` and `DSH_DESKTOP_HOME` respectively.
+Override the Harness and client locations with `DSH_HOME` and `DSH_DESKTOP_HOME` respectively (development/unpackaged runs only; see the packaged-build boundary below). On the first packaged launch after upgrading, a recognisable legacy `~/.dsh-desktop` is migrated only when the branded directory does not yet exist; an unrecognised collision is left untouched. Settings can switch between the shared and isolated data environments, and the change takes effect through a client restart.
 
 The client's security strategy is a small boundary plus layered hardening:
 
@@ -152,14 +153,15 @@ Use of this client remains subject to the terms and privacy policies of DeepSeek
 - Never two writers on one `DSH_HOME`: the client records the runtime it started under `DSH_HOME`, and the next launch prefers to adopt a surviving legacy process (same harness, sessions shared) over starting beside it; it cleans up and restarts only when adoption is impossible, and refuses to start — with a reason — when a leftover process can be neither reached nor killed. Two harnesses appending to the same session store corrupt it permanently.
 - If the official `127.0.0.1:3080` instance reused by Smart mode disappears, the client falls back to its managed local `dsh web`. A failed fixed remote connection never switches to a local service implicitly.
 - If a locally managed Web UI exits unexpectedly, the client performs a small number of bounded restart attempts instead of retrying forever.
+- If a plugin prevents the shared environment from starting, the client switches once to its isolated environment and explains the recovery. The original `~/.dsh` is not modified or deleted; reinstall a compatible plugin before switching back.
 - If the page is unexpectedly blank after system resume or a long idle, the client verifies the Web UI and reloads it automatically.
 - Before starting the local service, the packaged macOS app reads the user's shell `PATH` once — an interactive login shell first (three-second deadline), falling back to a plain login shell (two seconds) — and merges only absolute directories. This keeps Homebrew, `~/.local/bin`, and directories exported from `~/.zshrc` available to Agents when the app starts from Finder or the Dock.
 
 ## The Agent's execution environment on the bundled runtime
 
-On the bundled runtime the Agent's capabilities match official `dsh` — same runtime, same `~/.dsh`, same OS-level sandboxing. The execution environment is aligned with "running dsh in your own terminal" as follows:
+On the bundled runtime the Agent's capabilities match official `dsh` — same runtime, the currently selected data environment, and the same OS-level sandboxing. The execution environment is aligned with "running dsh in your own terminal" as follows:
 
-- **`node`, `dsh`, and `pnpm` are always available.** Packaged builds publish them in `~/.dsh-desktop/bin` and **append** that directory to the runtime's `PATH`. A user who never installed those tools still gets an Agent that can run `node script.js` and the market's `dsh plugin add`; a user who did keeps their own versions first. `dsh` goes through a fail-closed gateway and will not boot a second web profile. The directory provides no `npm`/`npx` — for those (starting an MCP server with `npx`, say) install Node.js or use Pinned address mode. The `node` shim works by setting `ELECTRON_RUN_AS_NODE` so Electron runs as Node, so **processes started through it, and their own children,** carry that variable: a node script that goes on to launch an Electron-based tool must clear it, or use a real Node.js install.
+- **`node`, `dsh`, and `pnpm` are always available.** Packaged builds publish them in `~/.bruc3van-dsh-desktop/bin` and **append** that directory to the runtime's `PATH`. A user who never installed those tools still gets an Agent that can run `node script.js` and the market's `dsh plugin add`; a user who did keeps their own versions first. `dsh` goes through a fail-closed gateway, points to the selected data environment, and will not boot a second web profile. The directory provides no `npm`/`npx` — for those (starting an MCP server with `npx`, say) install Node.js or use Pinned address mode. The `node` shim works by setting `ELECTRON_RUN_AS_NODE` so Electron runs as Node, so **processes started through it, and their own children,** carry that variable: a node script that goes on to launch an Electron-based tool must clear it, or use a real Node.js install.
 - **The Agent's environment stays clean.** The bundled runtime relies on `ELECTRON_RUN_AS_NODE` to run on Electron's Node, which is an implementation detail of how it is launched. The client removes that variable once the runtime starts and re-attaches it only where the runtime itself respawns Node (the native folder picker, the Windows ACL sandbox runner), so the Agent's own commands never inherit it — otherwise every Electron-based tool the Agent runs (`code`, for instance) would fail.
 - **File permissions.** The app does not enable the App Sandbox, so the Agent's file access is that of an ordinary user process. On macOS the first access to Desktop, Documents, or Downloads is prompted in this app's name, and grants are recorded per application — permissions already given to your terminal do not carry over. The system prompt states the purpose.
 - **Pinned version.** The bundled runtime ships with the installer and cannot be upgraded on its own. To track the latest official release, use Pinned address mode with a runtime you maintain — this is the developer path to day-zero official features.

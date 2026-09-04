@@ -71,6 +71,14 @@ import {
 import { officialDshPackageVersion } from './official-dsh-bin.ts'
 import { permissionGrantedForContext, windowsAppUserModelId } from './permission-policy.ts'
 import { createDshBrowserSessionCookie } from './dsh-browser-session.ts'
+import {
+  dshHomeForMode,
+  hasIsolatedRuntimeSource,
+  isPluginCompatibilityFailure,
+  migrateLegacyClientHome,
+  normalizeDshDataMode,
+  type DshDataMode,
+} from './data-home.ts'
 
 /** The built bundle sits at <project>/.build/main.mjs. */
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
@@ -83,18 +91,20 @@ const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
  */
 const SPAWN_NO_WINDOW = { windowsHide: true } as const
 
-/** The client's own data home (connection settings only). */
+/** The client's branded private home (settings, shims and update downloads). */
 function clientHome(): string {
-  return devOverride('DSH_DESKTOP_HOME') ?? join(homedir(), '.dsh-desktop')
+  return devOverride('DSH_DESKTOP_HOME') ?? join(homedir(), '.bruc3van-dsh-desktop')
 }
 
 /**
- * The local child's data home: the OFFICIAL dsh home, shared with the dsh
- * CLI and the browser Web UI — existing conversations, titles, credentials,
- * and model configuration are the same everywhere. DSH_HOME overrides.
+ * The local child's data home is frozen for this process: shared official
+ * ~/.dsh by default, or the client-owned isolated home. DSH_HOME overrides.
  */
+let activeDshHome: string | undefined
+let activeDshDataMode: DshDataMode | undefined
 function childHome(): string {
-  return devOverride('DSH_HOME') ?? join(homedir(), '.dsh')
+  return activeDshHome ?? devOverride('DSH_HOME')
+    ?? dshHomeForMode(normalizeDshDataMode(loadSettings().dshDataMode), homedir(), clientHome())
 }
 
 /** The client's own settings document (connection configuration). */
@@ -136,6 +146,12 @@ interface ClientSettings {
    * spawn only — never written into the shared profile patch layer.
    */
   localWebPort?: number
+  /** Shared official ~/.dsh, or the client-owned isolated DSH home. */
+  dshDataMode?: DshDataMode
+  /** Why the isolated environment was selected without an explicit user choice. */
+  dshDataFallbackReason?: 'plugin-compatibility'
+  /** The one-time compatibility fallback explanation has been acknowledged. */
+  dshDataFallbackNoticeShown?: boolean
 }
 
 function loadSettings(): ClientSettings {
@@ -207,6 +223,15 @@ function patchSettings(patch: Partial<ClientSettings> = {}, unset: readonly (key
   if (!skip.has('localWebPort')) {
     const parsed = normalizeLocalWebPort(merged.localWebPort)
     if (parsed > 0) next.localWebPort = parsed
+  }
+  if (!skip.has('dshDataMode') && merged.dshDataMode !== undefined) {
+    next.dshDataMode = normalizeDshDataMode(merged.dshDataMode)
+  }
+  if (!skip.has('dshDataFallbackReason') && merged.dshDataFallbackReason === 'plugin-compatibility') {
+    next.dshDataFallbackReason = merged.dshDataFallbackReason
+  }
+  if (!skip.has('dshDataFallbackNoticeShown') && merged.dshDataFallbackNoticeShown !== undefined) {
+    next.dshDataFallbackNoticeShown = merged.dshDataFallbackNoticeShown
   }
   if (!skip.has('updateDismissedVersion') && merged.updateDismissedVersion !== undefined) {
     next.updateDismissedVersion = merged.updateDismissedVersion
@@ -295,6 +320,20 @@ function devFlag(name: string): boolean {
 /** Whether persisted settings currently select the reusable remote origin. */
 function usesConfiguredServer(settings: ClientSettings): boolean {
   return normalizeServerUrl(settings.serverUrl) !== undefined && settings.connectionMode !== 'smart'
+}
+
+function selectedDshDataMode(settings: ClientSettings = loadSettings()): DshDataMode {
+  return normalizeDshDataMode(settings.dshDataMode)
+}
+
+/** A development DSH_HOME override is an explicit fixture and wins over the UI. */
+function dshDataModeSelectable(): boolean {
+  return devOverride('DSH_HOME') === undefined
+}
+
+/** Generic localhost discovery is meaningful only for the shared official home. */
+function sharedDshDiscoveryEnabled(): boolean {
+  return (activeDshDataMode ?? selectedDshDataMode()) === 'shared'
 }
 
 /**
@@ -2778,7 +2817,7 @@ function openSettingsWindow(): void {
   settingsWindow = new BrowserWindow({
     width: 480,
     height: 720,
-    title: '连接设置',
+    title: localeChinese() ? 'DSH Desktop 设置' : 'DSH Desktop settings',
     // Without this the window keeps Electron's own default icon in its title
     // bar and taskbar entry — the one place the client still looked like a
     // generic Electron app.
@@ -2994,10 +3033,73 @@ function trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
  * installation is exactly the damage no relaunch can repair.
  */
 function restartApp(): void {
-  if (quitting || installerHandoff) return
+  if (quitting || restarting || installerHandoff) return
   restarting = true
+  // Integration checks need to observe the persisted handoff without leaving
+  // an unattached successor process behind. Packaged builds ignore this flag.
+  if (devFlag('DSH_DESKTOP_SKIP_RELAUNCH')) {
+    app.quit()
+    return
+  }
   app.relaunch()
   app.quit()
+}
+
+let compatibilityFallbackScheduled = false
+let dataModeRestartScheduled = false
+
+/** Switch once from the shared home after DSH names a plugin boot failure. */
+function schedulePluginCompatibilityFallback(): boolean {
+  if (compatibilityFallbackScheduled || !dshDataModeSelectable()) return false
+  const settings = loadSettings()
+  if (selectedDshDataMode(settings) !== 'shared') return false
+  const diagnostic = sanitizeRuntimeOutput(webUi?.lastDiagnostic ?? webUi?.lastError ?? '')
+  if (!isPluginCompatibilityFailure(diagnostic)) return false
+  compatibilityFallbackScheduled = true
+  patchSettings({
+    dshDataMode: 'isolated',
+    dshDataFallbackReason: 'plugin-compatibility',
+    dshDataFallbackNoticeShown: false,
+  })
+  console.warn('[desktop] shared DSH home failed on plugin compatibility; restarting with the isolated home')
+  showLoadingDocument()
+  updateLoadingStatus(
+    '检测到插件兼容问题，正在切换到桌面端独立环境…',
+    'A plugin compatibility problem was detected; switching to the isolated desktop environment…',
+  )
+  setTimeout(restartApp, 500)
+  return true
+}
+
+/** Explain an automatic move once the isolated runtime has actually recovered. */
+function promptPluginCompatibilityFallback(): void {
+  const settings = loadSettings()
+  if (settings.dshDataFallbackReason !== 'plugin-compatibility'
+    || settings.dshDataFallbackNoticeShown === true
+    || selectedDshDataMode(settings) !== 'isolated') return
+  const chinese = localeChinese()
+  const options: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title: 'DSH Desktop',
+    message: chinese ? '已切换到桌面端独立环境' : 'Switched to the isolated desktop environment',
+    detail: chinese
+      ? '共享环境中的插件与当前 DSH 不兼容，客户端已改用独立数据目录。原来的插件和数据没有删除。\n\n建议重新安装兼容版本；解决兼容问题后，可在设置中切回共享环境。'
+      : 'A plugin in the shared environment is incompatible with the current DSH, so the client is now using its isolated data directory. The original plugins and data were not deleted.\n\nReinstall a compatible version, then switch back to the shared environment in Settings after resolving the compatibility problem.',
+    buttons: chinese ? ['打开设置', '知道了'] : ['Open Settings', 'OK'],
+    defaultId: 0,
+    cancelId: 1,
+  }
+  const owner = mainWindow
+  const shown = owner === null || owner.isDestroyed()
+    ? dialog.showMessageBox(options)
+    : dialog.showMessageBox(owner, options)
+  void shown.then((answer) => {
+    patchSettings({ dshDataFallbackNoticeShown: true })
+    if (answer.response === 0) openSettingsWindow()
+  }, (error: unknown) => {
+    console.warn('[desktop] compatibility fallback notice failed: '
+      + (error instanceof Error ? error.message : String(error)))
+  })
 }
 
 /**
@@ -3070,6 +3172,10 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     canSwitch: savedServerUrl !== undefined,
     smartRuntimes: enabledSmartRuntimes(),
     localWebPort: configuredLocalWebPort(),
+    dshDataMode: activeDshDataMode ?? selectedDshDataMode(settings),
+    dshDataModeSelectable: dshDataModeSelectable(),
+    dshDataFallbackReason: settings.dshDataFallbackReason,
+    ...includeLocalDetail && { dshDataHome: childHome() },
     ...includeLocalDetail && webUi?.pid() !== undefined && { childPid: webUi.pid() },
     ...includeLocalDetail && webUi?.lastError !== null && webUi?.lastError !== undefined && { lastError: webUi.lastError },
     // Which dsh the local child came from. Names a path on this machine, so it
@@ -4070,6 +4176,7 @@ function settingsPageScript(): string {
     + '+(s.installedDshVersion?' + t(' · 本机 dsh ', ' · installed dsh ') + '+s.installedDshVersion:"");'
     + 'const c=await(await fetch("desktop/settings")).json();$("url").value=c.serverUrl??"";'
     + 'paintRuntimes(c.smartRuntimes);paintMode(s.selectedMode);paintPort(s.localWebPort);'
+    + 'paintDataMode(s.dshDataMode,s.dshDataHome,s.dshDataFallbackReason,s.dshDataModeSelectable);'
     + 'renderUpdate(await(await fetch("desktop/update")).json());'
     + '}catch(e){$("status").textContent=' + t('状态不可用', 'Status unavailable') + '}}'
     + '$("save").onclick=async()=>{try{'
@@ -4129,6 +4236,28 @@ function settingsPageScript(): string {
     + '$("port-fixed-block").hidden=false;$("port").focus()};'
     + '$("port-save").onclick=()=>{const v=$("port").value.trim();if(!v){$("port-note").textContent='
     + t('请输入端口', 'Enter a port') + ';return}void savePort(v)};'
+    + 'let dataMode="shared";'
+    + 'function paintDataMode(mode,path,reason,selectable){dataMode=mode==="isolated"?"isolated":"shared";'
+    + '$("data-shared").classList.toggle("primary",dataMode==="shared");$("data-isolated").classList.toggle("primary",dataMode==="isolated");'
+    + '$("data-shared").setAttribute("aria-checked",String(dataMode==="shared"));$("data-isolated").setAttribute("aria-checked",String(dataMode==="isolated"));'
+    + '$("data-shared").disabled=selectable===false;$("data-isolated").disabled=selectable===false;'
+    + 'const probe=document.querySelector("[data-smart-runtime=probe]");if(probe)probe.disabled=dataMode==="isolated";'
+    + '$("data-path").textContent=path||"";'
+    + '$("data-note").textContent=selectable===false?'
+    + t('当前由 DSH_HOME 开发环境变量控制。', 'Currently controlled by the DSH_HOME development override.')
+    + ':reason==="plugin-compatibility"?'
+    + t('因共享环境中的插件与当前 DSH 不兼容，已自动切换。建议重新安装兼容版本；解决后可切回共享环境。', 'Automatically switched because a plugin in the shared environment is incompatible with the current DSH. Reinstall a compatible version, then switch back after resolving it.')
+    + ':dataMode==="shared"?'
+    + t('与命令行和浏览器版 DSH 共用对话、凭据、模型配置与插件。', 'Shares conversations, credentials, model configuration and plugins with the DSH CLI and browser UI.')
+    + ':' + t('使用桌面端独立的数据、凭据与插件。切换会重启客户端。', 'Uses isolated desktop data, credentials and plugins. Switching restarts the client.') + '}'
+    + 'async function saveDataMode(mode){if(mode===dataMode)return;const buttons=[$("data-shared"),$("data-isolated")];buttons.forEach(b=>b.disabled=true);'
+    + '$("data-note").textContent=' + t('正在保存并重启客户端…', 'Saving and restarting the client…') + ';'
+    + 'try{const r=await fetch("desktop/dsh-data-mode",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({dshDataMode:mode})});const j=await r.json();'
+    + 'if(!j.saved){buttons.forEach(b=>b.disabled=false);$("data-note").textContent=' + t('切换失败：', 'Switch failed: ') + '+(j.error||' + t('未知错误', 'unknown error') + ');return}'
+    + 'if(j.applied){$("data-note").textContent=' + t('已保存，正在重启客户端…', 'Saved; restarting the client…') + ';return}'
+    + 'await refresh();$("data-note").textContent=' + t('当前已经是这个环境', 'This environment is already selected') + '}'
+    + 'catch(e){buttons.forEach(b=>b.disabled=false);$("data-note").textContent=' + t('切换失败：', 'Switch failed: ') + '+e.message}}'
+    + '$("data-shared").onclick=()=>void saveDataMode("shared");$("data-isolated").onclick=()=>void saveDataMode("isolated");'
     // Any answer must put the button back; a fetch that throws would otherwise
     // leave it grey until the page is reopened.
     + '$("update-check").onclick=async()=>{try{$("update-check").disabled=true;const r=await fetch("desktop/update/check",{method:"POST"});renderUpdate((await r.json()).state)}'
@@ -4170,7 +4299,7 @@ function settingsPageHtml(): string {
   // none of them contains a character HTML or an attribute would read.
   const h = (zh: string, en: string): string => chinese ? zh : en
   return '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
-    + '<title>' + h('连接设置', 'Connection settings') + '</title>'
+    + '<title>' + h('DSH Desktop 设置', 'DSH Desktop settings') + '</title>'
     + '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; img-src data:; style-src \'unsafe-inline\'">'
     + '<meta name="color-scheme" content="light dark">'
     + '<style>:root{color-scheme:light dark}'
@@ -4210,6 +4339,7 @@ function settingsPageHtml(): string {
     + '.icon-link:hover{background:#f5f6f7;color:#0f1115}'
     + '[hidden]{display:none}'
     + '.note{margin:8px 0 0;font-size:13px;color:#6e7480}'
+    + '.data-mode-picks button{min-height:44px}.path-text{overflow-wrap:anywhere;word-break:break-word}'
     // Divider
     + '.divider{border:none;border-top:1px solid #ebeef2;margin:28px 0}'
     // Download progress
@@ -4239,7 +4369,7 @@ function settingsPageHtml(): string {
     + '@media(prefers-reduced-motion:reduce){*{transition:none!important}}'
     + '</style></head><body><div class="container">'
     // Header with logo
-    + '<div class="header">' + icon + '<h1 class="page-title">' + h('连接设置', 'Connection settings') + '</h1></div>'
+    + '<div class="header">' + icon + '<h1 class="page-title">' + h('DSH Desktop 设置', 'DSH Desktop settings') + '</h1></div>'
     // Connection section
     + '<div class="section">'
     + '<div class="section-title">' + h('连接', 'Connection') + '<span class="badge">' + h('增强功能', 'Enhanced') + '</span></div>'
@@ -4280,6 +4410,17 @@ function settingsPageHtml(): string {
     + '<p class="note" id="note"></p>'
     + '</div>'
     // Divider
+    + '<hr class="divider">'
+    // DSH data environment section
+    + '<div class="section">'
+    + '<div class="section-title">' + h('数据环境', 'Data environment') + '<span class="badge">DSH_HOME</span></div>'
+    + '<div class="runtime-picks data-mode-picks" role="radiogroup" aria-label="' + h('DSH 数据环境', 'DSH data environment') + '">'
+    + '<button type="button" role="radio" aria-checked="true" id="data-shared" class="primary">' + h('共享环境', 'Shared') + '</button>'
+    + '<button type="button" role="radio" aria-checked="false" id="data-isolated">' + h('桌面端独立环境', 'Desktop isolated') + '</button>'
+    + '</div>'
+    + '<p class="version-text path-text" id="data-path"></p>'
+    + '<p class="note" id="data-note" aria-live="polite">' + h('正在读取数据环境…', 'Reading data environment…') + '</p>'
+    + '</div>'
     + '<hr class="divider">'
     // Update section
     + '<div class="section">'
@@ -4557,6 +4698,7 @@ function markLocalRuntimeReady(url: string): void {
   if (spawned !== undefined && !bundledPluginSeatInUse && !bundledPluginSuppressed) {
     offerBundledPluginSeat(spawned)
   }
+  promptPluginCompatibilityFallback()
   if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
   launchBudgetResetTimer = setTimeout(() => {
     if (configuredTarget === undefined && childTarget === url) launchBudget = MAX_LAUNCH_RETRIES
@@ -4675,7 +4817,7 @@ function resolveRuntime(force = false): void {
     // Occupancy is a safety gate, not a connection source. Skip it when the
     // probe just established the ports are empty, or when tests isolate
     // DSH_HOME and must not treat this machine's 3080 as a writer on it.
-    if (!skipOccupancy && !devFlag('DSH_DESKTOP_SKIP_PROBE')) {
+    if (!skipOccupancy && sharedDshDiscoveryEnabled() && !devFlag('DSH_DESKTOP_SKIP_PROBE')) {
       configuredTarget = undefined
       probeConnected = false
       if (!loadingDocumentActive) showLoadingDocument()
@@ -4713,7 +4855,8 @@ function resolveRuntime(force = false): void {
     const survivor = await adoptOrClearSurvivingRuntime()
     if (quitting || generation !== connectionGeneration) return
     if (settleSurvivingRuntime(survivor, generation, force)) return
-    if (devFlag('DSH_DESKTOP_SKIP_PROBE') || !smartRuntimeEnabled(enabledSmartRuntimes(), 'probe')) {
+    if (!sharedDshDiscoveryEnabled() || devFlag('DSH_DESKTOP_SKIP_PROBE')
+      || !smartRuntimeEnabled(enabledSmartRuntimes(), 'probe')) {
       void startLocal()
       return
     }
@@ -4776,6 +4919,10 @@ async function instanceOccupyingLocalSpawn(
   extraPorts: readonly number[] = [],
 ): Promise<string | undefined> {
   if (devFlag('DSH_DESKTOP_SKIP_PROBE')) return undefined
+  // A service discovered from the shared profile cannot occupy the isolated
+  // profile: the two runtimes write different roots and use different browser
+  // credentials. The isolated runtime lock remains the same-home safety gate.
+  if (!sharedDshDiscoveryEnabled()) return undefined
   if (smartRuntimeEnabled(ids, 'probe')) return undefined
   const probed = await probeSmartTargets(extraPorts)
   if (probed.kind !== 'unavailable' && !isOwnManagedOrigin(probed.url)) return probed.url
@@ -5161,6 +5308,53 @@ async function requestLocalWebPortSave(value: unknown, remoteCaller: boolean): P
     }
   }
   return persistLocalWebPort(parsed, epoch)
+}
+
+function requestDshDataModeSave(value: unknown): {
+  saved: boolean
+  dshDataMode: DshDataMode
+  applied?: boolean
+  error?: string
+} {
+  const current = activeDshDataMode ?? selectedDshDataMode()
+  const chinese = localeChinese()
+  if (value !== 'shared' && value !== 'isolated') {
+    return { saved: false, dshDataMode: current, error: chinese ? '未知的数据环境' : 'Unknown data environment' }
+  }
+  if (!dshDataModeSelectable()) {
+    return {
+      saved: false,
+      dshDataMode: current,
+      error: chinese ? '当前由 DSH_HOME 开发环境变量控制' : 'Currently controlled by the DSH_HOME development override',
+    }
+  }
+  if (dataModeRestartScheduled) {
+    return {
+      saved: false,
+      dshDataMode: current,
+      error: chinese ? '数据环境切换已保存，客户端正在重启' : 'A data-environment change is saved and the client is restarting',
+    }
+  }
+  if (value === 'isolated' && !hasIsolatedRuntimeSource(enabledSmartRuntimes())) {
+    return {
+      saved: false,
+      dshDataMode: current,
+      error: chinese
+        ? '独立环境无法复用本机已运行实例；请先启用本机已安装、npx 缓存或客户端内置运行时'
+        : 'The isolated environment cannot reuse an already-running instance; enable installed, npx cache, or bundled first',
+    }
+  }
+  if (value === current) return { saved: true, dshDataMode: current, applied: false }
+  patchSettings(
+    { dshDataMode: value },
+    ['dshDataFallbackReason', 'dshDataFallbackNoticeShown'],
+  )
+  dataModeRestartScheduled = true
+  // A process restart makes the selected home immutable for the lifetime of
+  // every runtime generation. In-process switching could let an old child's
+  // late exit clear the new home's lock or withdraw its plugin seat.
+  setTimeout(restartApp, 500)
+  return { saved: true, dshDataMode: value, applied: true }
 }
 
 /**
@@ -5593,6 +5787,29 @@ function startSettingsServer(): Promise<number> {
       })
       return
     }
+    if (pathname === '/desktop/dsh-data-mode' && req.method === 'POST') {
+      let body = ''
+      let bodyTooLarge = false
+      req.on('data', (chunk: Buffer) => {
+        if (bodyTooLarge) return
+        body += chunk.toString()
+        if (body.length > 16_384) {
+          bodyTooLarge = true
+          writeJson(res, 413, { saved: false, error: 'request body too large' })
+        }
+      })
+      req.on('end', () => {
+        if (bodyTooLarge) return
+        try {
+          const parsed = JSON.parse(body) as { dshDataMode?: unknown }
+          const result = requestDshDataModeSave(parsed.dshDataMode)
+          writeJson(res, result.saved ? 200 : 400, result)
+        } catch (error) {
+          writeJson(res, 400, { saved: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      })
+      return
+    }
     if (pathname === '/desktop/switch' && req.method === 'POST') {
       void switchConnectionMode().then((result) => {
         res.writeHead(result.switched ? 200 : 400, { 'content-type': 'application/json; charset=utf-8' })
@@ -5773,6 +5990,7 @@ function boot(): void {
         }
         if (!wasReady) {
           console.error('[desktop] dsh web failed to start (' + String(code) + '/' + String(signal) + '); no relaunches left')
+          if (schedulePluginCompatibilityFallback()) return
           showLocalRuntimeStartupFailure(code, signal)
           return
         }
@@ -5835,6 +6053,28 @@ if (!gotLock) {
   })
 
   void app.whenReady().then(async () => {
+    // The old generic name is easy for an unrelated third-party client to
+    // choose too. Move it only for a normal packaged launch, only after this
+    // process owns the single-instance lock, and only when the branded home
+    // has never been created. Development overrides remain exact fixtures.
+    if (app.isPackaged && devOverride('DSH_DESKTOP_HOME') === undefined) {
+      try {
+        const migrated = migrateLegacyClientHome(join(homedir(), '.dsh-desktop'), clientHome())
+        if (migrated !== 'not-needed') {
+          console.log('[desktop] client data home ' + (migrated === 'moved' ? 'moved' : 'copied')
+            + ' to ' + clientHome())
+        }
+      } catch (error) {
+        console.warn('[desktop] client data home migration failed: '
+          + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+    // Freeze this process on one DSH_HOME. A setting change is persisted for
+    // the successor, while the old runtime's shutdown still clears the lock
+    // and plugin seat belonging to the home it actually used.
+    activeDshDataMode = selectedDshDataMode()
+    activeDshHome = devOverride('DSH_HOME')
+      ?? dshHomeForMode(activeDshDataMode, homedir(), clientHome())
     app.setName('DSH Desktop')
     // Installed Windows notifications must match electron-builder's shortcut
     // identity. Development has no such shortcut, so use Electron's documented
@@ -5992,6 +6232,27 @@ if (!gotLock) {
       const caller = bridgeCaller(event)
       if (!caller.trusted) throw bridgeDenied()
       return requestLocalWebPortSave(port, caller.remote)
+    })
+    ipcMain.handle('desktop:data-mode:set', async (event, mode: unknown) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) throw bridgeDenied()
+      if (caller.remote) {
+        const confirmed = await confirmSensitiveAction(
+          localeChinese() ? '当前页面请求切换本机数据环境' : 'The current page asked to switch the local data environment',
+          (localeChinese()
+            ? '这会重启客户端，并决定本机运行时使用共享数据还是桌面端独立数据。请求来自：'
+            : 'This restarts the client and chooses whether its local runtime uses shared or isolated desktop data. Requested by: ')
+          + (currentTarget() ?? ''),
+        )
+        if (!confirmed) {
+          return {
+            saved: false,
+            dshDataMode: selectedDshDataMode(),
+            error: localeChinese() ? '已取消' : 'Cancelled',
+          }
+        }
+      }
+      return requestDshDataModeSave(mode)
     })
     ipcMain.handle('desktop:connection:probe', async (event) => {
       const caller = bridgeCaller(event)
