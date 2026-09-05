@@ -28,16 +28,14 @@
  */
 
 import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   PNPM_ENTRY_VARIABLE,
+  RUNTIME_ENTRY_VARIABLE as ENTRY_VARIABLE,
   patchRuntimeSpawns,
   type SpawnHost,
 } from './runtime-spawn.ts'
 
-/** The official CLI entry, passed by the main process (never on argv: the
- *  harness parses `process.argv.slice(2)` and must still see `web --port …`). */
-const ENTRY_VARIABLE = 'DSH_DESKTOP_RUNTIME_ENTRY'
 const NODE_MODE = 'ELECTRON_RUN_AS_NODE'
 
 function resolvePnpmEntry(runtimeEntry: string): string | undefined {
@@ -53,6 +51,9 @@ if (entry === undefined || entry === '') {
   throw new Error(ENTRY_VARIABLE + ' is required: the desktop client sets it to the bundled dsh entry')
 }
 const pnpmEntry = resolvePnpmEntry(entry)
+// pnpm derives npm_execpath from argv[1]. Keep it pointing at the CLI rather
+// than this launcher, which cannot run without its private entry variable.
+if (entry === pnpmEntry) process.argv[1] = entry
 // The launcher's own coordinates are not part of the harness's environment.
 Reflect.deleteProperty(process.env, ENTRY_VARIABLE)
 Reflect.deleteProperty(process.env, PNPM_ENTRY_VARIABLE)
@@ -64,7 +65,7 @@ if (nodeMode !== undefined && nodeMode !== '') {
   // its ESM facade from the unpatched exports, and the harness's own
   // `import { spawn } from 'node:child_process'` would bind to the originals.
   const childProcess = createRequire(import.meta.url)('node:child_process') as SpawnHost
-  patchRuntimeSpawns(childProcess, nodeMode, process.execPath, process.platform, process.env, pnpmEntry)
+  patchRuntimeSpawns(childProcess, nodeMode, process.execPath, process.platform, process.env, pnpmEntry, fileURLToPath(import.meta.url))
 }
 
 await import(pathToFileURL(entry).href)

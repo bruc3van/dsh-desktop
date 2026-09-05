@@ -1,3 +1,4 @@
+import { preflightMacUpdate, prepareMacUpdate } from './mac-update.ts'
 import { mainContentHeightScript } from './window-content.ts'
 import { app, BrowserWindow, dialog, net, shell } from 'electron'
 import { statSync } from 'node:fs'
@@ -42,7 +43,7 @@ export function createUpdateController(services: Options) {
   const { loadSettings, patchSettings, desktopClientVersion, clientHome, mainWindowShowsRemote, refreshTrayMenu, localeChinese, loadingIconTag, windowBackgroundColor, openExternal, launchWindow } = services
 
   /**
-   * Set from the moment a Windows installer is about to be handed this process
+   * Set from the moment an installer is about to be handed this process
    * tree until the client exits. The relaunch ladder must not fire in that
    * window: the runtime was stopped on purpose, and a child respawned 250ms
    * later is precisely the orphan the stop exists to prevent — the installer
@@ -113,6 +114,18 @@ export function createUpdateController(services: Options) {
       arch: process.arch,
       packaged: app.isPackaged,
       downloadDir: join(clientHome(), 'updates'),
+      preflightMac: async () => { await preflightMacUpdate(process.execPath, localeChinese()) },
+      installMac: async (file, version) => {
+        // Preparation cleans its own staging directory if it fails.
+        const prepared = await prepareMacUpdate(file, process.execPath, version, localeChinese())
+        try {
+          await beginInstallerHandoff()
+          await prepared.start()
+        } catch (error) {
+          await prepared.dispose()
+          throw error
+        }
+      },
       loadPersistence: loadUpdatePersistence,
       savePersistence: saveUpdatePersistence,
       dryRun: devFlag('DSH_DESKTOP_UPDATE_DRY_RUN'),
@@ -120,10 +133,8 @@ export function createUpdateController(services: Options) {
       // sweep, and must not die before the download that may never succeed.
       // Both constraints meet at exactly this point in the install.
       //
-      // Only Windows has that sweep. macOS and Linux open the image and let the
-      // person replace the app themselves, and the ordinary quit path already
-      // stops the runtime — stopping here would leave them with a dead runtime
-      // every time they answer "Later" to the replace prompt.
+      // macOS stops the runtime in installMac, after staging and verification.
+      // Linux still opens the installer without stopping the runtime here.
       onBeforeInstall: async () => {
         if (process.platform !== 'win32') return
         await beginInstallerHandoff()
@@ -195,8 +206,8 @@ export function createUpdateController(services: Options) {
         releases: '打开发布页',
         checking: '正在检查更新…',
         downloading: '正在下载新版本…',
-        installing: '正在启动安装程序…',
-        restart: '请安装新版本后重新打开应用',
+        installing: process.platform === 'darwin' ? '正在验证并准备更新，随后将自动重启…' : '正在启动安装程序…',
+        restart: process.platform === 'darwin' ? '即将退出并自动重启…' : '请安装新版本后重新打开应用',
       }
     }
     return {
@@ -211,8 +222,8 @@ export function createUpdateController(services: Options) {
       releases: 'Open the releases page',
       checking: 'Checking for updates…',
       downloading: 'Downloading the new version…',
-      installing: 'Starting the installer…',
-      restart: 'Install the new copy, then reopen the app',
+      installing: process.platform === 'darwin' ? 'Verifying and preparing the update; the app will restart…' : 'Starting the installer…',
+      restart: process.platform === 'darwin' ? 'The app will quit and restart automatically…' : 'Install the new copy, then reopen the app',
     }
   }
 
@@ -413,42 +424,8 @@ export function createUpdateController(services: Options) {
       console.warn('[desktop] the installer did not start; restoring the local runtime')
       launchWindow()
     }
-    if (result.started && process.platform === 'darwin' && !devFlag('DSH_DESKTOP_SKIP_UPDATE_PROMPT')) {
-      promptMacReplace()
-    }
+    if (result.started && process.platform === 'darwin' && !devFlag('DSH_DESKTOP_UPDATE_DRY_RUN')) app.quit()
     return result
-  }
-
-
-  /**
-   * macOS has no installer to hand off to: the image opens in Finder and the
-   * person drags the app over the old copy. Finder refuses that drag while the
-   * old copy is running ("项目正在使用中"), which left the update with no way to
-   * finish — so offer to quit right here, with the image already open.
-   */
-  function promptMacReplace(): void {
-    const mainWindow = services.getMainWindow()
-    const chinese = localeChinese()
-    const options: Electron.MessageBoxOptions = {
-      type: 'info',
-      title: 'DSH Desktop',
-      message: chinese ? '已打开新版本安装镜像' : 'The new installer image is open',
-      detail: chinese
-        ? '替换「应用程序」中的旧版本需要先退出本应用，否则 Finder 会提示「正在使用中」。\n退出后请把镜像里的应用拖到「应用程序」文件夹，然后重新打开。'
-        : 'Quit first — Finder cannot replace a copy that is running.\nThen drag the app from the image into Applications and reopen it.',
-      buttons: chinese ? ['退出并替换', '稍后'] : ['Quit and replace', 'Later'],
-      defaultId: 0,
-      cancelId: 1,
-    }
-    const owner = mainWindow
-    const shown = owner === null || owner.isDestroyed()
-      ? dialog.showMessageBox(options)
-      : dialog.showMessageBox(owner, options)
-    void shown.then((answer) => {
-      // Quit for real: a tray-resident client that only hides its window would
-      // still hold the bundle open, which is the problem being solved here.
-      if (answer.response === 0) app.quit()
-    })
   }
 
 

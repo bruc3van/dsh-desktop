@@ -2,7 +2,7 @@
  * Unit check for `src/main/runtime-spawn.ts`.
  *
  * Pins the launcher spawn contract without booting Electron: `pnpm` is
- * rewritten onto `execPath` + packaged `pnpm.mjs` with `CI=true` and
+ * rewritten onto `execPath` + launcher targeting packaged `pnpm.mjs` with `CI=true` and
  * `windowsHide` on Windows; every other command is untouched except the
  * existing `ELECTRON_RUN_AS_NODE` reattach for this executable.
  * @module desktop/scripts/check-runtime-spawn
@@ -52,22 +52,24 @@ check('unrelated commands are not pnpm', isPnpmCommand('node') === false && isPn
 const ambient = { PATH: '/usr/bin', FOO: 'bar' }
 const pnpmCall = ['pnpm', ['add', 'x'], { cwd: '/tmp', shell: true, stdio: 'inherit' }]
 check('rewrite requires a packaged pnpm entry',
-  applyPnpmRewrite([...pnpmCall], '/electron', 'win32', ambient, undefined) === false)
+  applyPnpmRewrite([...pnpmCall], '/electron', 'win32', ambient, undefined, '/res/runtime-launcher.mjs') === false)
 
 const rewritten = ['pnpm', ['add', 'x'], { cwd: '/tmp', shell: true, stdio: 'inherit' }]
-check('Windows pnpm spawn becomes execPath + pnpm.mjs',
-  applyPnpmRewrite(rewritten, '/electron', 'win32', ambient, '/res/pnpm.mjs') === true
+check('Windows pnpm spawn becomes execPath + launcher',
+  applyPnpmRewrite(rewritten, '/electron', 'win32', ambient, '/res/pnpm.mjs', '/res/runtime-launcher.mjs') === true
   && rewritten[0] === '/electron'
-  && JSON.stringify(rewritten[1]) === JSON.stringify(['/res/pnpm.mjs', 'add', 'x'])
+  && JSON.stringify(rewritten[1]) === JSON.stringify(['/res/runtime-launcher.mjs', 'add', 'x'])
   && rewritten[2].shell === false
   && rewritten[2].windowsHide === true
   && rewritten[2].cwd === '/tmp'
   && rewritten[2].stdio === 'inherit'
   && rewritten[2].env.CI === 'true'
-  && rewritten[2].env.FOO === 'bar')
+  && rewritten[2].env.FOO === 'bar'
+  && rewritten[2].env.DSH_DESKTOP_RUNTIME_ENTRY === '/res/pnpm.mjs'
+  && rewritten[2].env.DSH_DESKTOP_PNPM_ENTRY === '/res/pnpm.mjs')
 
 const posix = ['pnpm.cmd', ['i'], { shell: true }]
-applyPnpmRewrite(posix, '/usr/bin/node', 'darwin', ambient, '/res/pnpm.mjs')
+applyPnpmRewrite(posix, '/usr/bin/node', 'darwin', ambient, '/res/pnpm.mjs', '/res/runtime-launcher.mjs')
 check('POSIX rewrite still drops shell and does not set windowsHide',
   posix[0] === '/usr/bin/node'
   && posix[2].shell === false
@@ -75,15 +77,15 @@ check('POSIX rewrite still drops shell and does not set windowsHide',
   && posix[2].env.CI === 'true')
 
 const optionsOnly = ['PNPM', { shell: true }]
-applyPnpmRewrite(optionsOnly, '/electron', 'win32', ambient, '/res/pnpm.mjs')
+applyPnpmRewrite(optionsOnly, '/electron', 'win32', ambient, '/res/pnpm.mjs', '/res/runtime-launcher.mjs')
 check('spawn(file, options) form still rewrites',
   optionsOnly[0] === '/electron'
-  && JSON.stringify(optionsOnly[1]) === JSON.stringify(['/res/pnpm.mjs'])
+  && JSON.stringify(optionsOnly[1]) === JSON.stringify(['/res/runtime-launcher.mjs'])
   && optionsOnly[2].windowsHide === true)
 
 const nodeCall = ['node', ['script.js'], { shell: false }]
 check('a node spawn is not rewritten',
-  applyPnpmRewrite(nodeCall, '/electron', 'win32', ambient, '/res/pnpm.mjs') === false
+  applyPnpmRewrite(nodeCall, '/electron', 'win32', ambient, '/res/pnpm.mjs', '/res/runtime-launcher.mjs') === false
   && nodeCall[0] === 'node'
   && nodeCall[2].windowsHide === undefined
   && nodeCall[2].env === undefined)
@@ -99,14 +101,14 @@ const host = {
   spawnSync(...callArguments) { calls.push(['spawnSync', ...callArguments]); return { status: 0 } },
   fork(...callArguments) { calls.push(['fork', ...callArguments]); return { pid: 2 } },
 }
-patchRuntimeSpawns(host, '1', '/electron', 'win32', ambient, '/res/pnpm.mjs')
+patchRuntimeSpawns(host, '1', '/electron', 'win32', ambient, '/res/pnpm.mjs', '/res/runtime-launcher.mjs')
 
 host.spawn('pnpm', ['install'], { cwd: '/proj', shell: true, stdio: 'inherit' })
 const pnpmSpawn = calls.find(entry => entry[0] === 'spawn')
 check('patched spawn rewrites pnpm and reattaches Node mode',
   pnpmSpawn !== undefined
   && pnpmSpawn[1] === '/electron'
-  && JSON.stringify(pnpmSpawn[2]) === JSON.stringify(['/res/pnpm.mjs', 'install'])
+  && JSON.stringify(pnpmSpawn[2]) === JSON.stringify(['/res/runtime-launcher.mjs', 'install'])
   && pnpmSpawn[3].shell === false
   && pnpmSpawn[3].windowsHide === true
   && pnpmSpawn[3].env.CI === 'true'

@@ -59,6 +59,7 @@
     "check:bundled-plugin": "node scripts/check-bundled-plugin.mjs",
     "check:auto-fallback": "node scripts/check-auto-fallback.mjs",
     "check:error-surface": "node scripts/check-error-surface.mjs",
+    "check:mac-update": "node scripts/check-mac-update.mjs",
     "check:updater": "node scripts/check-updater.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
     "smoke:dmg": "node scripts/smoke-dmg.mjs",

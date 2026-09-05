@@ -207,6 +207,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: pnpm run check:updater
 
+      - name: 验证 macOS 自动替换与重启 / Verify macOS automatic update
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: pnpm run check:mac-update
+
       - name: 验证认证占用保护 / Verify authenticated occupancy
         if: ${{ !cancelled() }}
         run: pnpm run check:auth-occupancy

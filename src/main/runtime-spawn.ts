@@ -8,7 +8,9 @@
  *  1. `ELECTRON_RUN_AS_NODE` is stripped from the ambient environment, then
  *     reattached only for children that ARE this executable.
  *  2. A `pnpm` / `pnpm.cmd` spawn is rewritten onto `process.execPath` plus
- *     the packaged `pnpm.mjs`. Official `runPlugin` uses `spawnSync("pnpm", {
+ *     the launcher targeting packaged `pnpm.mjs`. The launcher removes Node
+ *     mode again before pnpm starts any lifecycle-script children.
+ *     Official `runPlugin` uses `spawnSync("pnpm", {
  *     shell: true })` on Windows, which opens a console, steals stdio, and
  *     can hang on an ignored-builds prompt. The rewrite is `shell: false`,
  *     `windowsHide: true` on win32, and `CI=true` on that child only — hide
@@ -30,6 +32,8 @@ const NODE_MODE = 'ELECTRON_RUN_AS_NODE'
 
 /** Main process / shims set this so the launcher can find packaged `pnpm.mjs`. */
 export const PNPM_ENTRY_VARIABLE = 'DSH_DESKTOP_PNPM_ENTRY'
+/** CLI target passed through the environment so its arguments stay unchanged. */
+export const RUNTIME_ENTRY_VARIABLE = 'DSH_DESKTOP_RUNTIME_ENTRY'
 
 /**
  * Whether a spawn target is this process's own executable — under Electron's
@@ -76,7 +80,7 @@ function optionsIndex(callArguments: unknown[]): number {
 
 /**
  * Rewrite a `pnpm` spawn onto the packaged CLI. Mutates `callArguments` into
- * `(execPath, [pnpm.mjs, ...args], options)` and returns whether it did.
+ * `(execPath, [launcher, ...args], options)` and returns whether it did.
  */
 export function applyPnpmRewrite(
   callArguments: unknown[],
@@ -84,6 +88,7 @@ export function applyPnpmRewrite(
   platform: NodeJS.Platform,
   ambient: NodeJS.ProcessEnv,
   pnpmEntry: string | undefined,
+  launcher: string,
 ): boolean {
   if (pnpmEntry === undefined || pnpmEntry === '') return false
   if (!isPnpmCommand(callArguments[0])) return false
@@ -96,11 +101,16 @@ export function applyPnpmRewrite(
   const options: SpawnOptions = {
     ...base,
     shell: false,
-    env: { ...base.env ?? ambient, CI: 'true' },
+    env: {
+      ...base.env ?? ambient,
+      CI: 'true',
+      [RUNTIME_ENTRY_VARIABLE]: pnpmEntry,
+      [PNPM_ENTRY_VARIABLE]: pnpmEntry,
+    },
   }
   if (platform === 'win32') options.windowsHide = true
   callArguments[0] = execPath
-  callArguments[1] = [pnpmEntry, ...originalArgs]
+  callArguments[1] = [launcher, ...originalArgs]
   callArguments[2] = options
   return true
 }
@@ -118,11 +128,12 @@ export function patchSpawnLike(
   platform: NodeJS.Platform,
   ambient: NodeJS.ProcessEnv,
   pnpmEntry: string | undefined,
+  launcher: string,
 ): void {
   const original = host[name]
   if (typeof original !== 'function') return
   host[name] = function patched(this: unknown, ...callArguments: unknown[]): unknown {
-    applyPnpmRewrite(callArguments, execPath, platform, ambient, pnpmEntry)
+    applyPnpmRewrite(callArguments, execPath, platform, ambient, pnpmEntry, launcher)
     if (always || isSelfExecutable(callArguments[0], execPath, platform)) {
       const index = optionsIndex(callArguments)
       callArguments[index] = withNodeMode(callArguments[index], nodeMode, ambient)
@@ -138,9 +149,10 @@ export function patchRuntimeSpawns(
   execPath: string,
   platform: NodeJS.Platform,
   ambient: NodeJS.ProcessEnv,
-  pnpmEntry?: string,
+  pnpmEntry: string | undefined,
+  launcher: string,
 ): void {
-  patchSpawnLike(host, 'spawn', nodeMode, false, execPath, platform, ambient, pnpmEntry)
-  patchSpawnLike(host, 'spawnSync', nodeMode, false, execPath, platform, ambient, pnpmEntry)
-  patchSpawnLike(host, 'fork', nodeMode, true, execPath, platform, ambient, pnpmEntry)
+  patchSpawnLike(host, 'spawn', nodeMode, false, execPath, platform, ambient, pnpmEntry, launcher)
+  patchSpawnLike(host, 'spawnSync', nodeMode, false, execPath, platform, ambient, pnpmEntry, launcher)
+  patchSpawnLike(host, 'fork', nodeMode, true, execPath, platform, ambient, pnpmEntry, launcher)
 }

@@ -117,6 +117,8 @@ export interface DesktopUpdaterOptions {
   platform: NodeJS.Platform
   arch: string
   packaged: boolean
+  preflightMac?: () => Promise<void>
+  installMac?: (file: string, version: string) => Promise<void>
   downloadDir: string
   loadPersistence: () => UpdaterPersistence
   savePersistence: (next: UpdaterPersistence) => void
@@ -575,6 +577,7 @@ export class DesktopUpdater {
     this.setPhase('downloading')
 
     try {
+      if (this.options.platform === 'darwin' && !this.options.dryRun) await this.options.preflightMac?.()
       const destination = joinDownloadPath(this.options.downloadDir, info.fileName)
       await this.downloadToFile(info, destination)
       const actual = await sha256File(destination)
@@ -608,7 +611,9 @@ export class DesktopUpdater {
           resolve: resolveOutcome,
         }
       }
-      await launchInstaller(destination, this.options.platform, (code, signal) => {
+      if (this.options.platform === 'darwin' && this.options.installMac) {
+        await this.options.installMac(destination, info.availableVersion)
+      } else await launchInstaller(destination, this.options.platform, (code, signal) => {
         this.installerExit?.resolve({ code, signal })
       })
       if (this.options.platform === 'darwin') {

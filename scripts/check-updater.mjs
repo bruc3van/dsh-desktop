@@ -146,6 +146,20 @@ await esbuild.build({
 })
 const { compareVersions, describeFetchError, manualCheckAnswer, safeDownloadFileName, DesktopUpdater } =
   await import(pathToFileURL(updaterBundle).href)
+const pageBundle = join(work, 'update-page.mjs')
+await esbuild.build({ entryPoints: [join(APP_DIR, 'src/main/pages/update.ts')], bundle: true, format: 'esm', platform: 'node', outfile: pageBundle, logLevel: 'silent' })
+const { renderUpdatePromptPageUrl } = await import(pathToFileURL(pageBundle).href)
+for (const chinese of [true, false]) {
+  const info = { currentVersion: '1.0.0', availableVersion: '2.0.0' }
+  const copy = { found: '', later: '', ignore: '', install: '' }
+  const mac = decodeURIComponent(renderUpdatePromptPageUrl(info, chinese, '', copy, 'darwin'))
+  const win = decodeURIComponent(renderUpdatePromptPageUrl(info, chinese, '', copy, 'win32'))
+  if (!mac.includes(chinese ? '中断本地正在运行的任务' : 'interrupts running local tasks')
+    || !win.includes(chinese ? '将打开安装程序' : 'The installer will open')) {
+    throw new Error('Update prompt must explain the correct platform installation behavior')
+  }
+}
+console.log('✓ Mac/Windows update prompt copy matches platform behavior in both languages')
 const orderings = [
   // Numeric prerelease identifiers rank by value: the string comparison this
   // replaced put rc.10 BELOW rc.9 and reported a newer build as current.
@@ -198,6 +212,32 @@ const feedOnlyUpdater = (platform, arch, feed = matrixFeed, currentVersion = '0.
   savePersistence: () => {},
   dryRun: true,
 })
+// A failed Mac preflight must neither fetch an installer nor stop the runtime.
+let preflightFetches = 0
+let stoppedForPreflight = false
+const preflightUpdater = new DesktopUpdater({
+  currentVersion: '0.0.1', feedUrl: 'https://example.invalid/latest.json',
+  platform: 'darwin', arch: 'arm64', packaged: true, downloadDir: work,
+  loadPersistence: () => ({}), savePersistence: () => {}, dryRun: false,
+  fetchImpl: async () => {
+    preflightFetches++
+    return new Response(JSON.stringify({ version: '99.0.0', platforms: {
+      'mac-arm64': { url: matrixFeed.platforms['mac-arm64'].url, sha256: 'a'.repeat(64) },
+    } }), { status: 200 })
+  },
+  preflightMac: async () => { throw new Error('The installation folder is not writable.') },
+  onBeforeInstall: async () => { stoppedForPreflight = true },
+})
+await preflightUpdater.check()
+const beforePreflight = preflightFetches
+const rejectedPreflight = await preflightUpdater.install()
+if (rejectedPreflight.started || preflightFetches !== beforePreflight || stoppedForPreflight
+  || preflightUpdater.getState().phase !== 'error'
+  || !rejectedPreflight.error.includes('not writable')) {
+  throw new Error('Mac preflight must fail before downloading or stopping runtime')
+}
+console.log('✓ Mac preflight failure downloads nothing and leaves the runtime running')
+
 const unbuiltPlatform = feedOnlyUpdater('linux', 'x64')
 const unbuiltResult = await unbuiltPlatform.check()
 if (unbuiltResult.hasUpdate || unbuiltPlatform.getState().phase !== 'unsupportedPlatform') {

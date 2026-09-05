@@ -44,6 +44,9 @@ process.stdout.write(JSON.stringify({
   ci: process.env.CI ?? null,
   argv: process.argv.slice(2),
   nodeMode: process.env.ELECTRON_RUN_AS_NODE ?? null,
+  cliEntry: process.argv[1],
+  entryVariable: process.env.DSH_DESKTOP_RUNTIME_ENTRY ?? null,
+  pnpmEntryVariable: process.env.DSH_DESKTOP_PNPM_ENTRY ?? null,
 }))
 `)
 await writeFile(fixture, `
@@ -287,7 +290,12 @@ try {
   check('rewritten pnpm keeps the original args',
     JSON.stringify(packagedLike.pnpmChild?.argv) === JSON.stringify(['dsh-desktop-probe']),
     JSON.stringify(packagedLike.pnpmChild?.argv))
-  check('rewritten pnpm still runs in Node mode', packagedLike.pnpmChild?.nodeMode === '1',
+  check('rewritten pnpm clears Node mode before lifecycle scripts', packagedLike.pnpmChild?.nodeMode === null,
+    JSON.stringify(packagedLike.pnpmChild))
+  check('pnpm sees its CLI path for npm_execpath', packagedLike.pnpmChild?.cliEntry === pnpmFixture,
+    JSON.stringify(packagedLike.pnpmChild))
+  check('rewritten pnpm does not inherit launcher coordinates',
+    packagedLike.pnpmChild?.entryVariable === null && packagedLike.pnpmChild?.pnpmEntryVariable === null,
     JSON.stringify(packagedLike.pnpmChild))
 
   const blocked = await runEntry(GATEWAY, ['web'], '1')

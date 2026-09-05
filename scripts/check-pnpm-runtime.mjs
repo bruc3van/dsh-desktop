@@ -1,17 +1,20 @@
 /**
  * Packaged-pnpm contract: the bundled Electron binary can run the closure's
  * `pnpm.mjs` (`--version`), and can install a local tarball with `--offline`
- * (no network — CI-safe).
+ * (no network — CI-safe). Also installs an approved lifecycle-script fixture
+ * through the real `dsh plugin` command with no developer tools on PATH.
  *
- * Usage: node scripts/check-pnpm-runtime.mjs [packaged-executable]
+ * Usage: node scripts/check-pnpm-runtime.mjs [packaged-executable | --source]
+ * --source uses the current build, deployed closure, and development Electron.
  * @module desktop/scripts/check-pnpm-runtime
  */
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
@@ -56,27 +59,62 @@ function packagedResourcesDir(packagedExecutable) {
   return join(dirname(packagedExecutable), 'resources')
 }
 
-const executable = await findExecutable()
+const sourceMode = process.argv.includes('--source')
+const executable = sourceMode ? createRequire(import.meta.url)('electron') : await findExecutable()
 if (executable === undefined) throw new Error('packaged executable not found under ' + RELEASE_DIR)
 if (!existsSync(executable)) throw new Error('packaged executable does not exist: ' + executable)
 
 const resources = packagedResourcesDir(executable)
-const launcher = join(resources, 'runtime-launcher.mjs')
-const pnpmEntry = join(resources, 'dsh-runtime', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
+const launcher = join(sourceMode ? join(APP_DIR, '.build') : resources, 'runtime-launcher.mjs')
+const gateway = join(sourceMode ? join(APP_DIR, '.build') : resources, 'dsh-cli.mjs')
+const modules = sourceMode ? join(APP_DIR, '.runtime', 'node_modules') : join(resources, 'dsh-runtime', 'node_modules')
+const pnpmEntry = join(modules, 'pnpm', 'bin', 'pnpm.mjs')
+const dshEntry = join(modules, '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 if (!existsSync(launcher)) throw new Error('packaged runtime-launcher.mjs missing: ' + launcher)
 if (!existsSync(pnpmEntry)) throw new Error('packaged pnpm.mjs missing: ' + pnpmEntry)
-const artifacts = join(resources, 'dsh-runtime', 'node_modules', 'pnpm', 'artifacts')
+const artifacts = join(modules, 'pnpm', 'artifacts')
 if (existsSync(artifacts)) throw new Error('packaged pnpm artifacts/ was not pruned: ' + artifacts)
 
-const workDir = await mkdtemp(join(tmpdir(), 'dsh-desktop-pnpm-runtime-'))
+// Canonicalize before computing local-tarball approval keys (macOS /tmp and
+// /private/tmp otherwise produce different relative paths in pnpm).
+const workDir = await realpath(await mkdtemp(join(tmpdir(), 'dsh-desktop-pnpm-runtime-')))
+const home = join(workDir, 'home')
+await mkdir(home)
+const runtimeEnv = {}
+for (const key of ['SystemRoot', 'SYSTEMROOT', 'ComSpec', 'COMSPEC', 'WINDIR', 'PATHEXT', 'LANG']) {
+  if (process.env[key] !== undefined) runtimeEnv[key] = process.env[key]
+}
+Object.assign(runtimeEnv, {
+  HOME: home,
+  USERPROFILE: home,
+  APPDATA: join(home, 'appdata'),
+  LOCALAPPDATA: join(home, 'localappdata'),
+  XDG_CONFIG_HOME: join(home, 'config'),
+  XDG_CACHE_HOME: join(home, 'cache'),
+  XDG_DATA_HOME: join(home, 'data'),
+  TMPDIR: workDir,
+  TEMP: workDir,
+  TMP: workDir,
+  PATH: process.platform === 'win32'
+    ? join(process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows', 'System32')
+    : '/usr/bin:/bin',
+  DSH_HOME: join(home, 'dsh'),
+  ELECTRON_RUN_AS_NODE: '1',
+  CI: 'true',
+})
 
-function runPnpm(args, cwd) {
+function runEntry(args, cwd, plugin = false) {
   return new Promise((resolveRun, rejectRun) => {
-    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_DESKTOP_RUNTIME_ENTRY: pnpmEntry }
-    const child = spawn(executable, [launcher, ...args], {
+    const env = {
+      ...runtimeEnv,
+      DSH_DESKTOP_RUNTIME_ENTRY: plugin ? dshEntry : pnpmEntry,
+      DSH_DESKTOP_PNPM_ENTRY: pnpmEntry,
+    }
+    const child = spawn(executable, [...plugin ? ['--expose-internals'] : [], plugin ? gateway : launcher, ...args], {
       cwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     })
     let stdout = ''
     let stderr = ''
@@ -93,6 +131,7 @@ function runPnpm(args, cwd) {
     })
   })
 }
+const runPnpm = (args, cwd) => runEntry(args, cwd)
 
 try {
   const versionRun = await runPnpm(['--version'], workDir)
@@ -145,6 +184,44 @@ try {
     throw new Error('offline pnpm add did not materialize ' + installed + '\n' + addRun.stdout + addRun.stderr)
   }
   console.log('✓ packaged pnpm add file:<fixture> --offline installed ' + FIXTURE_NAME)
+
+  // Inspect the shell environment BEFORE invoking any node shim: the shim
+  // intentionally reattaches Node mode and would conceal which parent leaked it.
+  const postinstall = process.platform === 'win32'
+    ? 'if defined ELECTRON_RUN_AS_NODE (exit /b 42) else (echo built>built.txt)'
+    : 'test -z "${ELECTRON_RUN_AS_NODE+x}" && printf built > built.txt'
+  await writeFile(join(fixtureDir, 'package.json'), JSON.stringify({
+    name: FIXTURE_NAME,
+    version: '0.0.0',
+    scripts: { postinstall },
+    dsh: { bundle: { patch: 'patch.yaml' } },
+  }))
+  await writeFile(join(fixtureDir, 'patch.yaml'), '[]\n')
+  const pack = await runPnpm(['pack', '--pack-destination', workDir], fixtureDir)
+  if (pack.code !== 0) throw new Error('fixture pack failed\n' + pack.stdout + pack.stderr)
+  const tarball = join(workDir, FIXTURE_NAME + '-0.0.0.tgz')
+  const profileDir = join(runtimeEnv.DSH_HOME, 'profiles', 'web')
+  await mkdir(profileDir, { recursive: true })
+  await writeFile(join(profileDir, 'package.json'), JSON.stringify({
+    name: 'dsh-profile-web', private: true, dependencies: {}, dsh: { profile: { bundles: [] } },
+  }))
+  const spec = 'file:' + relative(profileDir, tarball).replaceAll('\\', '/')
+  await writeFile(join(profileDir, 'pnpm-workspace.yaml'),
+    'packages:\n  - .\nnodeLinker: hoisted\nautoInstallPeers: false\nallowBuilds:\n  '
+    + JSON.stringify(FIXTURE_NAME + '@' + spec) + ': true\n')
+  const pluginRun = await runEntry([
+    'plugin', '--profile', 'web', 'add', spec, '--offline', '--store-dir', join(workDir, 'plugin-store'),
+  ], profileDir, true)
+  if (pluginRun.code !== 0) {
+    throw new Error('dsh plugin lifecycle install failed (code=' + String(pluginRun.code) + ')\n'
+      + pluginRun.stdout + pluginRun.stderr)
+  }
+  const built = await readFile(join(profileDir, 'node_modules', FIXTURE_NAME, 'built.txt'), 'utf8')
+  if (built.trim() !== 'built') throw new Error('plugin lifecycle script did not produce its marker')
+  const profile = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'))
+  if (!profile.dsh.profile.bundles.includes(FIXTURE_NAME)) throw new Error('dsh did not register the installed bundle')
+  console.log('✓ real dsh plugin add runs approved lifecycle scripts without ELECTRON_RUN_AS_NODE')
+  console.log('✓ plugin bundle registered with only OS tools on PATH')
 } finally {
   await rm(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
 }

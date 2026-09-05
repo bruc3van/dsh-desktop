@@ -2,7 +2,7 @@ import { escapeHtml } from './html.ts'
 import { releaseNotesCss, renderReleaseNotes } from '../release-notes.ts'
 import type { UpdateInfo } from '../updater.ts'
 
-export function renderUpdatePromptPageUrl(info: UpdateInfo, chinese: boolean, icon: string, copy: { found: string; later: string; ignore: string; install: string }): string {
+export function renderUpdatePromptPageUrl(info: UpdateInfo, chinese: boolean, icon: string, copy: { found: string; later: string; ignore: string; install: string }, platform: NodeJS.Platform = process.platform): string {
   // The whole page travels as a data: URL, and Chromium caps how large such a
   // URL may be: an oversized changelog must not make the prompt fail to load
   // and close silently, with the user never learning an update exists. The
@@ -11,7 +11,9 @@ export function renderUpdatePromptPageUrl(info: UpdateInfo, chinese: boolean, ic
   const notesLabel = chinese ? '本次更新' : "What's new"
   const notesEmpty = chinese ? '此版本没有提供更新说明。' : 'No release notes were provided for this version.'
   const versionLabel = chinese ? '版本' : 'Version'
-  const hint = chinese ? '下载完成后将打开安装程序。' : 'The installer will open when the download finishes.'
+  const hint = platform === 'darwin'
+    ? (chinese ? '下载验证完成后，应用将自动退出、替换并重新打开。这会中断本地正在运行的任务。' : 'After downloading and verification, the app will quit, update and reopen automatically. This interrupts running local tasks.')
+    : chinese ? '下载完成后将打开安装程序。' : 'The installer will open when the download finishes.'
   const html = '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
     + '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">'
     + '<meta name="color-scheme" content="light dark"><title>' + escapeHtml(copy.found) + '</title><style>'
