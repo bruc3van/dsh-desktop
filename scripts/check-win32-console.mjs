@@ -149,7 +149,9 @@ try {
     const target = join(workspace, mode + '.txt')
     const outside = join(home, mode + '-outside.txt')
     const prefix = [join(acl, 'lib', 'runner.js'), '--workspace', workspace, '--temp', temp, '--mode', mode, '--']
-    const command = `set /p DSH_CONSOLE_INPUT=& echo stdout-ok& echo stderr-ok 1>&2& echo !DSH_CONSOLE_INPUT!& echo write-ok>"${target}"& echo forbidden>"${outside}"& exit /b 7`
+    // run() fixes cwd to workspace. Use fixture-owned relative names so the
+    // runner's argv quoting cannot turn embedded cmd quotes into literal paths.
+    const command = `set /p DSH_CONSOLE_INPUT=& echo stdout-ok& echo stderr-ok 1>&2& echo !DSH_CONSOLE_INPUT!& echo write-ok>${mode}.txt& echo forbidden>..\\${mode}-outside.txt& exit /b 7`
     const result = await run([...prefix, process.env.ComSpec || 'cmd.exe', '/d', '/v:on', '/s', '/c', command], 'stdin-ok\r\n')
     assert.equal(result.code, 7, JSON.stringify(result))
     assert.match(result.stdout, /stdout-ok/)

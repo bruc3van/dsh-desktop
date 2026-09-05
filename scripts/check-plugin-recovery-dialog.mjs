@@ -41,7 +41,17 @@ try {
       const buttons = [...document.querySelectorAll('footer a')].map(button => button.getBoundingClientRect())
       return { sameRow: buttons.every(button => button.top === buttons[0].top && button.height === buttons[0].height), listHeight: list?.clientHeight ?? 0, width: innerWidth, overflow: document.documentElement.scrollWidth > innerWidth, scroll: list ? list.scrollHeight > list.clientHeight : false, footerVisible: footer.bottom <= innerHeight && footer.top >= 0 }
     })
-    assert.equal(layout.width, 560)
+    const windowSize = await app.evaluate(({ BrowserWindow, screen }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      return {
+        outerWidth: window.getBounds().width,
+        contentWidth: window.getContentBounds().width,
+        expectedWidth: Math.min(560, screen.getPrimaryDisplay().workAreaSize.width),
+      }
+    })
+    // BrowserWindow width includes the native frame; innerWidth does not.
+    assert.equal(windowSize.outerWidth, windowSize.expectedWidth)
+    assert.ok(Math.abs(layout.width - windowSize.contentWidth) <= 1, 'DOM width matches native content bounds within DPI rounding')
     assert.equal(layout.sameRow, true)
     if (count) assert.ok(layout.listHeight > 200)
     assert.equal(layout.overflow, false)
