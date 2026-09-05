@@ -176,6 +176,11 @@ process.exit(1)
   await failureWindow.locator('#error-settings').click()
   const settingsWindow = await app.waitForEvent('window', { timeout: 10_000 })
   await settingsWindow.waitForSelector('#data-shared')
+  // The settings DOM appears before its asynchronous data environment response.
+  await settingsWindow.waitForFunction(() => {
+    const note = document.querySelector('#data-note')?.textContent ?? ''
+    return note.includes('dsh-better-sidebar') && note.includes('@example/dsh-old-tools')
+  }, null, { timeout: 15_000 })
   const compatibilityNote = await settingsWindow.locator('#data-note').textContent()
   if (!compatibilityNote?.includes('dsh-better-sidebar') || !compatibilityNote.includes('@example/dsh-old-tools')) {
     throw new Error('recovery settings did not name every failing plugin: ' + compatibilityNote)
