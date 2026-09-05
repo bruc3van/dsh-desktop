@@ -107,13 +107,14 @@ jobs:
 
           - [ ] `dsh-runtime/package.json` 升 `@deepseek-ai/dsh`（精确版本），并确认 `@deepseek-ai/cordis-plugin-group` 是否需要同步
           - [ ] **picker 补丁对账**：`patchedDependencies` 钉在旧版本号上，上游修了就删补丁，没修就重新生成到新版本；`pnpm run check:picker` 验证
+          - [ ] **Windows 控制台补丁对账**：核对 windows-acl / subprocess-local 的两个精确版本补丁，升级后运行 `pnpm run check:win32-console`，并在 Windows 桌面验收 pwsh 连续执行与取消
           - [ ] **平台二进制对齐**：按新 lockfile 核对 `optionalDependencies` 里 sharp / koffi / ripgrep / node-addon-require-builtin 的版本
           - [ ] **逐条审查 lockfile 里 `@deepseek-ai/*` 域的全部变更**（`minimumReleaseAgeExclude` 豁免了发布冷却期，这一步没有自动化兜底）
           - [ ] 新依赖如带 lifecycle script，更新 `allowBuilds` 名单
           - [ ] 隐式契约：`dsh web: <url>` 就绪行、`POST /api/host.describe` 响应形状、`lib/bin.js` 入口路径、`--expose-internals` 是否仍需要
           - [ ] 隐式契约：`dsh` 子命令语法（`web` 别名、`plugin` 子命令、`--dump-config` 位置）是否仍与 `dsh-cli-policy.ts` 的分类一致
           - [ ] 隐式契约：pnpm 的 `engines.node` 是否仍被 Electron 的 Node 满足（`pnpm run check:pnpm-engine` 是红色构建兜底）
-          - [ ] 全量门禁：`build → prepare:runtime → check:picker → check:runtime-env → check:runtime-spawn → check:dsh-cli → check:smart-runtimes → check:local-web-port → check:runtime-resolution → check:bundled-plugin → check:runtime-lock → check:restart → check:pnpm-engine → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit`
+          - [ ] 全量门禁：`build → prepare:runtime → check:picker → check:win32-console → check:plugin-recovery → check:runtime-env → check:runtime-spawn → check:dsh-cli → check:smart-runtimes → check:local-web-port → check:runtime-resolution → check:bundled-plugin → check:runtime-lock → check:restart → check:pnpm-engine → check:installed-runtime → check:auto-fallback → smoke:package → e2e → audit`
 
           — 本 issue 由 `.github/workflows/runtime-upstream.yml` 每日定时检查自动创建。
           EOF

@@ -41,6 +41,7 @@ import {
 import { abandonBundledPlugin, BUNDLED_PLUGIN_NAME, seatBundledPlugin, WEB_PROFILE, withdrawBundledPlugin } from './bundled-plugin.ts'
 import { PNPM_ENTRY_VARIABLE } from './runtime-spawn.ts'
 import { releaseNotesCss, renderReleaseNotes } from './release-notes.ts'
+import { showPluginRecoveryDialog } from './plugin-recovery-dialog.ts'
 import { clearRuntimeLock, isProcessAlive, originOf, readRuntimeLock, recordRuntimeLockUrl, restartDisposition, runtimeLockFile, writeRuntimeLock, type PidVerdict, type RuntimeLock } from './runtime-lock.ts'
 import { webProbeOrigins } from './web-discovery.ts'
 import {
@@ -2853,7 +2854,7 @@ function openSettingsWindow(): void {
     return
   }
   settingsWindow = new BrowserWindow({
-    width: 480,
+    width: 640,
     height: 720,
     title: localeChinese() ? 'DSH Desktop 设置' : 'DSH Desktop settings',
     // Without this the window keeps Electron's own default icon in its title
@@ -3212,9 +3213,6 @@ function schedulePluginCompatibilityFallback(code: number | null, signal: NodeJS
     const chinese = localeChinese()
     const canRemove = command !== undefined && plugins.length > 0
     const listedPlugins = canRemove ? plugins : candidates
-    const pluginList = listedPlugins.length === 0
-      ? (chinese ? '启动诊断未能安全确认可卸载的插件包。' : 'The startup diagnostic did not safely identify a removable plugin package.')
-      : listedPlugins.map(name => '• ' + name).join('\n')
     const buttons = canRemove
       ? (chinese ? ['卸载全部并重试', '使用独立环境', '取消'] : ['Remove all and retry', 'Use isolated environment', 'Cancel'])
       : (chinese ? ['使用独立环境', '取消'] : ['Use isolated environment', 'Cancel'])
@@ -3237,19 +3235,18 @@ function schedulePluginCompatibilityFallback(code: number | null, signal: NodeJS
           : (chinese
               ? '原来的对话、凭据和模型配置没有丢失。启动诊断无法安全确认可卸载的直接依赖；你仍可保留现有数据并使用桌面端独立环境。\n\n'
               : 'Your conversations, credentials, and model configuration are still intact. The startup diagnostic did not safely identify a removable direct dependency; you can still keep the existing data and use the isolated desktop environment.\n\n'))
-          + pluginList,
+          + (listedPlugins.length === 0
+            ? (chinese ? '启动诊断未能安全确认可卸载的插件包。' : 'The startup diagnostic did not safely identify a removable plugin package.')
+            : ''),
         buttons,
-        // Starting recovery must never make destructive removal the action
-        // triggered by a habitual Enter keypress.
+        // Keep habitual Enter presses from removing plugins.
         defaultId: isolatedIndex,
         cancelId: cancelIndex,
         noLink: true,
       }
-      const owner = mainWindow
-      const answer = owner === null || owner.isDestroyed()
-        ? await dialog.showMessageBox(options)
-        : await dialog.showMessageBox(owner, options)
-      response = answer.response
+      response = await showPluginRecoveryDialog(mainWindow, options, listedPlugins, chinese, {
+        icon: WINDOW_ICON_PNG, backgroundColor: windowBackgroundColor(),
+      })
     }
     if (response === cancelIndex) {
       compatibilityFallbackScheduled = false
@@ -4558,7 +4555,7 @@ function settingsPageHtml(): string {
     + '<style>:root{color-scheme:light dark}'
     + '*{box-sizing:border-box;margin:0;padding:0}'
     + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;font-size:14px;line-height:1.6;background:#fff;color:#0f1115;min-height:100vh;display:flex;justify-content:center;padding:48px 24px 40px}'
-    + '.container{width:100%;max-width:400px}'
+    + '.container{width:100%;max-width:560px}'
     // Header: centered logo + title, matching loading page
     + '.header{text-align:center;margin-bottom:36px}'
     + '.mark{width:56px;height:56px;border-radius:14px;box-shadow:0 12px 32px rgba(15,17,21,.14)}'
@@ -4569,7 +4566,7 @@ function settingsPageHtml(): string {
     + '.section-title .actions{margin-left:auto;margin-top:0}'
     + '.badge{font-size:11px;font-weight:400;background:#EBEEF2;border-radius:999px;padding:2px 8px;color:#6e7480}'
     // Text hierarchy
-    + '.status-text{margin:0 0 12px;font-size:13px;color:#6e7480}'
+    + '.status-text{margin:0 0 12px;font-size:13px;color:#6e7480;overflow-wrap:anywhere}'
     + '.version-text{margin:0 0 4px;font-size:12px;color:#9aa0a6}'
     // Input
     + 'input{width:100%;background:#fff;border:1px solid #d8d8d4;border-radius:8px;padding:7px 11px;font-size:13px;font-family:inherit;color:#0f1115;outline:none;transition:border-color .15s ease}'
@@ -4592,7 +4589,7 @@ function settingsPageHtml(): string {
     + '.icon-link:hover{background:#f5f6f7;color:#0f1115}'
     + '[hidden]{display:none}'
     + '.note{margin:8px 0 0;font-size:13px;color:#6e7480}'
-    + '.data-mode-picks button{min-height:44px}.path-text{overflow-wrap:anywhere;word-break:break-word}'
+    + '.path-text{overflow-wrap:anywhere;word-break:break-word}'
     // Divider
     + '.divider{border:none;border-top:1px solid #ebeef2;margin:28px 0}'
     // Download progress

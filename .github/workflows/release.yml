@@ -269,6 +269,9 @@ jobs:
           # the matrix entry's own target (see scripts/prepare-runtime.mjs).
           DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
+      - name: 验证 Windows 命令控制台补丁 / Verify Windows command console patch
+        run: pnpm run check:win32-console
+
       - name: 验证 Windows 目录选择器兼容补丁 / Verify Win32 picker compatibility patch
         run: pnpm run check:picker
 
@@ -316,6 +319,9 @@ jobs:
 
       - name: 验证插件故障隔离恢复 / Verify plugin-failure isolation recovery
         run: pnpm run check:plugin-isolation
+
+      - name: 验证插件恢复对话框 / Verify plugin recovery dialog
+        run: pnpm run check:plugin-recovery
 
       - name: 验证安装包内置运行时 / Smoke packaged runtime
         run: ${{ matrix.smoke }}

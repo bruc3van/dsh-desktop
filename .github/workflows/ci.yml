@@ -146,6 +146,9 @@ jobs:
         env:
           DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
+      - name: 验证 Windows 命令控制台补丁 / Verify Windows command console patch
+        run: pnpm run check:win32-console
+
       # contracts 腿也跑这个脚本，但那里没有闭包：它只验 launcher 自身的打补丁
       # 契约，闭包 execPath 扫描那一段会静默跳过。于是「上游 dsh 新增了未经审计的
       # process.execPath 调用」在 PR 上无人拦截，一路绿到 release build 才红。
@@ -186,6 +189,9 @@ jobs:
       - name: 验证插件故障隔离恢复 / Verify plugin-failure isolation recovery
         if: ${{ !cancelled() }}
         run: pnpm run check:plugin-isolation
+
+      - name: 验证插件恢复对话框 / Verify plugin recovery dialog
+        run: pnpm run check:plugin-recovery
 
   # 唯一一个真正打包的作业。Windows 侧早有等价门禁——release.yml 会静默装一遍
   # NSIS 包、再对装出来的 exe 跑冒烟；macOS 侧此前什么都没有：smoke:package 跑的

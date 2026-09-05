@@ -1,0 +1,81 @@
+diff --git a/lib/runner.js b/lib/runner.js
+index 452b73c27b4b2aab79e0f9106eb5f7827f2e5ff4..24bc54ba2a04d267b56557cde3b8f12aee985517 100644
+--- a/lib/runner.js
++++ b/lib/runner.js
+@@ -1,6 +1,7 @@
+ import { a as assertTempRootOutsideWorkspace, n as tempWriteSid, o as win32, r as workspaceWriteSid, t as AclSandbox } from "./types-DuU3lSVe.js";
+ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+ import { join } from "node:path";
++import { prepareRunnerConsole } from "./types-desktop-console.js";
+ //#region lib/types/runner.js
+ /**
+ * The windows-acl confinement runner: the argv-prefix wrapper the sandbox
+@@ -118,7 +119,7 @@ async function main() {
+ 	if (parsed.mode === "workspace-write" && parsed.writeSid === void 0 !== (parsed.tempWriteSid === void 0)) fail("workspace-write requires --write-sid and --temp-write-sid together");
+ 	if (parsed.mode === "workspace-write") assertTempRootOutsideWorkspace(parsed.workspace, parsed.temp);
+ 	const api = await win32();
+-	if (api.setConsoleCtrlHandler(null, 1) === 0) fail(`SetConsoleCtrlHandler failed (Win32 ${api.getLastError()})`);
++	prepareRunnerConsole(api);
+ 	let ownedTempDir;
+ 	let sandbox;
+ 	let initialized = false;
+diff --git a/lib/types-DuU3lSVe.js b/lib/types-DuU3lSVe.js
+index c29a2417823d584892df568f64cc898ae79820c2..6ca6ce93746329b5b36c93b8ed1eaf4d5df79256 100644
+--- a/lib/types-DuU3lSVe.js
++++ b/lib/types-DuU3lSVe.js
+@@ -120,6 +120,7 @@ function sameSidAt(left, leftOffset, right, rightOffset) {
+ let cached;
+ function bindings() {
+ 	if (cached !== void 0) return cached;
++	const user32 = koffi.load("user32.dll");
+ 	cached = extendWin32ProcessBindings(({ kernel32, advapi32, bind }) => ({
+ 		openProcess: bind(kernel32, "OpenProcess", PVOID, [
+ 			"uint32",
+@@ -199,6 +200,10 @@ function bindings() {
+ 		getTempPathW: bind(kernel32, "GetTempPathW", "uint32", ["uint32", PVOID]),
+ 		setEnvironmentVariableW: bind(kernel32, "SetEnvironmentVariableW", "int", ["str16", "str16"]),
+ 		setConsoleCtrlHandler: bind(kernel32, "SetConsoleCtrlHandler", "int", [PVOID, "int"]),
++		allocConsole: bind(kernel32, "AllocConsole", "int", []),
++		getConsoleWindow: bind(kernel32, "GetConsoleWindow", PVOID, []),
++		showWindow: bind(user32, "ShowWindow", "int", [PVOID, "int"]),
++		setStdHandle: bind(kernel32, "SetStdHandle", "int", ["int", PVOID]),
+ 		createFileW: bind(kernel32, "CreateFileW", PVOID, [
+ 			"str16",
+ 			"uint32",
+diff --git a/lib/types-desktop-console.js b/lib/types-desktop-console.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..f263e34b97b8cc0bfcafaf678f33ccf9209c516c
+--- /dev/null
++++ b/lib/types-desktop-console.js
+@@ -0,0 +1,31 @@
++// Desktop compatibility patch for bruc3van/dsh-desktop#16.
++// Keep a real console for restricted-token children: CREATE_NO_WINDOW is
++// incompatible with this sandbox. Never hide a console inherited from a CLI.
++const isNull = (pointer) => pointer === null || pointer === 0 || pointer === 0n;
++
++export function prepareRunnerConsole(api) {
++	if (isNull(api.getConsoleWindow())) {
++		// AllocConsole can replace the Win32 standard handles. The native spawn
++		// reads these handles, so preserve the runner's original stdio pipes.
++		const handles = [-10, -11, -12].map((selector) => [selector, api.getStdHandle(selector)]);
++		if (api.allocConsole() !== 0) {
++			try {
++				const window = api.getConsoleWindow();
++				if (!isNull(window)) api.showWindow(window, 0 /* SW_HIDE */);
++			} finally {
++				let restoreError;
++				for (const [selector, handle] of handles) {
++					if (api.setStdHandle(selector, handle) === 0) {
++						restoreError ??= new Error(`SetStdHandle failed (Win32 ${api.getLastError()})`);
++					}
++				}
++				if (restoreError) throw restoreError;
++			}
++		}
++	}
++	// Console allocation resets control handlers. Set this after allocation,
++	// including its best-effort failure path, before spawning any child.
++	if (api.setConsoleCtrlHandler(null, 1) === 0) {
++		throw new Error(`SetConsoleCtrlHandler failed (Win32 ${api.getLastError()})`);
++	}
++}

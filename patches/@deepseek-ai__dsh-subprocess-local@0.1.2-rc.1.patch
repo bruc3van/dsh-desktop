@@ -1,0 +1,14 @@
+diff --git a/lib/index.js b/lib/index.js
+index 04aea6abe4215e894c6c2df717d6c190ff6882aa..dc961586c89e9ec897ae2d0af06a80062a8d6040 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -853,7 +853,8 @@ function spawnSubprocess(spec, internals = {}) {
+ 			outMode === "inherit" ? "inherit" : "pipe",
+ 			errMode === "inherit" ? "inherit" : "pipe"
+ 		],
+-		detached: platform !== "win32"
++		detached: platform !== "win32",
++		windowsHide: platform === "win32"
+ 	});
+ 	const collectStream = (mode, stream, label) => {
+ 		if (!isCollect(mode) || stream === null) return void 0;

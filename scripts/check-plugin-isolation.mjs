@@ -65,7 +65,7 @@ try {
   }
 
   const mainSource = readFileSync(join(APP_DIR, 'src', 'main', 'index.ts'), 'utf8')
-  if (!mainSource.includes('defaultId: isolatedIndex')) {
+  if (!mainSource.slice(mainSource.indexOf('function schedulePluginCompatibilityFallback'), mainSource.indexOf('function schedulePluginCompatibilityFallback') + 6000).includes('defaultId: isolatedIndex')) {
     throw new Error('destructive plugin removal is still the recovery dialog default')
   }
   console.log('✓ plugin removal is not the recovery dialog default')

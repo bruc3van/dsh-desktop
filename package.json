@@ -28,6 +28,7 @@
     "check:smart-runtimes": "node scripts/check-smart-runtimes.mjs",
     "check:local-web-port": "node scripts/check-local-web-port.mjs",
     "check:data-home": "node scripts/check-data-home.mjs",
+    "check:plugin-recovery": "node scripts/check-plugin-recovery-dialog.mjs",
     "check:plugin-isolation": "node scripts/check-plugin-isolation.mjs",
     "check:dsh-browser-session": "node scripts/check-dsh-browser-session.mjs",
     "check:auth-occupancy": "node scripts/check-auth-occupancy.mjs",
@@ -39,8 +40,8 @@
     "check:pnpm-engine": "node scripts/check-pnpm-engine.mjs",
     "check:pnpm-runtime": "node scripts/check-pnpm-runtime.mjs",
     "check:nsis-details": "node scripts/patch-nsis-install-details.mjs",
-    "pack": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:local-web-port && npm run check:data-home && npm run check:plugin-isolation && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:bundled-plugin && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --dir && npm run check:pnpm-runtime",
-    "dist": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:local-web-port && npm run check:data-home && npm run check:plugin-isolation && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:bundled-plugin && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --publish never && npm run check:pnpm-runtime",
+    "pack": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:win32-console && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:local-web-port && npm run check:data-home && npm run check:plugin-isolation && npm run check:plugin-recovery && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:bundled-plugin && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --dir && npm run check:pnpm-runtime",
+    "dist": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:win32-console && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:local-web-port && npm run check:data-home && npm run check:plugin-isolation && npm run check:plugin-recovery && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:bundled-plugin && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --publish never && npm run check:pnpm-runtime",
     "dev": "npm run build && electron .",
     "start": "electron .",
     "shot": "node scripts/shot.mjs",
@@ -57,7 +58,8 @@
     "smoke:dmg": "node scripts/smoke-dmg.mjs",
     "e2e": "node scripts/e2e.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "oxlint -c .oxlintrc.json src scripts"
+    "lint": "oxlint -c .oxlintrc.json src scripts",
+    "check:win32-console": "node scripts/check-win32-console.mjs"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
