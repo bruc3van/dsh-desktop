@@ -230,6 +230,63 @@ try {
     assert.equal(state.launches.length, 1)
   }
   console.log('✓ a failed stop keeps the managed target instead of adopting a probed successor')
+
+  for (const reuse of [true, false]) {
+    const { controller, state } = make(({ options, state }) => {
+      state.shared = true
+      state.settings.smartRuntimes = reuse ? ['probe', 'bundled'] : ['bundled']
+      options.probe.probeSmartTargets = async () => ({ kind: 'uncertain', url: 'http://127.0.0.1:45683' })
+    })
+    controller.applyConnectionSettings(state.settings)
+    await until(() => state.errors.length === 1)
+    assert.equal(state.ports.length, 0)
+    assert.equal(state.launches.length, 0)
+    assert.equal(state.readyCalls, 0)
+    assert.match(state.errors[0].headline, /uncertain/)
+    await controller.readyForConnection(controller.generation)
+    assert.equal(state.readyCalls, 0, 'readiness must also block a late spawn')
+  }
+  console.log('✓ uncertain occupancy blocks reuse-disabled startup, reuse-enabled startup and readiness')
+
+  for (const result of ['uncertain', 'authentication-required', 'verified', 'unavailable']) {
+    const oldOrigin = 'http://127.0.0.1:45684'
+    const { controller, state } = make(({ options, state }) => {
+      state.shared = true
+      options.probe.probeSmartTargets = async () => ({ kind: 'verified', url: oldOrigin })
+      options.probe.inspectWebUi = async url => {
+        assert.equal(url, oldOrigin)
+        return result === 'unavailable' ? { kind: result } : { kind: result, url }
+      }
+    })
+    controller.applyConnectionSettings(state.settings)
+    await until(() => controller.probeConnected)
+    assert.equal(controller.fallbackFromProbedInstance('fixture'), true)
+    await until(() => state.errors.length > 0 || state.launches.length === 2)
+    assert.equal(state.ports.length, result === 'unavailable' ? 1 : 0)
+    assert.equal(controller.probeConnected, result === 'verified')
+    if (result === 'uncertain' || result === 'authentication-required') assert.equal(state.launches.length, 1)
+  }
+  console.log('✓ adopted fallback rechecks its original port and only selects a local bind once it is gone')
+
+  {
+    const inspected = deferred()
+    const { controller, state } = make(({ options, state }) => {
+      state.shared = true
+      options.probe.probeSmartTargets = async () => ({ kind: 'verified', url: 'http://127.0.0.1:45685' })
+      options.probe.inspectWebUi = () => inspected.promise
+    })
+    controller.applyConnectionSettings(state.settings)
+    await until(() => controller.probeConnected)
+    controller.fallbackFromProbedInstance('fixture')
+    await new Promise(resolve => setImmediate(resolve))
+    controller.applyConnectionSettings({ connectionMode: 'connect', serverUrl: 'https://example.invalid' })
+    await until(() => controller.currentTarget() === 'https://example.invalid')
+    inspected.resolve({ kind: 'uncertain', url: 'http://127.0.0.1:45685' })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(state.errors.length, 0)
+    assert.equal(controller.currentTarget(), 'https://example.invalid')
+  }
+  console.log('✓ an old occupancy recheck cannot overwrite a newer connection choice')
 } finally {
   for (const controller of controllers) controller.dispose()
   rmSync(home, { recursive: true, force: true })

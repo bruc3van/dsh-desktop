@@ -3,6 +3,16 @@ import { createHash } from 'node:crypto'
 import { appOrigin } from './connection-policy.ts'
 import { createDshBrowserSessionCookie, type DshBrowserSessionCookie } from './dsh-browser-session.ts'
 
+/** WebSocket handshakes use the authentication origin of their HTTP transport. */
+function requestOrigin(value: string): string {
+  try {
+    const url = new URL(value)
+    if (url.protocol === 'ws:') url.protocol = 'http:'
+    else if (url.protocol === 'wss:') url.protocol = 'https:'
+    return url.origin
+  } catch { return '' }
+}
+
 export function scopedDshCookieHeader(existing: string, native?: string, allowedName?: string): string {
   const cookies = existing.split(';').map(value => value.trim())
     .filter(value => value !== '' && (!/^dsh-auth-/i.test(value) || (native === undefined && allowedName !== undefined && value.startsWith(allowedName + '='))))
@@ -33,7 +43,7 @@ export function createBrowserAdmission(options: {
 
   function headers(url: string, contentsId: number | undefined, incoming: Record<string, string>): Record<string, string> {
     const result = { ...incoming }
-    const origin = appOrigin(url)
+    const origin = requestOrigin(url)
     let native: string | undefined
     if (admitted?.origin === origin && origin === appOrigin(options.target() ?? '')
       && contentsId !== undefined && contentsId === options.mainContentsId()) {

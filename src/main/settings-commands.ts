@@ -97,6 +97,18 @@ export function createSettingsCommands(options: Options) {
         }
       }
     }
+    // Re-read after occupancy awaits: a data-mode save may have scheduled an
+    // isolated restart while this source change was in flight.
+    if ((options.getActiveDshDataMode() === 'isolated' || selectedDshDataMode(loadSettings()) === 'isolated')
+      && !hasIsolatedRuntimeSource(ids)) {
+      return {
+        saved: false,
+        smartRuntimes: previous,
+        error: localeChinese()
+          ? '独立环境无法复用本机已运行实例；请至少保留本机已安装、npx 缓存或客户端内置运行时'
+          : 'The isolated environment cannot reuse an already-running instance; keep installed, npx cache, or bundled enabled',
+      }
+    }
     options.resetRuntimeFailure()
     patchSettings({ smartRuntimes: ids })
     if (usesConfiguredServer(loadSettings())) return { saved: true, smartRuntimes: ids }

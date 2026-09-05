@@ -21,6 +21,7 @@ try {
   const main = join(work, 'main.cjs')
   writeFileSync(main, `const { app, BrowserWindow, session } = require('electron');
 const { createServer } = require('node:http');
+const { createHash } = require('node:crypto');
 const { createBrowserAdmission } = require(${JSON.stringify(bundle)});
 app.setPath('userData', ${JSON.stringify(join(work, 'chromium'))});
 app.whenReady().then(async () => {
@@ -29,6 +30,18 @@ app.whenReady().then(async () => {
     received.push({ index, hasDshCookie: /dsh-auth-/.test(req.headers.cookie || '') });
     res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>admission fixture</title>');
   }));
+  for (const [index, server] of servers.entries()) server.on('upgrade', (req, socket) => {
+    const hasDshCookie = /dsh-auth-/.test(req.headers.cookie || '');
+    received.push({ index, hasDshCookie, websocket: true });
+    if (!hasDshCookie) { socket.end('HTTP/1.1 401 Unauthorized\\r\\nContent-Length: 0\\r\\n\\r\\n'); return; }
+    const accept = createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+    socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: ' + accept + '\\r\\n\\r\\n');
+    socket.on('data', () => socket.end(Buffer.from([0x88, 0])));
+    socket.on('error', () => {});
+  });
+  async function openSocket(contents, origin) {
+    return contents.executeJavaScript('new Promise(resolve => { const socket = new WebSocket(' + JSON.stringify(origin.replace('http:', 'ws:') + '/socket') + '); socket.onopen = () => { socket.close(); resolve(true) }; socket.onerror = () => resolve(false); })');
+  }
   for (const server of servers) await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origins = servers.map(server => 'http://127.0.0.1:' + server.address().port);
   let target = origins[0];
@@ -42,6 +55,12 @@ app.whenReady().then(async () => {
   // This deliberately host-scoped synthetic cookie must never leak to port 1.
   await session.defaultSession.cookies.set({ url: target, name: 'dsh-auth-old-fixture', value: 'synthetic', httpOnly: true, sameSite: 'strict', path: '/' });
   await window.loadURL(target);
+  const selectedSocketAuthenticated = await openSocket(window.webContents, origins[0]);
+  const otherSocketDenied = !await openSocket(window.webContents, origins[1]);
+  const otherWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  await otherWindow.loadURL(target);
+  const otherWindowSocketDenied = !await openSocket(otherWindow.webContents, origins[0]);
+  otherWindow.destroy();
   await window.webContents.executeJavaScript('fetch(' + JSON.stringify(origins[1]) + ', {mode:"no-cors",credentials:"include"}).then(()=>true)');
   const first = received.filter(request => request.index === 0);
   const other = received.filter(request => request.index === 1);
@@ -50,9 +69,12 @@ app.whenReady().then(async () => {
   await admission.select(target);
   const before = received.length;
   await window.loadURL(target);
+  const switchedSocketAuthenticated = await openSocket(window.webContents, origins[1]);
+  const previousSocketDenied = !await openSocket(window.webContents, origins[0]);
   await window.webContents.executeJavaScript('fetch(' + JSON.stringify(origins[0]) + ', {mode:"no-cors",credentials:"include"}).then(()=>true)');
   const after = received.slice(before);
   globalThis.admissionResult = { selectedAuthenticated: first.some(request => request.hasDshCookie),
+    selectedSocketAuthenticated, otherSocketDenied, otherWindowSocketDenied, switchedSocketAuthenticated, previousSocketDenied,
     otherPortClean: other.length > 0 && other.every(request => !request.hasDshCookie),
     nativeNotStored: onlyOldStored,
     switchedAuthenticated: after.some(request => request.index === 1 && request.hasDshCookie),
@@ -71,7 +93,7 @@ app.whenReady().then(async () => {
   }
   assert.ok(result, 'Electron admission fixture timed out')
   for (const [name, passed] of Object.entries(result)) assert.equal(passed, true, name)
-  console.log('✓ Chromium authenticates selected origin, strips cross-port cookies, clears old-target admission and never stores the native credential')
+  console.log('✓ Chromium HTTP and WebSocket admission authenticates only the selected window/origin, denies other ports/windows and never stores the native credential')
 } finally {
   await app?.close().catch(() => {})
   rmSync(work, { recursive: true, force: true })

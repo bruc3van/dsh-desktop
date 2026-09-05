@@ -6,12 +6,13 @@ import { WEB_PROFILE } from './bundled-plugin.ts'
 import { webProbeOrigins } from './web-discovery.ts'
 import { createDshBrowserSessionCookie } from './dsh-browser-session.ts'
 import { selectAutomaticLocalWebPort } from './local-web-port.ts'
-import { loopbackPortAvailable } from './loopback-port.ts'
+import { loopbackPortAvailable, loopbackPortHeld } from './loopback-port.ts'
 import { originIsLoopback } from './connection-policy.ts'
 import { devOverride } from './development-options.ts'
 export type WebUiProbeResult =
   | { kind: 'verified'; url: string }
   | { kind: 'authentication-required'; url: string }
+  | { kind: 'uncertain'; url: string }
   | { kind: 'unavailable' }
 
 export function createWebUiProbe(options: { childHome(): string; configuredLocalWebPort(): number }) {
@@ -61,12 +62,14 @@ export function createWebUiProbe(options: { childHome(): string; configuredLocal
     // list is bounded by MAX_CONFIGURED_PORTS, and a non-listening loopback
     // port refuses instantly rather than spending the probe timeout.
     await new Promise(resolve => setTimeout(resolve, 300))
+    let uncertain: WebUiProbeResult | undefined
     for (const url of urls) {
       const result = await inspectWebUi(url, 1_000)
       if (result.kind === 'verified') return result
       if (result.kind === 'authentication-required') authenticationRequired ??= result
+      if (result.kind === 'uncertain') uncertain ??= result
     }
-    return authenticationRequired ?? { kind: 'unavailable' }
+    return authenticationRequired ?? uncertain ?? { kind: 'unavailable' }
   }
 
   /**
@@ -102,6 +105,7 @@ export function createWebUiProbe(options: { childHome(): string; configuredLocal
    * rejected, and an unavailable or unrelated service.
    */
   async function inspectWebUi(base: string, timeoutMs = 1_500): Promise<WebUiProbeResult> {
+    let authenticationRequired = false
     try {
       const origin = new URL(base).origin
       const nativeCookie = originIsLoopback(origin)
@@ -117,6 +121,7 @@ export function createWebUiProbe(options: { childHome(): string; configuredLocal
         body: JSON.stringify({ type: 'client-request', rpcId: 'desktop-probe', method: 'host.describe', payload: {} }),
         signal: AbortSignal.timeout(timeoutMs),
       })
+      authenticationRequired = legacyResponse.status === 401
       if (legacyResponse.ok) {
         const body = await legacyResponse.json() as {
           result?: { ok?: boolean; value?: { version?: unknown; cwd?: unknown } }
@@ -163,6 +168,16 @@ export function createWebUiProbe(options: { childHome(): string; configuredLocal
       }
       return { kind: 'verified', url: origin }
     } catch {
+      // A timeout or broken response does not prove the writer stopped. Only
+      // loopback is eligible for native spawn, and the TCP check uses the same
+      // host/port as the failed HTTP request (including explicit IPv6 origins).
+      try {
+        const url = new URL(base)
+        if (authenticationRequired) return { kind: 'authentication-required', url: url.origin }
+        if (originIsLoopback(url.origin) && await loopbackPortHeld(
+          Number(url.port || (url.protocol === 'https:' ? 443 : 80)), url.hostname.replace(/^\[|\]$/g, ''),
+        )) return { kind: 'uncertain', url: url.origin }
+      } catch { /* an invalid origin is unavailable */ }
       return { kind: 'unavailable' }
     }
   }

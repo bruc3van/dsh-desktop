@@ -8,6 +8,7 @@ import { readProcessIdentity } from './runtime-process.ts'
 import { NoEnabledSmartRuntimeError, type DshCommand } from './runtime-types.ts'
 
 const SPAWN_NO_WINDOW = { windowsHide: true } as const
+const STARTUP_TIMEOUT_MS = 60_000
 export interface RuntimeExit {
   wasReady: boolean
   code: number | null
@@ -21,6 +22,8 @@ export interface WebUiManagerOptions {
   waitForReady(url: string): Promise<void>
   onLog(line: string): void
   onExit(info: RuntimeExit): void
+  /** Injectable for isolated lifecycle tests; production allows cold startup. */
+  startupTimeoutMs?: number
 }
 
 /** One `dsh web` child generation: process + its own lifecycle listeners. */
@@ -36,6 +39,7 @@ interface WebUiGeneration {
    */
   stopped: boolean
   stopUnconfirmed?: boolean
+  startupTimer?: ReturnType<typeof setTimeout>
 }
 
 /**
@@ -180,6 +184,7 @@ export class WebUiManager {
     const failClosed = (error: unknown, fatal = true): void => {
       if (failureReported || exitReported) return
       failureReported = true
+      clearTimeout(gen.startupTimer)
       const failure = error instanceof Error ? error : new Error(String(error))
       if (fatal) this.fatalError = failure
       this.lastError = failure.message
@@ -191,11 +196,17 @@ export class WebUiManager {
         this.options.onExit({ wasReady: false, code: null, signal: null, retryable: this.fatalError === undefined })
       })
     }
+    gen.startupTimer = setTimeout(() => {
+      if (this.generation !== gen || gen.stopped || gen.readyReported) return
+      failClosed(new Error('dsh web startup timed out before readiness'), false)
+    }, this.options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS)
+    gen.startupTimer.unref()
     void lockReady.catch(failClosed)
 
     const reportExit = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (exitReported) return
       exitReported = true
+      clearTimeout(gen.startupTimer)
       const current = this.generation === gen
       if (current && !gen.stopUnconfirmed) {
         this.generation = undefined
@@ -229,9 +240,9 @@ export class WebUiManager {
       if (url !== undefined && !readinessProbeStarted) {
         readinessProbeStarted = true
         void lockReady.then(() => {
-          if (!exitReported && !gen.stopped) return this.options.waitForReady(url)
+          if (!exitReported && !gen.stopped && !failureReported) return this.options.waitForReady(url)
         }).then(() => {
-          if (exitReported || gen.stopped) return
+          if (exitReported || gen.stopped || failureReported) return
           try {
             if (readRuntimeLock(this.options.home())?.childPid !== child.pid) throw new Error('Runtime ownership record was lost before readiness')
             recordRuntimeLockUrl(this.options.home(), url, child.pid)
@@ -240,6 +251,7 @@ export class WebUiManager {
             return
           }
           gen.readyReported = true
+          clearTimeout(gen.startupTimer)
           this.lastError = null
           resolveReady(url)
         }).catch((error: unknown) => { failClosed(error, false) })
@@ -302,6 +314,7 @@ export class WebUiManager {
     // on their 3s timeout with the child still alive, and the exit that finally
     // arrives has to find this already set.
     gen.stopped = true
+    clearTimeout(gen.startupTimer)
     const stopping = (async (): Promise<void> => {
       const pid = gen.child.pid
       if (pid === undefined) return

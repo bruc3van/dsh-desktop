@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
 import { runInNewContext } from 'node:vm'
 import { buildSync } from 'esbuild'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +26,65 @@ function load(file, mocks = {}, globals = {}) {
 }
 const turn = () => new Promise(resolve => setImmediate(resolve))
 try {
+  const { createSettingsCommands } = load('settings-commands', { electron: { app: { isPackaged: true } } })
+  for (const [active, selected] of [['isolated', 'shared'], ['shared', 'isolated'], ['isolated', 'isolated'], ['shared', 'shared']]) {
+    let settings = { connectionMode: 'smart', smartRuntimes: ['probe', 'bundled'] }
+    let applied = 0
+    const commands = createSettingsCommands({
+      enabledSmartRuntimes: () => settings.smartRuntimes, loadSettings: () => settings,
+      getActiveDshDataMode: () => active, selectedDshDataMode: () => selected,
+      refuseOccupiedLocalSpawn: async () => undefined, localeChinese: () => false,
+      patchSettings: patch => { settings = { ...settings, ...patch } },
+      applySmartLocalRuntimeChange: () => applied++, resetRuntimeFailure() {},
+    })
+    const allowed = active === 'shared' && selected === 'shared'
+    assert.equal((await commands.requestSmartRuntimesSave(['probe'])).saved, allowed)
+    assert.equal(applied, allowed ? 1 : 0)
+    assert.equal(settings.smartRuntimes.includes('bundled'), !allowed)
+    assert.equal((await commands.requestSmartRuntimesSave(['bundled'])).saved, true)
+  }
+  let selectedMode = 'shared', resumeSave
+  const commands = createSettingsCommands({
+    enabledSmartRuntimes: () => ['probe', 'bundled'], loadSettings: () => ({ connectionMode: 'smart' }),
+    getActiveDshDataMode: () => 'shared', selectedDshDataMode: () => selectedMode,
+    refuseOccupiedLocalSpawn: () => new Promise(resolve => { resumeSave = resolve }),
+    localeChinese: () => false, patchSettings: () => assert.fail('must not persist a raced probe-only save'),
+  })
+  const racedSave = commands.requestSmartRuntimesSave(['probe'])
+  await turn(); selectedMode = 'isolated'; resumeSave(undefined)
+  assert.equal((await racedSave).saved, false)
+  console.log('✓ isolated source saves preserve a runnable source, including data-mode changes during occupancy checks')
+
+  const { createWebUiProbe } = load('web-ui-probe', { electron: { app: { isReady: () => false, isPackaged: true }, net: {} } })
+  let responseMode = 'silent'
+  const server = createServer((req, res) => {
+    if (responseMode === 'silent') return
+    if (responseMode === 'auth-silent' && req.url !== '/api/host.describe') return
+    if (responseMode === 'auth-silent') { res.writeHead(401); res.end(); return }
+    if (responseMode === 'unrelated') { res.writeHead(404); res.end(); return }
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ result: { ok: true, value: { version: 'fixture', cwd: work } } }))
+  })
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+    const origin = 'http://127.0.0.1:' + server.address().port
+    const probe = createWebUiProbe({ childHome: () => join(work, 'probe'), configuredLocalWebPort: () => 0 })
+    assert.equal((await probe.inspectWebUi(origin, 100)).kind, 'uncertain')
+    responseMode = 'auth-silent'
+    assert.equal((await probe.inspectWebUi(origin, 100)).kind, 'authentication-required')
+    responseMode = 'unrelated'
+    assert.equal((await probe.inspectWebUi(origin, 100)).kind, 'unavailable')
+    responseMode = 'verified'
+    assert.equal((await probe.inspectWebUi(origin, 1000)).kind, 'verified')
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    assert.equal((await probe.inspectWebUi(origin, 100)).kind, 'unavailable')
+  } finally {
+    server.closeAllConnections()
+    if (server.listening) await new Promise(resolve => server.close(resolve))
+  }
+  console.log('✓ real loopback probes distinguish silent, rejected, unrelated, recovered and closed services')
+
   const { createBridgePolicy } = load('bridge-policy')
   const local = 'http://127.0.0.1:49123'
   let target = local
@@ -159,6 +219,9 @@ try {
   await admission.select(local)
   const native = admission.headers(local, 1, {}).Cookie
   assert.match(native, /^dsh-auth-/)
+  assert.equal(admission.headers(local.replace('http:', 'ws:') + '/api/remote.mux', 1, {}).Cookie, native)
+  assert.equal(admission.headers(local.replace('http:', 'wss:'), 1, { Cookie: native }).Cookie, undefined)
+  assert.equal(admission.headers(local.replace('http:', 'ws:'), 2, { Cookie: native }).Cookie, undefined)
   assert.equal(admission.headers('http://127.0.0.1:49124', 1, { Cookie: native + '; unrelated=value' }).Cookie, 'unrelated=value')
   assert.equal(admission.headers(local, 2, { Cookie: native }).Cookie, undefined)
   target = 'http://127.0.0.1:49124'
@@ -170,10 +233,42 @@ try {
   await admission.select(target)
   const remoteCookie = 'dsh-auth-' + createHash('sha256').update(new URL(target).host).digest('base64url') + '=server-issued'
   assert.equal(admission.headers(target, 1, { Cookie: remoteCookie }).Cookie, remoteCookie)
+  assert.equal(admission.headers(target.replace('https:', 'wss:'), 1, { Cookie: remoteCookie }).Cookie, remoteCookie)
+  assert.equal(admission.headers(target.replace('https:', 'ws:'), 1, { Cookie: remoteCookie }).Cookie, undefined)
   console.log('✓ native browser credentials only follow verified selected origin in main contents, never another port or old target')
   const managerBundle = join(work, 'manager.cjs')
   buildSync({ entryPoints: [join(root, 'src/main/web-ui-manager.ts')], bundle: true,
     platform: 'node', format: 'cjs', outfile: managerBundle, logLevel: 'silent' })
+  const { WebUiManager: RealManager } = require(managerBundle)
+  for (const announce of [false, true]) {
+    const startupHome = join(work, 'startup-' + announce)
+    let finishExit, resolveProbe, shouldWait = announce, exits = 0
+    const exited = new Promise(resolve => { finishExit = resolve })
+    const managed = new RealManager({ home: () => startupHome, startupTimeoutMs: 1500,
+      resolveCommand: () => ({ command: process.execPath,
+        args: ['-e', (announce ? 'console.log("dsh web: http://127.0.0.1:49125");' : '') + 'setInterval(()=>{},1000)'],
+        source: 'bundled', label: 'startup deadline fixture' }),
+      prepareCommand: () => ({ args: [], env: process.env }),
+      waitForReady: () => shouldWait ? new Promise(resolve => { resolveProbe = resolve }) : Promise.resolve(),
+      onLog() {}, onExit: info => { exits++; finishExit(info) },
+    })
+    try {
+      await assert.rejects(managed.ready(), /startup timed out/)
+      assert.equal((await exited).retryable, true)
+      assert.equal(managed.pid(), undefined)
+      assert.equal(lock.readRuntimeLock(startupHome), undefined)
+      resolveProbe?.(); await turn()
+      assert.equal(exits, 1, 'a late readiness completion must not report a second exit')
+      if (announce) {
+        shouldWait = false
+        assert.equal(await managed.ready(), 'http://127.0.0.1:49125')
+        await new Promise(resolve => setTimeout(resolve, 1600))
+        assert.ok(managed.pid(), 'a ready generation must survive its former startup deadline')
+        assert.equal(exits, 1)
+      }
+    } finally { await managed.stop() }
+  }
+  console.log('✓ startup deadline kills silent or probe-stalled children, clears ownership and permits a healthy successor')
   const emitter = join(work, 'emitter.cjs')
   fs.writeFileSync(emitter, `process.stdout.write('token=' + 'x'.repeat(128 * 1024) + '\\n', () => {
     process.stderr.write('pass');

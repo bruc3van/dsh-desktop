@@ -22,21 +22,28 @@ try {
       DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_SKIP_INSTALLED_DSH: '1', DSH_DESKTOP_SKIP_UPDATE_PROMPT: '1' } })
   const page = await app.firstWindow()
   await page.waitForFunction(() => document.querySelector('#root')?.children.length > 0, null, { timeout: 60000 })
-  for (let step = 0; step < 8; step++) {
+  // #root can render a loading screen before onboarding arrives. Keep
+  // observing the first-run flow until the actual settings entry is usable;
+  // a single "overlay absent" sample can race asynchronous initialization.
+  const settingsButton = page.getByRole('button', { name: /设置|Settings/ }).first()
+  const deadline = Date.now() + 60_000
+  let ready = false
+  while (Date.now() < deadline) {
     const onboarding = page.locator('[class*="onboardingOverlay"]').last()
-    if (!await onboarding.isVisible().catch(() => false)) break
-    await onboarding.getByRole('button').last().click()
-    await page.waitForTimeout(300)
-  }
-  await page.waitForFunction(() => document.querySelector('[class*="onboardingOverlay"]') === null, null, { timeout: 10000 })
-  for (let step = 0; step < 8; step++) {
     const modal = page.locator('[role="presentation"]').filter({ visible: true }).last()
-    if (!await modal.isVisible().catch(() => false)) break
-    const buttons = modal.locator('button:not([disabled])').filter({ visible: true })
-    if (await buttons.count()) await buttons.last().click()
-    else await page.keyboard.press('Escape')
-    await page.waitForTimeout(300)
+    if (await onboarding.isVisible()) {
+      await onboarding.getByRole('button').last().click()
+    } else if (await modal.isVisible()) {
+      const buttons = modal.locator('button:not([disabled])').filter({ visible: true })
+      if (await buttons.count()) await buttons.last().click()
+      else await page.keyboard.press('Escape')
+    } else if (await settingsButton.isVisible()) {
+      ready = true
+      break
+    }
+    await page.waitForTimeout(100)
   }
+  assert.ok(ready, 'official first-run flow did not reach the settings entry')
   const open = async () => {
     await page.getByRole('button', { name: /设置|Settings/ }).first().click()
     await page.waitForSelector('#dsh-desktop-tab')

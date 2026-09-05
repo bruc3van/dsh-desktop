@@ -33,13 +33,35 @@ try {
   })
   const page = await app.firstWindow()
   const pressSettingsShortcut = async () => {
-  await app.evaluate(({ BrowserWindow }) => {
-    const main = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'Settings compatibility fixture')
-    main.focus()
-    const modifiers = [process.platform === 'darwin' ? 'meta' : 'control']
-    main.webContents.sendInputEvent({ type: 'keyDown', keyCode: ',', modifiers })
-    main.webContents.sendInputEvent({ type: 'keyUp', keyCode: ',', modifiers })
-  })
+    // Native focus transfer is asynchronous on Windows, especially directly
+    // after closing the settings window. Queue input only after it completes.
+    await app.evaluate(async ({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows().find(window => window.getTitle() === 'Settings compatibility fixture')
+      if (!main.isFocused()) {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            main.removeListener('focus', focused)
+            reject(new Error('main window did not regain focus'))
+          }, 10_000)
+          function focused() { clearTimeout(timeout); resolve() }
+          main.once('focus', focused)
+          main.focus()
+        })
+      }
+      const modifiers = [process.platform === 'darwin' ? 'meta' : 'control']
+      main.webContents.sendInputEvent({ type: 'keyDown', keyCode: ',', modifiers })
+      main.webContents.sendInputEvent({ type: 'keyUp', keyCode: ',', modifiers })
+    })
+  }
+  const closeSettings = async settings => {
+    const window = await app.browserWindow(settings)
+    // Page.close() can finish when WebContents closes, before BrowserWindow's
+    // closed event resets the main-process settings-window reference.
+    await window.evaluate(window => new Promise(resolve => {
+      window.once('closed', resolve)
+      window.close()
+    }))
+    await window.dispose()
   }
   const warnings = []
   page.on('console', message => {
@@ -121,12 +143,12 @@ try {
   assert.equal(JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8')).bundledMarketDisabled, false)
   assert.equal(await page.evaluate(async () => (await window.desktop.connection.getMarket()).enabled), true)
   await settings.screenshot({ path: join(tmpdir(), 'dsh-desktop-settings-integration.png'), fullPage: true })
-  await settings.close()
+  await closeSettings(settings)
   const shortcutOpened = app.waitForEvent('window')
   await pressSettingsShortcut()
   const shortcutSettings = await shortcutOpened
   await shortcutSettings.waitForSelector('#market-toggle')
-  await shortcutSettings.close()
+  await closeSettings(shortcutSettings)
 
   // Repeated streaming mutations do not flood diagnostics.
   await page.evaluate(() => {

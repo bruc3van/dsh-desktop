@@ -50,7 +50,7 @@ interface ConnectionOptions {
 export function createConnectionController(options: ConnectionOptions) {
   const { catalog: runtimeCatalog, plugins, presentation, childHome, loadSettings, sharedDshDiscoveryEnabled, localeChinese } = options
   const { detectInstalledDsh } = runtimeCatalog
-  const { probeSmartTargets, inspectWebUi, probeWebUi, prepareLocalWebPort } = options.probe
+  const { probeSmartTargets, inspectWebUi, prepareLocalWebPort } = options.probe
   const { adoptOrClearSurvivingRuntime } = options.survivor
   const { releaseBundledPluginSeat, reseatForAdoptedRuntime, schedulePluginCompatibilityFallback } = plugins
   const { launchWindow, loadMainWindow, showLoadingDocument, updateLoadingStatus, showConnectionError,
@@ -112,13 +112,15 @@ export function createConnectionController(options: ConnectionOptions) {
    */
   async function probeWithGrace(base: string): Promise<WebUiProbeResult> {
     let authenticationRequired: WebUiProbeResult | undefined
+    let last: WebUiProbeResult = { kind: 'unavailable' }
     for (let attempt = 0; attempt < PROBED_FALLBACK_GRACE_ATTEMPTS; attempt++) {
       if (attempt > 0) await new Promise(resolve => setTimeout(resolve, PROBED_FALLBACK_GRACE_INTERVAL_MS))
       const result = await inspectWebUi(base)
+      last = result
       if (result.kind === 'verified') return result
       if (result.kind === 'authentication-required') authenticationRequired ??= result
     }
-    return authenticationRequired ?? { kind: 'unavailable' }
+    return authenticationRequired ?? last
   }
 
   /**
@@ -160,6 +162,10 @@ export function createConnectionController(options: ConnectionOptions) {
       if (generation !== connectionGeneration || !probeConnected || currentTarget() !== failedTarget) return
       if (probe.kind === 'authentication-required') {
         refuseUnauthenticatedProbeTarget(probe.url)
+        return
+      }
+      if (probe.kind === 'uncertain') {
+        refuseUncertainProbeTarget(probe.url)
         return
       }
       fallbackFromProbedInstance(reason)
@@ -278,8 +284,8 @@ export function createConnectionController(options: ConnectionOptions) {
 
   /**
    * A Smart-mode probed instance disappeared; fall back to the managed child.
-   * Occupancy is not re-checked here: the instance already failed its probe,
-   * and another pass would only delay the fallback.
+   * Recheck the previous origin after detection: it may have recovered while
+   * detection was running, and it may use a port absent from the discovery list.
    */
   function fallbackFromProbedInstance(reason: string): boolean {
     if (!probeConnected || options.isQuitting()) return false
@@ -300,7 +306,22 @@ export function createConnectionController(options: ConnectionOptions) {
     }
     void detectInstalledDsh().then(async () => {
       if (options.isQuitting() || generation !== connectionGeneration) return
+      if (failedTarget !== undefined) {
+        const previous = await inspectWebUi(failedTarget)
+        if (options.isQuitting() || generation !== connectionGeneration) return
+        if (previous.kind === 'verified') {
+          configuredTarget = previous.url
+          probeConnected = true
+          reseatForAdoptedRuntime()
+          launchWindow(generation, true)
+          return
+        }
+        if (previous.kind === 'authentication-required') { refuseUnauthenticatedProbeTarget(previous.url); return }
+        if (previous.kind === 'uncertain') { refuseUncertainProbeTarget(previous.url); return }
+      }
       await startLocalRuntime(generation)
+    }).catch(() => {
+      if (!options.isQuitting() && generation === connectionGeneration) showLocalRuntimeStartupFailure(null, null)
     })
     return true
   }
@@ -354,6 +375,23 @@ export function createConnectionController(options: ConnectionOptions) {
     })
   }
 
+  function refuseUncertainProbeTarget(url: string): void {
+    configuredTarget = undefined
+    probeConnected = false
+    childTarget = undefined
+    console.warn('[desktop] refusing local runtime: a loopback service is still listening but could not be verified at ' + url)
+    const chinese = localeChinese()
+    showConnectionError({
+      kind: 'runtime',
+      headline: chinese ? '本机服务状态尚未确认' : 'The local service state is uncertain',
+      detail: chinese ? '该地址仍接受连接，但未能完成 Web UI 检查：' + url : 'This address still accepts connections, but the Web UI check did not complete: ' + url,
+      url,
+      hint: chinese
+        ? '服务可能正在忙碌。为避免同时写入同一份会话数据，本次没有启动新的运行时。请稍后重试，或确认原服务已退出后重试。'
+        : 'The service may be busy. No new runtime was started to avoid two writers using the same session data. Retry later, or confirm the original service has exited before retrying.',
+    })
+  }
+
   /**
    * Smart mode, in order: an official instance already running on this machine,
    * then a dsh the user installed themselves, then the bundled runtime. The
@@ -403,6 +441,7 @@ export function createConnectionController(options: ConnectionOptions) {
           refuseUnauthenticatedProbeTarget(occupied.url)
           return
         }
+        if (occupied.kind === 'uncertain') { refuseUncertainProbeTarget(occupied.url); return }
       }
       const pinned = configuredLocalWebPort()
       if (pinned > 0 && !devFlag('DSH_DESKTOP_SKIP_PROBE')) {
@@ -449,6 +488,7 @@ export function createConnectionController(options: ConnectionOptions) {
         refuseUnauthenticatedProbeTarget(probed.url)
         return
       }
+      if (probed.kind === 'uncertain') { refuseUncertainProbeTarget(probed.url); return }
       await startLocal()
     })().catch(() => { showLocalRuntimeStartupFailure(null, null) })
   }
@@ -502,7 +542,8 @@ export function createConnectionController(options: ConnectionOptions) {
     if (target === undefined || !originIsLoopback(target)) return undefined
     if (isOwnManagedOrigin(target)) return undefined
     if (!probeConnected && !usesConfiguredServer(loadSettings())) return undefined
-    return await probeWebUi(target)
+    const inspected = await inspectWebUi(target)
+    return inspected.kind === 'unavailable' ? undefined : inspected.url
   }
 
   /**
@@ -663,6 +704,7 @@ export function createConnectionController(options: ConnectionOptions) {
       if (generation !== connectionGeneration || options.isQuitting()) return undefined
       if (options.runtime()?.pid() === undefined && occupied.kind === 'verified') { refuseOccupiedProbeTarget(occupied.url); return undefined }
       if (options.runtime()?.pid() === undefined && occupied.kind === 'authentication-required') { refuseUnauthenticatedProbeTarget(occupied.url); return undefined }
+      if (options.runtime()?.pid() === undefined && occupied.kind === 'uncertain') { refuseUncertainProbeTarget(occupied.url); return undefined }
     }
     const url = await options.runtime()?.ready()
     if (url === undefined || generation !== connectionGeneration || options.isQuitting()) return undefined

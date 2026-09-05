@@ -5,9 +5,9 @@ import { createConnection, createServer as createTcpServer } from 'node:net'
  * pinned bind that would fail with EADDRINUSE — including an unrelated
  * process that is not a dsh (probeWebUi would miss those).
  */
-export function loopbackPortHeld(port: number): Promise<boolean> {
+export function loopbackPortHeld(port: number, host = '127.0.0.1'): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = createConnection({ host: '127.0.0.1', port })
+    const socket = createConnection({ host, port })
     const finish = (held: boolean): void => {
       socket.removeAllListeners()
       socket.destroy()
