@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-06
+
+### 变更
+- 内置安全市场升至 [0.4.2](https://github.com/bruc3van/dsh-desktop-safe-market/releases/tag/v0.4.2)
+
 ### 新增
 - macOS 支持下载验证后自动替换应用并重启；下载前检查安装位置和目录权限，替换失败时尝试恢复旧应用，后续更新回收较早的已完成备份
 
