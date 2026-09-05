@@ -13,6 +13,8 @@ export interface PermissionContext {
   targetUrl: string | undefined
   requestingUrl: string
   isMainFrame: boolean
+  /** Explicit process ownership, never inferred from a loopback address. */
+  clientOwned?: boolean
 }
 
 /** Capabilities a user-selected remote Web UI needs without gaining device access. */
@@ -66,7 +68,7 @@ export function permissionGrantedForContext(context: PermissionContext): boolean
   if (visible.origin !== target.origin || requesting.origin !== target.origin) return false
   if (!context.isMainFrame && context.permission !== 'fileSystem') return false
 
-  const permissions = loopbackHost(target.hostname) ? LOOPBACK_PERMISSIONS : REMOTE_PERMISSIONS
+  const permissions = context.clientOwned === true && loopbackHost(target.hostname) ? LOOPBACK_PERMISSIONS : REMOTE_PERMISSIONS
   return permissions.has(context.permission)
 }
 

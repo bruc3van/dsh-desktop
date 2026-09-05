@@ -4,7 +4,7 @@ import { permissionGrantedForContext } from './permission-policy.ts'
 export interface BridgeCaller {
   /** The main window's top frame, showing an origin this client itself selected. */
   trusted: boolean
-  /** That origin is a configured remote, not one of the client's own loopback surfaces. */
+  /** The selected page is not owned by this client, even when its address is loopback. */
   remote: boolean
 }
 
@@ -13,6 +13,7 @@ interface Options {
   getLoadingDocumentActive: () => boolean
   getErrorDocumentActive: () => boolean
   currentTarget: () => string | undefined
+  isClientOwnedOrigin: (origin: string) => boolean
 }
 
 export function createBridgePolicy(options: Options) {
@@ -42,7 +43,7 @@ export function createBridgePolicy(options: Options) {
    * served there must not be able to silently repoint the client or start an
    * installer. Only the main window's TOP frame, showing the origin the client
    * currently targets (or the client's own loading document), may drive the
-   * bridge; a remote origin that does is additionally treated as remote, which
+   * bridge; an origin without client ownership is additionally treated as remote, which
    * costs it the local details and adds a native confirmation to state changes.
    */
   function bridgeCaller(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): BridgeCaller {
@@ -64,7 +65,7 @@ export function createBridgePolicy(options: Options) {
     if (origin === '') return UNTRUSTED_CALLER
     const target = currentTarget()
     if (target !== undefined && origin === appOrigin(target)) {
-      return { trusted: true, remote: !originIsLoopback(origin) }
+      return { trusted: true, remote: !options.isClientOwnedOrigin(origin) }
     }
     // Source / port apply stops the child before the window leaves the previous
     // loopback UI. A remote Connect page left on screen after the target moved
@@ -83,15 +84,8 @@ export function createBridgePolicy(options: Options) {
 
 
   function rememberSmartBridgeHandoff(): void {
-    const mainWindow = options.getMainWindow()
-    const fromTarget = loopbackPageOrigin(currentTarget() ?? '')
-    if (fromTarget !== undefined) {
-      smartBridgeHandoffOrigin = fromTarget
-      return
-    }
-    if (mainWindow === null || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
-    const fromWindow = loopbackPageOrigin(mainWindow.webContents.getURL())
-    if (fromWindow !== undefined) smartBridgeHandoffOrigin = fromWindow
+    const origin = loopbackPageOrigin(currentTarget() ?? '')
+    smartBridgeHandoffOrigin = origin !== undefined && options.isClientOwnedOrigin(origin) ? origin : undefined
   }
 
 
@@ -147,7 +141,7 @@ export function createBridgePolicy(options: Options) {
     // origin that merely fails the loopback test.
     if (url === '' || url.startsWith('data:')) return false
     const origin = appOrigin(url)
-    return origin !== '' && origin !== 'null' && !originIsLoopback(origin)
+    return origin !== '' && origin !== 'null' && !options.isClientOwnedOrigin(origin)
   }
 
 
@@ -187,6 +181,7 @@ export function createBridgePolicy(options: Options) {
       targetUrl: currentTarget(),
       requestingUrl,
       isMainFrame,
+      clientOwned: options.isClientOwnedOrigin(appOrigin(currentTarget() ?? '')),
     })
   }
   return { bridgeCaller, rememberSmartBridgeHandoff, releaseSmartBridgeHandoff, bridgeDenied, localDocumentCaller, mainWindowShowsRemote, permissionTrustedSurface, permissionGranted }

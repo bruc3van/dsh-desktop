@@ -14,10 +14,10 @@ let child
 try {
   const outfile = join(home, 'survivor.mjs')
   await build({ stdin: {
-    contents: "export * from './src/main/runtime-survivor.ts'; export * from './src/main/runtime-lock.ts';",
+    contents: "export * from './src/main/runtime-survivor.ts'; export * from './src/main/runtime-lock.ts'; export * from './src/main/runtime-process.ts';",
     resolveDir: root, loader: 'ts',
   }, bundle: true, platform: 'node', format: 'esm', outfile })
-  const { createRuntimeSurvivor, writeRuntimeLock, readRuntimeLock, isProcessAlive } = await import(pathToFileURL(outfile).href)
+  const { createRuntimeSurvivor, writeRuntimeLock, readRuntimeLock, isProcessAlive, readProcessIdentity } = await import(pathToFileURL(outfile).href)
   const fixture = join(home, 'server.mjs')
   writeFileSync(fixture, `import { createServer } from 'node:http'
 const server = createServer((_req, res) => { res.end('survivor-fixture') })
@@ -44,7 +44,7 @@ server.listen(0, '127.0.0.1', () => process.send({ url: 'http://127.0.0.1:' + se
   assert.equal(isProcessAlive(child.pid), true, 'a recycled PID must not be killed')
   assert.equal(readRuntimeLock(home), undefined)
 
-  writeRuntimeLock(home, { childPid: child.pid, desktopPid: process.pid, startedAt, source: 'bundled', url })
+  writeRuntimeLock(home, { childPid: child.pid, desktopPid: process.pid, startedAt, processIdentity: await readProcessIdentity(child.pid), source: 'bundled', url })
   assert.deepEqual(await survivor.adoptOrClearSurvivingRuntime(), { kind: 'adopt', url })
   assert.equal(isProcessAlive(child.pid), true)
   await survivor.stopAdoptedRuntimeForRestart()

@@ -11,7 +11,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, createReadStream, createWriteStream, mkdirSync, unlinkSync } from 'node:fs'
+import { chmodSync, createReadStream, createWriteStream, mkdirSync, readdirSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -418,6 +418,15 @@ export class DesktopUpdater {
     return this.installerExit?.promise
   }
 
+  /** A launched installer failed while the desktop is still able to recover. */
+  recoverInstallerFailure(code: number): void {
+    if (this.phase !== 'installing') return
+    this.installerExit = undefined
+    this.progress = null
+    this.error = '安装程序退出（代码 ' + String(code) + '），可以重试更新'
+    this.setPhase('error')
+  }
+
   getState(): UpdateState {
     return {
       phase: this.phase,
@@ -573,6 +582,7 @@ export class DesktopUpdater {
         try { unlinkSync(destination) } catch { /* keep going to report the hash error */ }
         throw new Error('安装包校验失败（SHA-256 不匹配）')
       }
+      pruneOldInstallers(this.options.downloadDir, info.fileName)
       // The download never carries an executable bit, and an AppImage is the
       // program itself: give it one before the desktop tries to launch it.
       if (destination.toLowerCase().endsWith('.appimage')) {
@@ -996,4 +1006,14 @@ function spawnWindowsInstaller(
       )
     })
   })
+}
+
+/** Keep the selected verified installer; never recurse or delete unrelated files. */
+export function pruneOldInstallers(directory: string, keep: string): void {
+  try {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || entry.name === keep || !/^dsh-desktop-[\w.+-]+\.(?:exe|dmg|appimage)$/i.test(entry.name)) continue
+      try { unlinkSync(join(directory, entry.name)) } catch { /* A running installer may still hold the file. */ }
+    }
+  } catch { /* Cleanup must not prevent a verified update. */ }
 }

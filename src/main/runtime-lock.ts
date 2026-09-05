@@ -16,7 +16,9 @@
  * that kills the app by name leaves the child running, and the updated app
  * then starts a second writer against the same DSH_HOME.
  *
- * The record is advisory and self-healing. A child that neither answers nor
+ * Complete records are advisory and self-healing. Unfinished reservations
+ * block a successor until the user verifies there are no surviving writers.
+ * A child that neither answers nor
  * exists is cleared rather than obeyed, so a crashed client cannot wedge the
  * next start. It is written through a temporary file and renamed, because a
  * torn read would parse as "no runtime" — the one wrong answer that costs
@@ -30,6 +32,10 @@ import { join } from 'node:path'
 /** One managed runtime, as the next start needs to reason about it. */
 export interface RuntimeLock {
   /** The `dsh web` child this client spawned. */
+  /** A persisted startup or shutdown reservation; unresolved reservations block a successor. */
+  launchPending?: boolean
+  /** OS process creation identity captured while holding the child handle. */
+  processIdentity?: string
   childPid: number
   /** The client that spawned it; informational, for diagnosing a survivor. */
   desktopPid: number
@@ -69,6 +75,8 @@ export function readRuntimeLock(home: string): RuntimeLock | undefined {
     if (!Number.isSafeInteger(parsed.childPid) || Number(parsed.childPid) <= 0) return undefined
     return {
       childPid: Number(parsed.childPid),
+      ...parsed.launchPending === true && { launchPending: true },
+      ...typeof parsed.processIdentity === 'string' && { processIdentity: parsed.processIdentity },
       desktopPid: Number(parsed.desktopPid ?? 0),
       startedAt: Number(parsed.startedAt ?? 0),
       ...typeof parsed.url === 'string' && parsed.url !== '' && { url: parsed.url },
@@ -90,8 +98,8 @@ export function writeRuntimeLock(home: string, lock: RuntimeLock): void {
     writeFileSync(temporary, JSON.stringify(lock), { mode: 0o600 })
     renameSync(temporary, file)
   } catch (error) {
-    console.warn('[desktop] could not record the local runtime: ' + describe(error))
     try { unlinkSync(temporary) } catch { /* nothing to clean up */ }
+    throw new Error('Could not persist the local runtime record: ' + describe(error))
   }
 }
 

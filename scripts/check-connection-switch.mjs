@@ -280,6 +280,19 @@ try {
     serverUrl: remoteOrigin,
     connectionMode: 'connect',
   }, null, 2) + '\n')
+  // A selected loopback fixture is not client-owned. Native confirmation must
+  // be reached, and declining it must leave the saved connection untouched.
+  await app.evaluate(({ dialog }) => {
+    globalThis.confirmationCalls = 0
+    dialog.showMessageBox = async () => { globalThis.confirmationCalls++; return { response: 0, checkboxChecked: false } }
+  })
+  const declined = await window.evaluate(() => window.desktop.connection.switchMode())
+  if (declined.switched || await app.evaluate(() => globalThis.confirmationCalls) !== 1) {
+    throw new Error('unowned loopback switch bypassed native confirmation')
+  }
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => { globalThis.confirmationCalls++; return { response: 1, checkboxChecked: false } }
+  })
   const toSmart = await window.evaluate(() => window.desktop.connection.switchMode())
   if (!toSmart.switched || toSmart.mode !== 'smart') throw new Error('failed to switch to Smart mode: ' + JSON.stringify(toSmart))
   ({ window } = await waitForStatus(app, status => status.selectedMode === 'smart' && status.targetUrl !== ''))

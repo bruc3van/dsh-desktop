@@ -608,9 +608,22 @@ const launchApp = async (home, extraEnv = {}, options = {}) => {
     args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(home, 'chromium')],
     env: electronEnv,
   })
+  await launched.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
+  })
   const window = await launched.firstWindow()
   await window.waitForFunction(() => document.title === 'Updater Fixture', null, { timeout: 15_000 })
   return { app: launched, window }
+}
+
+const nativeUpdaterState = async ({ app, window }) => {
+  const opened = app.waitForEvent('window')
+  await window.evaluate(() => { window.desktop.openConnectionSettings() })
+  const settings = await opened
+  await settings.waitForLoadState()
+  const state = await settings.evaluate(async () => (await fetch('desktop/update')).json())
+  await settings.close()
+  return state
 }
 
 const openDesktopSettings = async (window) => {
@@ -745,7 +758,7 @@ try {
   const badCheck = await bad.window.evaluate(() => window.desktop.update.check())
   if (!badCheck.hasUpdate) throw new Error('bad-hash feed should still be available: ' + JSON.stringify(badCheck))
   const badInstall = await bad.window.evaluate(() => window.desktop.update.install())
-  if (badInstall.started || !String(badInstall.error ?? '').includes('SHA-256')) {
+  if (badInstall.started || !String((await nativeUpdaterState(bad)).error ?? '').includes('SHA-256')) {
     throw new Error('expected SHA-256 failure: ' + JSON.stringify(badInstall))
   }
   await bad.app.close()
@@ -763,10 +776,10 @@ try {
   await noHash.window.locator('#dsh-update-install').click()
   await noHash.window.waitForFunction(() => {
     const el = document.getElementById('dsh-update-status')
-    return el !== null && !el.hidden && el.textContent.includes('SHA-256')
+    return el !== null && !el.hidden && (/失败|failed/i.test(el.textContent))
   }, null, { timeout: 5_000 })
   const noHashInstall = await noHash.window.evaluate(() => window.desktop.update.install())
-  if (noHashInstall.started || !String(noHashInstall.error ?? '').includes('SHA-256')) {
+  if (noHashInstall.started || !String((await nativeUpdaterState(noHash)).error ?? '').includes('SHA-256')) {
     throw new Error('expected missing SHA-256 refusal: ' + JSON.stringify(noHashInstall))
   }
   // A refusal must not retract the offer: the tray reads this same phase, and
@@ -785,7 +798,7 @@ try {
   const hangCheck = await hang.window.evaluate(() => window.desktop.update.check())
   if (!hangCheck.hasUpdate) throw new Error('hang feed should still be available: ' + JSON.stringify(hangCheck))
   const hangInstall = await hang.window.evaluate(() => window.desktop.update.install())
-  if (hangInstall.started || !String(hangInstall.error ?? '').includes('超时')) {
+  if (hangInstall.started || !String((await nativeUpdaterState(hang)).error ?? '').includes('超时')) {
     throw new Error('expected download timeout: ' + JSON.stringify(hangInstall))
   }
   await hang.app.close()

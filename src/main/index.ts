@@ -1,3 +1,5 @@
+import { createQuitCoordinator } from './quit-coordinator.ts'
+import { createBrowserAdmission } from './browser-admission.ts'
 import { mainContentHeightScript } from './window-content.ts'
 import { createBridgePolicy,type BridgeCaller } from './bridge-policy.ts'
 import { createDesktopIpc } from './desktop-ipc.ts'
@@ -33,7 +35,7 @@ import { installEmergencyRuntimeDisposal } from './runtime-process.ts'
 
 import { createClientSettingsStore,type ClientSettings } from './client-settings.ts'
 import { createConnectionController } from './connection-controller.ts'
-import { appOrigin,normalizeServerUrl,usesConfiguredServer } from './connection-policy.ts'
+import { appOrigin, normalizeServerUrl, originIsLoopback, usesConfiguredServer } from './connection-policy.ts'
 import type { ConnectionFailure } from './connection-types.ts'
 import { devFlag,devOverride } from './development-options.ts'
 import { createRuntimeCatalog } from './runtime-catalog.ts'
@@ -740,6 +742,9 @@ function reportConnectionFailureWithoutWindow(failure: ConnectionFailure): void 
 /** The failure surface's 重试: re-resolve the connection from the saved settings. */
 function retryConnection(): void {
   if (quitting) return
+  // An explicit retry may recover a repaired disk/configuration. The manager
+  // keeps failures latched when a previous tree's disposal is unconfirmed.
+  webUi?.clearFatalError()
   errorDocumentActive = false
   showLoadingDocument()
   updateLoadingStatus('正在重新连接…', 'Reconnecting…')
@@ -780,7 +785,22 @@ function createMainWindow(): BrowserWindow {
  * "保存并连接" resolving to the same origin has to rebuild the session anyway —
  * doing nothing leaves the card's "正在重连…" note true forever.
  */
+const browserAdmission = createBrowserAdmission({
+  home: childHome,
+  target: currentTarget,
+  mainContentsId: () => mainWindow?.webContents.id,
+  verify: async (origin) => (await inspectWebUi(origin)).kind === 'verified',
+})
+let navigationEpoch = 0
 function loadMainWindow(url: string, force = false): void {
+  const epoch = ++navigationEpoch
+  void browserAdmission.select(url).then((selected) => {
+    if (selected && epoch === navigationEpoch && !quitting) navigateMainWindow(url, force)
+  }).catch((error: unknown) => {
+    console.warn('[desktop] browser admission failed: ' + sanitizeRuntimeOutput(String(error)))
+  })
+}
+function navigateMainWindow(url: string, force: boolean): void {
   if (mainWindow === null) createWindow()
   if (mainWindow === null) return
   if (appOrigin(mainWindow.webContents.getURL()) === appOrigin(url)) {
@@ -1694,6 +1714,9 @@ const bridgePolicy = createBridgePolicy({
   getLoadingDocumentActive: () => loadingDocumentActive,
   getErrorDocumentActive: () => errorDocumentActive,
   currentTarget,
+  isClientOwnedOrigin: (origin) => originIsLoopback(origin) && connection.configuredTarget === undefined
+    && connection.childTarget !== undefined && webUi?.pid() !== undefined
+    && origin === appOrigin(connection.childTarget),
 })
 function getUpdatePromptWindow(): BrowserWindow | null {
   return updateController.getUpdatePromptWindow()
@@ -1839,6 +1862,19 @@ if (!gotLock) {
     // its plugins use, keep a custom remote origin narrower, and deny unrelated
     // frames and device APIs. Both handlers are required: many Web APIs check
     // first and request only after that check is denied.
+    // Strip host-scoped DSH cookies even on requests to another loopback port.
+    // The native session exists only in memory and only follows the selected origin.
+    session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+      callback({ requestHeaders: browserAdmission.headers(details.url, details.webContentsId, details.requestHeaders) })
+    })
+    const oldCookies = await session.defaultSession.cookies.get({})
+    for (const cookie of oldCookies) {
+      if (!cookie.name.startsWith('dsh-auth-')) continue
+      const host = cookie.domain?.replace(/^\./, '')
+      if (host === undefined || !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host)) continue
+      const authority = host === '::1' ? '[::1]' : host
+      await session.defaultSession.cookies.remove((cookie.secure ? 'https://' : 'http://') + authority + cookie.path, cookie.name)
+    }
     session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
       callback(permissionGranted(contents, permission, details.requestingUrl, details.isMainFrame))
     })
@@ -1917,9 +1953,7 @@ if (!gotLock) {
     registerDesktopIpc()
     await guiPathReady
     boot()
-    app.on('activate', () => {
-      if (mainWindow === null) launchWindow()
-    })
+    app.on('activate', showMainWindow)
   }).catch((error: unknown) => {
     dialog.showErrorBox('DSH Desktop', '桌面客户端启动失败。\n' + (error instanceof Error ? error.message : String(error)))
     app.quit()
@@ -1933,24 +1967,16 @@ if (!gotLock) {
   // Quit owns the local child: the stop ladder runs before the process exits,
   // so the runtime never outlives the client as an orphan holding the data
   // home and a port.
-  app.on('before-quit', (event) => {
-    if (quitting) return
-    event.preventDefault()
-    quitting = true
-    if (windowHealthTimer !== undefined) clearInterval(windowHealthTimer)
-    connection.dispose()
-    void (async () => {
-      // A restart carries one extra step: the owned child is stopped below
-      // either way, but an adopted one would otherwise outlive this process
-      // and be adopted right back by the successor.
-      try {
-        await connection.stop(restarting)
-      } catch (error) {
-        // Never strand the app in a half-quit state over a failed stop: the
-        // ladder is best-effort, the quit is not.
-        console.error('[desktop] shutdown ladder failed: ' + (error instanceof Error ? error.message : String(error)))
-      }
-      app.quit()
-    })()
-  })
+  app.on('before-quit', createQuitCoordinator({
+    begin: () => {
+      quitting = true
+      if (windowHealthTimer !== undefined) clearInterval(windowHealthTimer)
+      connection.dispose()
+    },
+    stop: () => connection.stop(restarting),
+    quit: () => { app.quit() },
+    failed: (error) => {
+      console.error('[desktop] shutdown ladder failed: ' + sanitizeRuntimeOutput(String(error)))
+    },
+  }))
 }

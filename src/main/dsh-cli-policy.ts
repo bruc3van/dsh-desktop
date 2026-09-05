@@ -4,9 +4,11 @@
  * The desktop client is already running this profile in its own window. A
  * second `dsh web` / `dsh --profile …` on the same DSH_HOME would share the
  * session store with a writer the client already owns. The gateway therefore
- * only forwards invocations that can be shown not to boot a profile; anything
- * else is refused. Fail-closed: an upstream that later adds a launching
- * subcommand is denied until this table is updated.
+ * classifies invocations against the pinned upstream CLI. Unknown non-profile
+ * commands currently reach upstream help/errors; every runtime upgrade must
+ * rerun check:dsh-cli against the real CLI. The plugin subcommand deliberately
+ * forwards package-manager arguments, including run/exec/dlx; this is not an
+ * arbitrary-code execution sandbox.
  *
  * Pure decision, no I/O, parameterized only by argv — the same shape as
  * `runtime-resolution.ts`, so both platforms are assertable from one machine

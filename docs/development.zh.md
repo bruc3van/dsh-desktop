@@ -109,7 +109,7 @@ Linux 安装包暂不在自动发布范围内；源码中的通用平台兼容�
 | `runtime-environment.ts` | 内置程序路径、命令 shim、登录 shell 的 PATH，以及 shim 初始化缓存 |
 | `runtime-catalog.ts` | PATH/npx/内置/开发覆盖命令选择、版本发现缓存和本次会话的来源拒绝状态 |
 | `web-ui-manager.ts` | 当前子进程代际、就绪 Promise、输出诊断和串行停止流程 |
-| `web-ui-probe.ts`、`loopback-port.ts` | Web UI API 验证、浏览器会话准入和可用端口探测，不启动进程 |
+| `web-ui-probe.ts`、`loopback-port.ts`、`browser-admission.ts` | Web UI API 验证、精确 origin 的浏览器认证和可用端口探测，不启动进程 |
 | `runtime-survivor.ts`、`runtime-process.ts` | 遗留进程的身份核对、接管和停止，以及异常退出时的同步清理 |
 | `connection-controller.ts` | 连接代际、当前目标、每次启动的端口选择、主动替换、来源回退和重试预算 |
 
@@ -130,3 +130,16 @@ Linux 安装包暂不在自动发布范围内；源码中的通用平台兼容�
 `npm run build:shell && npm run check:official-settings` 启动临时 DSH_HOME 和 Chromium 配置中的内置官方 UI，分别验证中文和英文的注入、官方导航恢复及重开，输出实际 DSH 版本。测试不使用真实凭据、不发送模型请求。2026-09-05 本机覆盖版本为 `0.1.2-rc.1`；这不代表其他版本也已验证。结构变体和文档销毁/恢复另由 `check:settings-integration` 覆盖。
 
 官方 UI 检查已接入 macOS/Windows 应用 CI，并在准备目标平台运行时之后执行。本机 macOS 执行 Windows 参数或补丁契约检查时，不能把被跳过的原生控制台、安装器与窗口行为算作通过；Windows 原生验收需要实际 Windows runner 对当前改动执行 CI。
+
+## 安全回归与打包检查
+
+- `pnpm run check:safety`：模拟磁盘写失败、Windows taskkill 非零退出、安装器快速失败、重复退出，以及桥权限与输出脱敏；使用合成凭据。
+- `pnpm run check:browser-admission`：隔离 Electron 实测跨端口请求、目标切换和内存凭据不落 cookie 库。
+- `pnpm run check:connection-controller`：覆盖慢速检测期间出现外部服务，以及停止失败不启动后继。
+- `check:dsh-browser-session` 进入 CI/release 的契约作业；`check:auth-occupancy` 与 `check:browser-admission` 进入应用作业。
+
+CI 与 release 均配置 arm64 和 Intel 的 DMG 安装冒烟。配置了检查不等于已经在对应 runner 验证通过；Windows 仍需确认实际 `.cmd → node` 树终止，以及安装器拒绝／取消／快速退出后的恢复。
+
+`pnpm run pack` / `pnpm run dist` 执行 `package.json` 中列出的打包门禁，不等同于全部 CI。类型、lint、连接集成、更新器和设置集成等仍须通过 CI 对应作业。发布前检查 CI、打包产物和目标平台 smoke，不能只依据本地 dist 成功。
+
+`shot:readme` 直接更新 README 引用的 `docs/images/dsh-desktop-home.png` 与 `dsh-desktop-setting.png`。旧 `shots/10-*` 至 `13-*` 是历史图片；普通 `shot` 的编号不是它们的替换映射。

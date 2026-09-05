@@ -33,6 +33,7 @@ const granted = (permission, overrides = {}) => policy.permissionGrantedForConte
   targetUrl: local,
   requestingUrl: local,
   isMainFrame: true,
+  clientOwned: true,
   ...overrides,
 })
 
@@ -48,6 +49,9 @@ check('localhost and IPv6 loopback receive the same policy',
     targetUrl: 'http://[::1]:3080/',
     requestingUrl: 'http://[::1]:3080/',
   }))
+check('unowned loopback does not acquire device or file permissions',
+  !granted('media', { clientOwned: false }) && !granted('clipboard-read', { clientOwned: false })
+  && !granted('fileSystem', { clientOwned: false }))
 check('loopback voice input is not blocked', granted('media'))
 check('loopback clipboard read is not blocked', granted('clipboard-read'))
 check('loopback file picker survives Chromium non-main-frame reporting', granted('fileSystem', { isMainFrame: false }))

@@ -145,6 +145,91 @@ try {
     assert.equal(controller.probeConnected, kind === 'adopt')
   }
   console.log('✓ survivor adoption/blocking takes precedence over discovery, port allocation and spawn')
+  {
+    const detection = deferred()
+    let occupied = false
+    const { controller, state } = make(({ options, state }) => {
+      state.shared = true
+      options.catalog.detectInstalledDsh = () => detection.promise
+      options.probe.probeSmartTargets = async () => {
+        state.probes++
+        return occupied ? { kind: 'verified', url: 'http://127.0.0.1:3080' } : { kind: 'unavailable' }
+      }
+    })
+    controller.applyConnectionSettings(state.settings)
+    await until(() => state.probes === 1)
+    occupied = true
+    detection.resolve()
+    await until(() => state.errors.length === 1)
+    assert.equal(state.launches.length, 0)
+    assert.equal(state.readyCalls, 0)
+    assert.equal(state.probes, 2)
+  }
+  console.log('✓ an external instance appearing during slow CLI detection blocks the local launch')
+
+  {
+    const { controller, state } = make(({ options }) => {
+      options.probe.probeSmartTargets = async () => ({ kind: 'verified', url: 'http://127.0.0.1:3080' })
+    })
+    controller.applyConnectionSettings(state.settings)
+    await until(() => state.launches.length === 1)
+    state.shared = true
+    assert.equal(await controller.readyForConnection(controller.generation), undefined)
+    assert.equal(state.readyCalls, 0)
+    assert.equal(state.errors.length, 1)
+  }
+  console.log('✓ the last readiness gate also refuses an instance appearing after port selection')
+
+  {
+    const { controller, runtime, state } = make(({ options, state }) => {
+      options.presentation.showLocalRuntimeStartupFailure = () => state.errors.push('stop failed')
+    })
+    runtime.stop = async () => { throw new Error('tree disposal unconfirmed') }
+    controller.applySmartLocalRuntimeChange()
+    await until(() => state.errors.length === 1)
+    assert.equal(state.launches.length, 0)
+    assert.equal(state.readyCalls, 0)
+  }
+  console.log('✓ a failed intentional stop never applies a successor runtime')
+
+  {
+    const { controller, runtime, state } = make(({ options, state }) => {
+      options.presentation.showLocalRuntimeStartupFailure = () => state.errors.push('stop failed')
+    })
+    controller.applyConnectionSettings(state.settings)
+    await until(() => state.launches.length === 1)
+    await controller.readyForConnection(controller.generation)
+    const localTarget = controller.currentTarget()
+    runtime.stop = async () => { throw new Error('tree disposal unconfirmed') }
+    controller.applyConnectionSettings({ connectionMode: 'connect', serverUrl: 'http://127.0.0.1:45681' })
+    await until(() => state.errors.length === 1)
+    assert.equal(controller.currentTarget(), localTarget)
+    assert.equal(state.launches.length, 1)
+  }
+  console.log('✓ a failed stop keeps the managed target instead of applying a pinned successor')
+
+  {
+    let offerSuccessor = false
+    const { controller, runtime, state } = make(({ options, state }) => {
+      options.presentation.showLocalRuntimeStartupFailure = () => state.errors.push('stop failed')
+      options.probe.probeSmartTargets = async () => offerSuccessor
+        ? { kind: 'verified', url: 'http://127.0.0.1:45682' }
+        : { kind: 'unavailable' }
+    })
+    controller.applyConnectionSettings(state.settings)
+    await until(() => state.launches.length === 1)
+    await controller.readyForConnection(controller.generation)
+    const localTarget = controller.currentTarget()
+    state.shared = true
+    offerSuccessor = true
+    runtime.stop = async () => { throw new Error('tree disposal unconfirmed') }
+    controller.applyConnectionSettings(state.settings)
+    await until(() => state.errors.length === 1)
+    assert.equal(controller.currentTarget(), localTarget)
+    assert.equal(controller.probeConnected, false)
+    assert.equal(state.launches.length, 1)
+  }
+  console.log('✓ a failed stop keeps the managed target instead of adopting a probed successor')
 } finally {
   for (const controller of controllers) controller.dispose()
   rmSync(home, { recursive: true, force: true })

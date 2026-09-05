@@ -156,18 +156,18 @@ if (configuredWebPorts('').length !== 0) throw new Error('an empty patch layer p
 console.log('✓ a port pinned in the profile patch layer is read, and non-ports are not')
 
 const origins = webProbeOrigins('http://127.0.0.1:3080', realPatch)
-if (JSON.stringify(origins) !== '["http://127.0.0.1:3080","http://127.0.0.1:31104"]') {
+if (JSON.stringify(origins) !== '["http://127.0.0.1:3080","http://127.0.0.1:13080","http://127.0.0.1:31104"]') {
   throw new Error('probe order must put the default first: ' + JSON.stringify(origins))
 }
 // A patch that restates the default must not make the client probe it twice.
-if (webProbeOrigins('http://127.0.0.1:3080', '    port: 3080\n').length !== 1) {
+if (webProbeOrigins('http://127.0.0.1:3080', '    port: 3080\n').length !== 2) {
   throw new Error('the default origin was queued twice')
 }
 const withPinned = webProbeOrigins('http://127.0.0.1:3080', realPatch, [13080])
 if (JSON.stringify(withPinned) !== '["http://127.0.0.1:3080","http://127.0.0.1:13080","http://127.0.0.1:31104"]') {
   throw new Error('a client-pinned port must sit after the default and before patch ports: ' + JSON.stringify(withPinned))
 }
-if (webProbeOrigins('http://127.0.0.1:3080', '', [3080, 0, 70000]).length !== 1) {
+if (webProbeOrigins('http://127.0.0.1:3080', '', [3080, 0, 70000]).length !== 2) {
   throw new Error('a pinned official/default or invalid extra port was queued')
 }
 console.log('✓ the default origin is probed first and never queued twice')

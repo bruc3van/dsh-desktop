@@ -130,3 +130,13 @@ Existing Electron checks continue to cover connection switching, installed sourc
 `npm run build:shell && npm run check:official-settings` starts the bundled official UI with temporary DSH and Chromium homes, checks Chinese and English mounting, official navigation restoration and reopening, and reports the actual DSH version. It uses no real credentials and sends no model requests. Local coverage on 2026-09-05 was `0.1.2-rc.1`, not a claim about other versions. `check:settings-integration` separately covers structural variants and document teardown/restoration.
 
 The official UI check runs in macOS/Windows application CI after preparing the target runtime. Windows argument/patch checks on macOS do not establish native console, installer or window behavior; native acceptance requires a Windows runner executing CI for these changes.
+
+## Safety regression and packaging checks
+
+`pnpm run check:safety` covers injected lock-write failures, nonzero Windows taskkill exits, early installer failure, repeated quit, bridge trust and framed output redaction using synthetic credentials. `check:browser-admission` uses isolated Electron requests to verify cross-port filtering, target changes and non-persistent native credentials. `check:connection-controller` covers services appearing during CLI detection and refusal to launch after a failed stop.
+
+CI/release contracts include `check:dsh-browser-session`; application jobs include `check:auth-occupancy` and `check:browser-admission`. Both DMG architectures now have CI and release smoke jobs. Workflow configuration is not evidence that a runner has passed: validate Windows wrapper-tree termination and installer refusal/cancellation/early-exit recovery on Windows.
+
+Local `pack` and `dist` run the explicit packaging gates in `package.json`, not all of CI. Typecheck, lint, connection, updater and settings integration still need their corresponding CI jobs. A successful local dist alone is not release verification.
+
+`shot:readme` writes the two image names referenced by both READMEs. The older `shots/10-*` through `13-*` files are historical images, not outputs of the current numbered screenshot sequence.

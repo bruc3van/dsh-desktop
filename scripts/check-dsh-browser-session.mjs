@@ -2,7 +2,7 @@
 
 import { createHash, createHmac } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -129,10 +129,17 @@ for (const invalid of [
 }
 console.log('✓ missing, malformed, and future credential records fail closed')
 
-// Source guard in src/main/web-ui-manager.ts supplements the runtime redaction checks.
-// Keep the exact EOF logging anchor here in sync when moving or renaming the manager.
-const managerSource = await readFile(join(APP_DIR, 'src', 'main', 'web-ui-manager.ts'), 'utf8')
-if (!managerSource.includes('this.options.onLog(sanitizeRuntimeOutput(stdoutBuffer))')) {
-  throw new Error('src/main/web-ui-manager.ts: the final unterminated stdout fragment bypasses credential redaction')
+// Exercise EOF framing through the same reader used by both runtime streams.
+const outputBundle = join(work, 'runtime-output.mjs')
+await esbuild.build({ entryPoints: [join(APP_DIR, 'src/main/runtime-output.ts')], bundle: true,
+  platform: 'node', format: 'esm', outfile: outputBundle, logLevel: 'silent' })
+const { createRuntimeLineReader, sanitizeRuntimeOutput } = await import(pathToFileURL(outputBundle).href)
+const lines = []
+const reader = createRuntimeLineReader(line => lines.push(sanitizeRuntimeOutput(line)))
+reader.write(Buffer.from('token='))
+reader.write(Buffer.from('synthetic-final-fragment'))
+reader.end()
+if (lines.length !== 1 || lines[0].includes('synthetic-final-fragment') || !lines[0].includes('[redacted]')) {
+  throw new Error('the final unterminated runtime fragment bypasses credential redaction')
 }
-console.log('✓ an unterminated final stdout line cannot bypass credential redaction')
+console.log('✓ an unterminated final runtime line cannot bypass credential redaction')

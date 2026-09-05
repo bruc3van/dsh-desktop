@@ -9,7 +9,7 @@ import type { RuntimeSurvivor, SurvivingRuntime } from './runtime-survivor.ts'
 import type { WebUiProbe, WebUiProbeResult } from './web-ui-probe.ts'
 import type { DshCommand } from './runtime-types.ts'
 import { normalizeServerUrl, originIsLoopback, usesConfiguredServer, appOrigin } from './connection-policy.ts'
-import { recordRuntimeLockUrl, runtimeLockFile } from './runtime-lock.ts'
+import { runtimeLockFile } from './runtime-lock.ts'
 import { loopbackPortHeld } from './loopback-port.ts'
 import { devFlag } from './development-options.ts'
 import { smartRuntimeEnabled, normalizeSmartRuntimes, type SmartRuntimeId } from './smart-runtimes.ts'
@@ -172,14 +172,22 @@ export function createConnectionController(options: ConnectionOptions) {
   function connectTo(url: string, force = false): void {
     const generation = ++connectionGeneration
     if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
-    configuredTarget = url
-    probeConnected = false
-    childTarget = undefined
-    // This process will not spawn its bundled runtime; a leftover entry would
-    // hand the next `dsh web` (or a later local spawn) a second Service copy.
-    releaseBundledPluginSeat('connecting to a pinned address')
-    void options.runtime()?.stop()
-    launchWindow(generation, force)
+    void (async () => {
+      try {
+        await options.runtime()?.stop()
+      } catch {
+        if (generation === connectionGeneration && !options.isQuitting()) showLocalRuntimeStartupFailure(null, null)
+        return
+      }
+      if (generation !== connectionGeneration || options.isQuitting()) return
+      configuredTarget = url
+      probeConnected = false
+      childTarget = undefined
+      // This process will not spawn its bundled runtime; a leftover entry would
+      // hand the next `dsh web` (or a later local spawn) a second Service copy.
+      releaseBundledPluginSeat('connecting to a pinned address')
+      launchWindow(generation, force)
+    })()
   }
 
   /** Use the local `dsh web` child (spawned on demand, awaited via readiness). */
@@ -231,7 +239,11 @@ export function createConnectionController(options: ConnectionOptions) {
       showConnectionError({
         kind: 'runtime',
         headline: chinese ? '已有 dsh 运行时占用会话数据' : 'A dsh runtime is already using this session data',
-        detail: chinese
+        detail: survivor.uncertain === true
+          ? (chinese
+            ? '上一次启动或停止未完成，无法确认子进程是否仍在使用会话数据。为避免双写，本次没有启动运行时。请先确认使用该数据目录的 dsh 进程及其子进程均已退出，再删除下方记录并重试。'
+            : 'A previous startup or shutdown did not finish. Runtime ownership is uncertain, so this launch was refused. Confirm that every dsh process and descendant using this data home has exited before removing the record below and retrying.')
+          : chinese
           ? '上一次运行留下的 dsh 运行时（PID ' + pid + '）仍在运行，且既无法连接也无法结束。两个运行时同时写入同一份会话数据会造成永久损坏，因此这次没有启动新的运行时。确认该进程结束后可删除记录文件并重试。'
           : 'A leftover dsh runtime (PID ' + pid + ') is still running and could not be reached or stopped. Starting another writer on the same session data would corrupt it, so this launch was refused. After that process exits, delete the record file and retry.',
         recordPath: runtimeLockFile(childHome()),
@@ -251,10 +263,7 @@ export function createConnectionController(options: ConnectionOptions) {
   /** Restore the retry budget only after one local generation proves stable. */
   function markLocalRuntimeReady(url: string): void {
     childTarget = url
-    // With an origin attached, a survivor of this client can be adopted by the
-    // next start rather than merely detected and killed. Runtime-lock owns the
-    // origin normalization so the readiness token never reaches disk.
-    recordRuntimeLockUrl(childHome(), url, options.runtime()?.pid())
+    // The manager has persisted the credential-free origin before resolving readiness.
     // A first-ever DSH_HOME has no web profile until the child creates it
     // during boot, so the pre-spawn offer is a no-op. Take the seat now so
     // the next start actually loads the plugin (this process will not).
@@ -365,7 +374,10 @@ export function createConnectionController(options: ConnectionOptions) {
     // the strength of it already serving this profile (`reseatForAdoptedRuntime`);
     // only a pinned address leaves the seat released.
     releaseBundledPluginSeat('resolving which runtime will serve')
-    const startLocal = async (skipOccupancy = false): Promise<void> => {
+    const startLocal = async (): Promise<void> => {
+      if (!runtimeCatalog.detectionStarted) updateLoadingStatus('正在检查本机 dsh 运行时…', 'Looking for a dsh runtime on this machine…')
+      await detectInstalledDsh()
+      if (options.isQuitting() || generation !== connectionGeneration) return
       // Reclaim our leftover before occupancy / pinned-port gates. Those gates
       // cannot see the runtime lock, and on a cold start `isOwnManagedOrigin`
       // is always false — a pinned port still held by this client's crash
@@ -374,10 +386,9 @@ export function createConnectionController(options: ConnectionOptions) {
       const survivor = await adoptOrClearSurvivingRuntime()
       if (options.isQuitting() || generation !== connectionGeneration) return
       if (settleSurvivingRuntime(survivor, generation, force)) return
-      // Occupancy is a safety gate, not a connection source. Skip it when the
-      // probe just established the ports are empty, or when tests isolate
-      // DSH_HOME and must not treat this machine's 3080 as a writer on it.
-      if (!skipOccupancy && sharedDshDiscoveryEnabled() && !devFlag('DSH_DESKTOP_SKIP_PROBE')) {
+      // Detection may have taken seconds since the reuse probe. Repeat the
+      // occupancy gate; isolated homes do not share the user's session store.
+      if (sharedDshDiscoveryEnabled() && !devFlag('DSH_DESKTOP_SKIP_PROBE')) {
         configuredTarget = undefined
         probeConnected = false
         if (!presentation.isLoading()) showLoadingDocument()
@@ -402,11 +413,6 @@ export function createConnectionController(options: ConnectionOptions) {
           return
         }
       }
-      if (!runtimeCatalog.detectionStarted) {
-        updateLoadingStatus('正在检查本机 dsh 运行时…', 'Looking for a dsh runtime on this machine…')
-      }
-      await detectInstalledDsh()
-      if (options.isQuitting() || generation !== connectionGeneration) return
       await startLocalRuntime(generation, force)
     }
     // Reclaim before the reuse probe: a leftover on a pinned port still
@@ -423,13 +429,19 @@ export function createConnectionController(options: ConnectionOptions) {
       const probed = await probeSmartTargets()
       if (options.isQuitting() || generation !== connectionGeneration) return
       if (probed.kind === 'verified') {
+        try {
+          await options.runtime()?.stop()
+        } catch {
+          if (generation === connectionGeneration && !options.isQuitting()) showLocalRuntimeStartupFailure(null, null)
+          return
+        }
+        if (options.isQuitting() || generation !== connectionGeneration) return
         configuredTarget = probed.url
         probeConnected = true
         console.log('[desktop] reusing running dsh web: ' + probed.url)
         childTarget = undefined
         probedRecoveryReloads = 0
         reseatForAdoptedRuntime()
-        void options.runtime()?.stop()
         launchWindow(generation, force)
         return
       }
@@ -437,8 +449,8 @@ export function createConnectionController(options: ConnectionOptions) {
         refuseUnauthenticatedProbeTarget(probed.url)
         return
       }
-      await startLocal(true)
-    })()
+      await startLocal()
+    })().catch(() => { showLocalRuntimeStartupFailure(null, null) })
   }
 
   /**
@@ -506,7 +518,13 @@ export function createConnectionController(options: ConnectionOptions) {
     void (async () => {
       try {
         await options.runtime()?.stop()
-      } catch { /* apply anyway: a wedged child must not pin the old source */ }
+      } catch {
+        if (epoch === smartRuntimeApply) {
+          replacingLocalRuntime = false
+          showLocalRuntimeStartupFailure(null, null)
+        }
+        return
+      }
       if (epoch !== smartRuntimeApply) return
       replacingLocalRuntime = false
       applyConnectionSettings(loadSettings(), true)
@@ -544,7 +562,11 @@ export function createConnectionController(options: ConnectionOptions) {
     // port that is still held is the exception: every source would fail the
     // same bind, so walking the ladder only stacks identical errors.
     const recoverFromChildExit = (): void => {
-      // The client-owned plugin is the one boot failure we can remove
+      if (!retryable) {
+      showLocalRuntimeStartupFailure(code, signal)
+      return
+    }
+    // The client-owned plugin is the one boot failure we can remove
       // without touching user state. Retry the SAME source once after a
       // successful withdrawal: rejecting an installed-only source here
       // would overwrite the actionable plugin diagnostic with "no enabled
@@ -636,6 +658,12 @@ export function createConnectionController(options: ConnectionOptions) {
   /** Readiness belongs to the connection intent that requested it. */
   async function readyForConnection(generation: number): Promise<string | undefined> {
     if (generation !== connectionGeneration || options.isQuitting()) return undefined
+    if (options.runtime()?.pid() === undefined && sharedDshDiscoveryEnabled() && !devFlag('DSH_DESKTOP_SKIP_PROBE')) {
+      const occupied = await probeSmartTargets()
+      if (generation !== connectionGeneration || options.isQuitting()) return undefined
+      if (options.runtime()?.pid() === undefined && occupied.kind === 'verified') { refuseOccupiedProbeTarget(occupied.url); return undefined }
+      if (options.runtime()?.pid() === undefined && occupied.kind === 'authentication-required') { refuseUnauthenticatedProbeTarget(occupied.url); return undefined }
+    }
     const url = await options.runtime()?.ready()
     if (url === undefined || generation !== connectionGeneration || options.isQuitting()) return undefined
     console.log('[desktop] dsh runtime ready: ' + appOrigin(url))

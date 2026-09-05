@@ -1,10 +1,11 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { isProcessAlive, type RuntimeLock } from './runtime-lock.ts'
 import { parsePsElapsedSeconds, spawnAgeVerdict } from './runtime-resolution.ts'
-import { killProcessTree } from './process-tree.ts'
+import { readFileSync } from 'node:fs'
+import { killProcessTree, terminateWindowsTree } from './process-tree.ts'
 const SPAWN_NO_WINDOW = { windowsHide: true } as const
-/** A recycled pid can only be this far off the recorded age. */
-const PROCESS_IDENTITY_TOLERANCE_MS = 60_000
+/** Allow rounding only when disproving ownership of a legacy age-only record. */
+const PROCESS_IDENTITY_TOLERANCE_MS = 2_000
 
 /**
  * Terminate a process this client owns but no longer holds a handle to.
@@ -17,7 +18,7 @@ const PROCESS_IDENTITY_TOLERANCE_MS = 60_000
  */
 export async function terminateProcessTree(pid: number): Promise<boolean> {
   if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', ...SPAWN_NO_WINDOW }).on('error', () => { /* already gone */ })
+    if (!await terminateWindowsTree(pid)) return false
   } else {
     try { process.kill(pid, 'SIGTERM') } catch { return !isProcessAlive(pid) }
   }
@@ -34,15 +35,16 @@ export async function terminateProcessTree(pid: number): Promise<boolean> {
 }
 
 /**
- * Whether the pid in a runtime lock still names the child the lock recorded
- * (see spawnAgeVerdict). Liveness alone is not identity: the client may
- * crash, the child die, and the OS hand the pid to any later process —
- * signalling a recycled pid would terminate (on Windows, with its whole
- * tree) an innocent bystander. A record with no usable `startedAt` is
- * unverifiable and reported as such: the caller then refuses both
- * directions instead of guessing.
+ * Compare the OS creation identity captured while this client held the child.
+ * An age-only legacy record can disprove ownership, but cannot authorize a kill.
+ * Missing identity information stays unknown: adopt a reachable service or
+ * refuse to start beside an unreachable process instead of guessing.
  */
 export async function pidVerdictForLockedChild(lock: RuntimeLock): Promise<'recycled' | 'ours' | 'unknown'> {
+  if (lock.processIdentity !== undefined) {
+    const identity = await readProcessIdentity(lock.childPid)
+    return identity === undefined ? 'unknown' : identity === lock.processIdentity ? 'ours' : 'recycled'
+  }
   if (!Number.isSafeInteger(lock.startedAt) || lock.startedAt <= 0) return 'unknown'
   // One retry: a transient ps/powershell failure must not wedge the start
   // behind a refusal it could have resolved.
@@ -52,7 +54,9 @@ export async function pidVerdictForLockedChild(lock: RuntimeLock): Promise<'recy
     age = await readProcessAgeSeconds(lock.childPid)
   }
   if (age === undefined) return 'unknown'
-  return spawnAgeVerdict(age, lock.startedAt, Date.now(), PROCESS_IDENTITY_TOLERANCE_MS)
+  // Old records can disprove ownership, but an approximate age cannot authorize a kill.
+  return spawnAgeVerdict(age, lock.startedAt, Date.now(), PROCESS_IDENTITY_TOLERANCE_MS) === 'recycled'
+    ? 'recycled' : 'unknown'
 }
 
 /** Capture one short command's stdout, bounded, or reject. */
@@ -67,7 +71,7 @@ function runCommandCapture(command: string, args: string[], timeoutMs = 5_000): 
       if (error !== undefined) reject(error)
       else resolve(stdout)
     }
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'], ...SPAWN_NO_WINDOW })
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' }, ...SPAWN_NO_WINDOW })
     const timer = setTimeout(() => { killProcessTree(child); settle(new Error('timed out')) }, timeoutMs)
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString()
@@ -76,6 +80,29 @@ function runCommandCapture(command: string, args: string[], timeoutMs = 5_000): 
     child.once('error', () => { settle(new Error('command failed')) })
     child.once('exit', (code) => { settle(code === 0 ? undefined : new Error('exit ' + String(code))) })
   })
+}
+
+/** Stable OS creation identity; Windows preserves the full FILETIME precision. */
+export async function readProcessIdentity(pid: number): Promise<string | undefined> {
+  try {
+    if (process.platform === 'win32') {
+      const value = (await runCommandCapture('powershell', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        '(Get-Process -Id ' + String(pid) + ' -ErrorAction Stop).StartTime.ToUniversalTime().ToFileTimeUtc().ToString()',
+      ])).trim()
+      return /^\d{15,}$/.test(value) ? 'win32:' + value : undefined
+    }
+    if (process.platform === 'linux') {
+      const stat = readFileSync('/proc/' + String(pid) + '/stat', 'utf8')
+      const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+      const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
+      return ticks === undefined ? undefined : 'linux:' + boot + ':' + ticks
+    }
+    const value = (await runCommandCapture('ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'comm='])).trim()
+    return value === '' ? undefined : process.platform + ':' + value
+  } catch {
+    return undefined
+  }
 }
 
 /** The age of a process in seconds, or undefined when the platform cannot say. */

@@ -1,9 +1,10 @@
 /** Owns one managed child, readiness, output and the serialized stop ladder. */
-import { parseReadiness, appendRuntimeOutputTail, sanitizeRuntimeOutput, runtimeStartupDiagnostic, runtimeDiagnosticSummary } from './runtime-output.ts'
+import { createRuntimeLineReader, parseReadiness, appendRuntimeOutputTail, sanitizeRuntimeOutput, runtimeStartupDiagnostic, runtimeDiagnosticSummary } from './runtime-output.ts'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
-import { clearRuntimeLock, writeRuntimeLock } from './runtime-lock.ts'
-import { killProcessTree } from './process-tree.ts'
+import { clearRuntimeLock, writeRuntimeLock, readRuntimeLock, recordRuntimeLockUrl } from './runtime-lock.ts'
+import { terminateWindowsTree } from './process-tree.ts'
+import { readProcessIdentity } from './runtime-process.ts'
 import { NoEnabledSmartRuntimeError, type DshCommand } from './runtime-types.ts'
 
 const SPAWN_NO_WINDOW = { windowsHide: true } as const
@@ -34,6 +35,7 @@ interface WebUiGeneration {
    * an outcome the client asked for, not a crash — see `reportExit`.
    */
   stopped: boolean
+  stopUnconfirmed?: boolean
 }
 
 /**
@@ -67,7 +69,7 @@ export class WebUiManager {
    * Clearing here lets the next `ready()` try again under the new set.
    */
   clearFatalError(): void {
-    this.fatalError = undefined
+    if (!this.generation?.stopUnconfirmed) this.fatalError = undefined
   }
 
   /** The current generation's readiness, or a fresh spawn when none exists. */
@@ -85,7 +87,7 @@ export class WebUiManager {
   /** The current child's pid, when one is running. */
   pid(): number | undefined {
     const gen = this.generation
-    return gen?.child.pid
+    return gen !== undefined && gen.child.exitCode === null && gen.child.signalCode === null ? gen.child.pid : undefined
   }
 
   spawn(): void {
@@ -98,6 +100,9 @@ export class WebUiManager {
     if (this.fatalError !== undefined || this.generation !== undefined) return
     try {
       mkdirSync(this.options.home(), { recursive: true })
+      writeRuntimeLock(this.options.home(), {
+        childPid: process.pid, desktopPid: process.pid, startedAt: Date.now(), launchPending: true,
+      })
     } catch (error) {
       // The spawn callers above are timers and callbacks: a synchronous throw
       // here would be an uncaught exception in the main process. Route it
@@ -113,9 +118,12 @@ export class WebUiManager {
       return
     }
     let dsh: DshCommand
+    let prepared: ReturnType<WebUiManagerOptions['prepareCommand']>
     try {
       dsh = this.options.resolveCommand()
+      prepared = this.options.prepareCommand(dsh)
     } catch (error) {
+      clearRuntimeLock(this.options.home())
       const failure = error instanceof Error ? error : new Error(String(error))
       this.lastError = failure.message
       this.lastDiagnostic = failure.stack ?? failure.message
@@ -136,7 +144,6 @@ export class WebUiManager {
     this.lastDiagnostic = null
     this.lastSource = dsh.source
     this.lastCommand = dsh
-    const prepared = this.options.prepareCommand(dsh)
     const child = spawn(dsh.command, [...dsh.args, ...prepared.args], {
       cwd: this.options.home(),
       env: prepared.env,
@@ -156,22 +163,41 @@ export class WebUiManager {
     let stdoutTail = ''
     let stderrTail = ''
 
-    // Recorded before readiness, not after: a client killed during the child's
-    // boot still has to leave the pid behind for the next start to reap.
-    if (child.pid !== undefined) {
+    this.generation = gen
+    // Keep the pre-spawn reservation until the child PID has been persisted.
+    const lockReady = (async () => {
+      if (child.pid === undefined) return
       writeRuntimeLock(this.options.home(), {
-        childPid: child.pid,
-        desktopPid: process.pid,
-        startedAt: Date.now(),
-        source: dsh.source,
+        childPid: child.pid, desktopPid: process.pid, startedAt: Date.now(), source: dsh.source,
+      })
+      const identity = await readProcessIdentity(child.pid)
+      if (identity !== undefined && this.generation === gen && !gen.stopped) {
+        const lock = readRuntimeLock(this.options.home())
+        if (lock?.childPid === child.pid) writeRuntimeLock(this.options.home(), { ...lock, processIdentity: identity })
+      }
+    })()
+    let failureReported = false
+    const failClosed = (error: unknown, fatal = true): void => {
+      if (failureReported || exitReported) return
+      failureReported = true
+      const failure = error instanceof Error ? error : new Error(String(error))
+      if (fatal) this.fatalError = failure
+      this.lastError = failure.message
+      this.lastDiagnostic = failure.message
+      rejectReady(failure)
+      void this.stop().catch((stopError: unknown) => {
+        this.lastDiagnostic = failure.message + '\n' + String(stopError)
+      }).finally(() => {
+        this.options.onExit({ wasReady: false, code: null, signal: null, retryable: this.fatalError === undefined })
       })
     }
+    void lockReady.catch(failClosed)
 
     const reportExit = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (exitReported) return
       exitReported = true
       const current = this.generation === gen
-      if (current) {
+      if (current && !gen.stopUnconfirmed) {
         this.generation = undefined
         // Every way this child ends passes through here, so the record never
         // outlives it — except the one case it exists for, where this process
@@ -194,52 +220,44 @@ export class WebUiManager {
       this.options.onExit({ wasReady: gen.readyReported, code, signal, retryable: true })
     }
 
-    // Line framing across chunk boundaries: a readiness line split by the
-    // pipe must not be lost (or misparsed).
-    let stdoutBuffer = ''
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutTail = appendRuntimeOutputTail(stdoutTail, chunk)
-      stdoutBuffer += chunk.toString()
-      const lines = stdoutBuffer.split('\n')
-      stdoutBuffer = lines.pop() ?? ''
-      for (const raw of lines) {
-        // A \r\n child stdout would otherwise carry the \r into every log
-        // line; readiness parsing is unaffected (it trims), this is cosmetic.
-        const line = raw.replace(/\r$/, '')
-        if (line.trim() === '') continue
-        const url = parseReadiness(line)
-        // DSH 0.1.2 readiness carries a process launch token. Parse the raw
-        // value for navigation, but never copy that credential into desktop
-        // diagnostics or a terminal log.
-        this.options.onLog(sanitizeRuntimeOutput(line))
-        if (url !== undefined && !readinessProbeStarted) {
-          readinessProbeStarted = true
-          void this.options.waitForReady(url).then(() => {
-            if (exitReported) return
-            gen.readyReported = true
-            this.lastError = null
-            resolveReady(url)
-          }, (error: unknown) => {
-            if (exitReported) return
-            this.lastError = error instanceof Error ? error.message : String(error)
-            this.lastDiagnostic = error instanceof Error ? error.stack ?? error.message : String(error)
-            rejectReady(error instanceof Error ? error : new Error(String(error)))
-            // Tree-kill, not child.kill(): on Windows the direct child may be
-            // the cmd.exe wrapper around a .cmd shim, and killing it alone
-            // would leave the real server booting (and writing DSH_HOME)
-            // while the retry budget spawns a second one beside it.
-            killProcessTree(child)
-          })
-        }
+    const stdout = createRuntimeLineReader((line) => {
+      if (line.trim() === '') return
+      const url = parseReadiness(line)
+      const sanitized = sanitizeRuntimeOutput(line)
+      stdoutTail = appendRuntimeOutputTail(stdoutTail, Buffer.from(sanitized + '\n'))
+      this.options.onLog(sanitized)
+      if (url !== undefined && !readinessProbeStarted) {
+        readinessProbeStarted = true
+        void lockReady.then(() => {
+          if (!exitReported && !gen.stopped) return this.options.waitForReady(url)
+        }).then(() => {
+          if (exitReported || gen.stopped) return
+          try {
+            if (readRuntimeLock(this.options.home())?.childPid !== child.pid) throw new Error('Runtime ownership record was lost before readiness')
+            recordRuntimeLockUrl(this.options.home(), url, child.pid)
+          } catch (error) {
+            failClosed(error)
+            return
+          }
+          gen.readyReported = true
+          this.lastError = null
+          resolveReady(url)
+        }).catch((error: unknown) => { failClosed(error, false) })
       }
     })
-    child.on('close', () => {
-      if (stdoutBuffer.trim() !== '') this.options.onLog(sanitizeRuntimeOutput(stdoutBuffer))
+    const stderr = createRuntimeLineReader((line) => {
+      if (line.trim() === '') return
+      const sanitized = sanitizeRuntimeOutput(line)
+      stderrTail = appendRuntimeOutputTail(stderrTail, Buffer.from(sanitized + '\n'))
+      process.stderr.write('[dsh web] ' + sanitized + '\n')
+    })
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout.write(chunk)
     })
     child.stderr.on('data', (chunk: Buffer) => {
-      stderrTail = appendRuntimeOutputTail(stderrTail, chunk)
-      process.stderr.write('[dsh web] ' + chunk.toString())
+      stderr.write(chunk)
     })
+    child.on('close', () => { stdout.end(); stderr.end() })
     child.on('error', (error) => {
       this.lastError = error.message
       this.lastDiagnostic = error.stack ?? error.message
@@ -252,6 +270,8 @@ export class WebUiManager {
       }
     })
     child.on('exit', (code, signal) => {
+      stdout.end()
+      stderr.end()
       if (!gen.readyReported) {
         const diagnostic = runtimeStartupDiagnostic(stderrTail, stdoutTail)
         if (diagnostic !== undefined) {
@@ -264,7 +284,6 @@ export class WebUiManager {
       rejectReady(new Error('dsh web exited before ready (code=' + String(code) + ')'))
       reportExit(code, signal)
     })
-    this.generation = gen
   }
 
   /**
@@ -275,45 +294,67 @@ export class WebUiManager {
   async stop(): Promise<void> {
     if (this.stopping !== undefined) return this.stopping
     const gen = this.generation
-    if (gen === undefined || gen.child.exitCode !== null) return
+    if (gen === undefined) return
+    if (gen.stopUnconfirmed && (gen.child.exitCode !== null || gen.child.signalCode !== null)) {
+      throw new Error('Runtime tree disposal is unconfirmed; restart is blocked')
+    }
     // Before the first kill, not after the ladder: both rungs below can resolve
     // on their 3s timeout with the child still alive, and the exit that finally
     // arrives has to find this already set.
     gen.stopped = true
     const stopping = (async (): Promise<void> => {
-      if (process.platform === 'win32') {
-        const pid = gen.child.pid
-        if (pid === undefined) return
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(() => {
-            // taskkill never reported the tree gone; take the direct child at
-            // least, so a wedged runtime cannot hold the client open.
-            gen.child.kill()
-            resolve()
-          }, 3000)
-          gen.child.once('exit', () => { clearTimeout(timer); resolve() })
-          // Kill the tree BEFORE the direct child, never after. Signals cannot
-          // be caught on Windows, and every descendant — the harness's shell
-          // children, and the cmd.exe wrapper a user-installed `.cmd` shim is
-          // spawned through — is reachable only by walking down from a parent
-          // that is still alive. Terminating the parent first orphans the real
-          // server, which then keeps its port with nothing left to find it by.
-          spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', ...SPAWN_NO_WINDOW })
-            .on('error', () => { gen.child.kill() })
+      const pid = gen.child.pid
+      if (pid === undefined) return
+      gen.stopUnconfirmed = true
+      // Preserve uncertainty across a crash during tree disposal, even if the
+      // direct child exits before taskkill reports what happened to descendants.
+      const lock = readRuntimeLock(this.options.home())
+      try {
+        writeRuntimeLock(this.options.home(), {
+          childPid: pid, desktopPid: process.pid, startedAt: Date.now(), ...lock, launchPending: true,
         })
-        return
+      } catch (error) {
+        // A pre-spawn reservation already covers failure to persist the child.
+        if (lock?.launchPending !== true) throw error
       }
-      gen.child.kill('SIGTERM')
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => { gen.child.kill('SIGKILL'); resolve() }, 3000)
-        gen.child.once('exit', () => { clearTimeout(timer); resolve() })
-      })
+      if (process.platform === 'win32') {
+        if (!await terminateWindowsTree(pid)) throw new Error('Could not stop the runtime process tree; restart is blocked')
+      } else {
+        gen.child.kill('SIGTERM')
+        if (!await waitForExit(gen.child, 3000)) {
+          gen.child.kill('SIGKILL')
+          if (!await waitForExit(gen.child, 1000)) throw new Error('Could not confirm runtime exit; restart is blocked')
+        }
+      }
+      if (!await waitForExit(gen.child, 1000)) throw new Error('Runtime still running after tree termination')
+      gen.stopUnconfirmed = false
+      if (this.generation === gen) this.generation = undefined
+      clearRuntimeLock(this.options.home())
     })()
     this.stopping = stopping
     try {
       await stopping
+    } catch (error) {
+      this.fatalError = error instanceof Error ? error : new Error(String(error))
+      this.lastError = this.fatalError.message
+      this.lastDiagnostic = this.fatalError.message
+      throw this.fatalError
     } finally {
       if (this.stopping === stopping) this.stopping = undefined
     }
   }
+}
+
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const finish = (exited: boolean): void => {
+      clearTimeout(timer)
+      child.removeListener('exit', onExit)
+      resolve(exited)
+    }
+    const onExit = (): void => { finish(true) }
+    const timer = setTimeout(() => { finish(false) }, timeoutMs)
+    child.once('exit', onExit)
+  })
 }

@@ -1,7 +1,7 @@
 /** API verification and native browser admission; never decides to spawn. */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, net, session } from 'electron'
+import { app, net } from 'electron'
 import { WEB_PROFILE } from './bundled-plugin.ts'
 import { webProbeOrigins } from './web-discovery.ts'
 import { createDshBrowserSessionCookie } from './dsh-browser-session.ts'
@@ -107,20 +107,6 @@ export function createWebUiProbe(options: { childHome(): string; configuredLocal
       const nativeCookie = originIsLoopback(origin)
         ? createDshBrowserSessionCookie(childHome(), origin)
         : undefined
-      if (nativeCookie !== undefined && app.isReady()) {
-        // Loopback probes use Node fetch and authenticate through the explicit
-        // Cookie header below. This copy belongs to Chromium: it admits the
-        // official Web UI loaded by the main window at the same origin.
-        await session.defaultSession.cookies.set({
-          url: origin,
-          name: nativeCookie.name,
-          value: nativeCookie.value,
-          path: '/',
-          httpOnly: true,
-          sameSite: 'strict',
-          expirationDate: nativeCookie.expiresAt / 1000,
-        })
-      }
       const headers = {
         'content-type': 'application/json',
         ...nativeCookie !== undefined && { cookie: nativeCookie.header },

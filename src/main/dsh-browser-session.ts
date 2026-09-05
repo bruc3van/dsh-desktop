@@ -104,7 +104,7 @@ function loopbackAuthority(base: string): string | undefined {
  * Mint the same signed cookie DSH accepts, limited to one loopback authority
  * and one day. The lifetime stays below the official 30-day default, remains
  * valid across an ordinary long-running desktop session, and is refreshed by
- * the reused-instance health probe while its window is visible.
+ * browser admission when requests approach expiry.
  */
 export function createDshBrowserSessionCookie(
   dshHome: string,

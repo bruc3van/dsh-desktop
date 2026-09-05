@@ -1,4 +1,39 @@
+import { StringDecoder } from 'node:string_decoder'
+
 const RUNTIME_OUTPUT_TAIL_LIMIT = 8_192
+
+/** Frame both streams before redaction. Oversized lines are omitted in full. */
+export function createRuntimeLineReader(onLine: (line: string) => void, limit = 65_536) {
+  const decoder = new StringDecoder('utf8')
+  let pending = ''
+  let dropping = false
+  function accept(text: string): void {
+    const parts = text.split('\n')
+    for (let index = 0; index < parts.length; index++) {
+      const part = parts[index] ?? ''
+      if (!dropping) {
+        if (pending.length + part.length > limit) {
+          pending = ''
+          dropping = true
+          onLine('[runtime output line omitted: exceeds limit]')
+        } else pending += part
+      }
+      if (index < parts.length - 1) {
+        if (!dropping) onLine(pending.replace(/\r$/, ''))
+        pending = ''
+        dropping = false
+      }
+    }
+  }
+  return {
+    write(chunk: Buffer): void { accept(decoder.write(chunk)) },
+    end(): void {
+      accept(decoder.end())
+      if (!dropping && pending !== '') onLine(pending)
+      pending = ''
+    },
+  }
+}
 const ANSI_CSI_PATTERN = new RegExp(String.fromCharCode(27) + '\\[[0-?]*[ -/]*[@-~]', 'g')
 
 /**

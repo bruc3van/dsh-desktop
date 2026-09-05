@@ -61,6 +61,8 @@ export function webProbeOrigins(
     const candidate = 'http://127.0.0.1:' + String(port)
     if (!origins.includes(candidate)) origins.push(candidate)
   }
+  // Automatic fallback survivors must remain discoverable even without a lock.
+  add(13080)
   for (const port of extraPorts) add(port)
   for (const port of configuredWebPorts(patchSource)) add(port)
   return origins

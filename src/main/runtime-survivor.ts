@@ -1,5 +1,5 @@
 /** Adopts or reaps only a runtime whose persisted ownership can be verified. */
-import { clearRuntimeLock, readRuntimeLock, isProcessAlive, restartDisposition, type PidVerdict } from './runtime-lock.ts'
+import { clearRuntimeLock, readRuntimeLock, isProcessAlive, restartDisposition, writeRuntimeLock, type RuntimeLock, type PidVerdict } from './runtime-lock.ts'
 import { adoptableUnderSmartRuntimes, type SmartRuntimeId } from './smart-runtimes.ts'
 import { appOrigin } from './connection-policy.ts'
 import { terminateProcessTree, pidVerdictForLockedChild } from './runtime-process.ts'
@@ -24,7 +24,7 @@ import { terminateProcessTree, pidVerdictForLockedChild } from './runtime-proces
 export type SurvivingRuntime =
   | { kind: 'spawn' }
   | { kind: 'adopt'; url: string }
-  | { kind: 'blocked'; pid: number }
+  | { kind: 'blocked'; pid: number; uncertain?: boolean }
 interface SurvivorOptions {
   childHome(): string
   managedPid(): number | undefined
@@ -34,10 +34,17 @@ interface SurvivorOptions {
 }
 export function createRuntimeSurvivor(options: SurvivorOptions) {
   const { childHome, managedPid, enabledSmartRuntimes, probeWebUi, connection } = options
+  async function stopRecordedRuntime(lock: RuntimeLock): Promise<boolean> {
+    writeRuntimeLock(childHome(), { ...lock, launchPending: true })
+    return await terminateProcessTree(lock.childPid)
+  }
   async function adoptOrClearSurvivingRuntime(): Promise<SurvivingRuntime> {
     const home = childHome()
     const lock = readRuntimeLock(home)
     if (lock === undefined) return { kind: 'spawn' }
+    // A crash between reservation and recording the child leaves its PID unknown.
+    // Never reinterpret that uncertainty as an empty data home.
+    if (lock.launchPending === true) return { kind: 'blocked', pid: lock.childPid, uncertain: true }
     // The record describes the child this manager is already running: there is
     // no survivor here, only ourselves, and adopting it would stop it.
     if (managedPid() === lock.childPid) return { kind: 'spawn' }
@@ -74,13 +81,13 @@ export function createRuntimeSurvivor(options: SurvivorOptions) {
         console.warn('[desktop] a runtime from a previous run (PID ' + String(lock.childPid) + ') is '
           + (serving === undefined ? 'alive but not serving' : 'serving from a source that is no longer enabled')
           + '; stopping it rather than writing ' + home + ' beside it')
-        if (await terminateProcessTree(lock.childPid)) {
+        if (await stopRecordedRuntime(lock)) {
           clearRuntimeLock(home)
           return { kind: 'spawn' }
         }
         // The record stays on a failed kill. Clearing it would let the next start
         // spawn beside a writer this one already knows it could not stop.
-        return adoptAnyway('it could not be stopped') ?? { kind: 'blocked', pid: lock.childPid }
+        return { kind: 'blocked', pid: lock.childPid, uncertain: true }
       }
       // The recorded child is gone and its pid has been recycled by an
       // unrelated process: the record is stale, and that process must not be
@@ -127,7 +134,7 @@ export function createRuntimeSurvivor(options: SurvivorOptions) {
     console.warn('[desktop] restart: stopping the adopted runtime (PID ' + String(lock.childPid) + ')')
     // The record stays on a failed kill, for the reason the adoption path
     // documents: the next start must not spawn beside a writer nobody stopped.
-    if (await terminateProcessTree(lock.childPid)) clearRuntimeLock(home)
+    if (await stopRecordedRuntime(lock)) clearRuntimeLock(home)
   }
 
   return { adoptOrClearSurvivingRuntime, stopAdoptedRuntimeForRestart }

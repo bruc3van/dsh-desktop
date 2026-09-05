@@ -144,7 +144,7 @@ export function createUpdateController(services: Options) {
    */
   function updateStateForCaller(state: UpdateState, remote: boolean): UpdateState {
     if (!remote || state.error === null) return state
-    return { ...state, error: null }
+    return { ...state, error: localeChinese() ? '更新失败，请在桌面设置中查看详情' : 'Update failed. Open desktop settings for details.' }
   }
 
 
@@ -390,6 +390,7 @@ export function createUpdateController(services: Options) {
       if (code !== null && code !== 0) {
         console.warn('[desktop] the Windows installer exited early with code ' + String(code) + '; restoring the local runtime')
         installerHandoff = false
+        desktopUpdater?.recoverInstallerFailure(code)
         launchWindow()
         return
       }
