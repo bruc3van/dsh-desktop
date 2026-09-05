@@ -532,6 +532,13 @@ try {
 // 3080, then fails after announcing its diagnostic. If another process takes
 // 3080 before the source fallback, the fallback must reselect 13080 rather than
 // reusing the stale bind.
+// Another local task may legitimately own the fallback port. Do not stop it:
+// verify the OS-assigned rung instead, while keeping the same retry boundary.
+const secondaryAllocator = createServer()
+const secondaryAvailable = await new Promise((resolve, reject) => {
+  secondaryAllocator.once('error', error => error.code === 'EADDRINUSE' ? resolve(false) : reject(error))
+  secondaryAllocator.listen(13080, '127.0.0.1', () => secondaryAllocator.close(() => resolve(true)))
+})
 const retryTakeover = createServer((_req, res) => { res.end('occupied during retry') })
 try {
   app = await openApp('automatic-retry-port', {
@@ -550,8 +557,13 @@ try {
   })
   const fallback = await waitForStatus(app,
     s => s.runtimeSource === 'bundled' && s.targetUrl !== '', 60_000)
-  check('an automatic source fallback reselects 13080 when 3080 becomes occupied',
-    new URL(fallback.targetUrl).origin === 'http://127.0.0.1:13080', fallback.targetUrl)
+  const fallbackOrigin = new URL(fallback.targetUrl).origin
+  check('an automatic source fallback reselects an available port when 3080 becomes occupied',
+    secondaryAvailable
+      ? fallbackOrigin === 'http://127.0.0.1:13080'
+      : !['3080', '13080', '0', ''].includes(new URL(fallbackOrigin).port)
+        && record.text().includes('automatic local web port: OS-assigned'),
+    fallbackOrigin + (secondaryAvailable ? '' : ' (13080 already occupied)'))
 } finally {
   await closeApp(app)
   await new Promise(resolve => retryTakeover.close(resolve))

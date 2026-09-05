@@ -125,12 +125,14 @@ equal('an out-of-range port falls back to random rather than handing commander j
 equal('a negative port falls back to random',
   webSpawnArgs(-1, true), ['web', '--port', '0', '--no-open'])
 
-console.log('\n# startup order: runtime lock before occupancy and reuse probe')
-const indexSource = readFileSync(join(APP_DIR, 'src', 'main', 'index.ts'), 'utf8')
-const startLocalAt = indexSource.indexOf('const startLocal = async')
-const startLocalEnd = indexSource.indexOf('await startLocalRuntime(generation, force)', startLocalAt)
+// Layout-sensitive guards supplement check:connection-controller and the live
+// installed-runtime checks. Missing anchors deliberately fail the assertions.
+console.log('\n# src/main/connection-controller.ts: startup order')
+const connectionSource = readFileSync(join(APP_DIR, 'src', 'main', 'connection-controller.ts'), 'utf8')
+const startLocalAt = connectionSource.indexOf('const startLocal = async')
+const startLocalEnd = connectionSource.indexOf('await startLocalRuntime(generation, force)', startLocalAt)
 const startLocalBody = startLocalAt >= 0 && startLocalEnd > startLocalAt
-  ? indexSource.slice(startLocalAt, startLocalEnd)
+  ? connectionSource.slice(startLocalAt, startLocalEnd)
   : ''
 const adoptAt = startLocalBody.indexOf('adoptOrClearSurvivingRuntime')
 const pinnedFailAt = startLocalBody.indexOf('showPinnedPortStartupFailure')
@@ -140,18 +142,18 @@ check('startLocal reclaims a leftover before refusing a pinned port',
     : pinnedFailAt < 0 ? 'showPinnedPortStartupFailure missing from startLocal'
     : pinnedFailAt <= adoptAt ? 'pinned-port refusal ran before the runtime lock'
     : undefined)
-const startRuntimeAt = indexSource.indexOf('async function startLocalRuntime')
-const startRuntimeEnd = indexSource.indexOf('function settleSurvivingRuntime', startRuntimeAt)
+const startRuntimeAt = connectionSource.indexOf('async function startLocalRuntime')
+const startRuntimeEnd = connectionSource.indexOf('function settleSurvivingRuntime', startRuntimeAt)
 const startRuntimeBody = startRuntimeAt >= 0 && startRuntimeEnd > startRuntimeAt
-  ? indexSource.slice(startRuntimeAt, startRuntimeEnd)
+  ? connectionSource.slice(startRuntimeAt, startRuntimeEnd)
   : ''
 const prepareAt = startRuntimeBody.indexOf('prepareLocalWebPort()')
 check('startLocal resolves the automatic port before launching a local runtime',
   prepareAt >= 0,
   prepareAt < 0 ? 'prepareLocalWebPort missing from local startup' : undefined)
-const reuseProbeAt = indexSource.indexOf('probeSmartTargets()', startLocalEnd)
+const reuseProbeAt = connectionSource.indexOf('probeSmartTargets()', startLocalEnd)
 const beforeReuseProbe = startLocalEnd >= 0 && reuseProbeAt > startLocalEnd
-  ? indexSource.slice(startLocalEnd, reuseProbeAt)
+  ? connectionSource.slice(startLocalEnd, reuseProbeAt)
   : ''
 check('resolveRuntime reclaims a leftover before the reuse probe',
   beforeReuseProbe.includes('adoptOrClearSurvivingRuntime'),
@@ -159,11 +161,12 @@ check('resolveRuntime reclaims a leftover before the reuse probe',
     ? undefined
     : 'reuse probe still ran without a runtime-lock pass in between')
 
-console.log('\n# save/startup race guards')
-const requestSaveAt = indexSource.indexOf('async function requestLocalWebPortSave')
-const requestSaveEnd = indexSource.indexOf('function isSmartProbeEquivalent', requestSaveAt)
+console.log('\n# src/main/settings-commands.ts: save/startup race guards')
+const commandsSource = readFileSync(join(APP_DIR, 'src/main/settings-commands.ts'), 'utf8')
+const requestSaveAt = commandsSource.indexOf('async function requestLocalWebPortSave')
+const requestSaveEnd = commandsSource.indexOf('function isSmartProbeEquivalent', requestSaveAt)
 const requestSaveBody = requestSaveAt >= 0 && requestSaveEnd > requestSaveAt
-  ? indexSource.slice(requestSaveAt, requestSaveEnd)
+  ? commandsSource.slice(requestSaveAt, requestSaveEnd)
   : ''
 const epochClaimAt = requestSaveBody.indexOf('const epoch = ++localWebPortSaveEpoch')
 const confirmationAt = requestSaveBody.indexOf('confirmSensitiveAction')
@@ -175,20 +178,20 @@ check('a port request claims its epoch before any confirmation dialog',
     : persistAt < 0 ? 'the claimed epoch is not passed to persistence'
     : undefined)
 
-const exitHandlerAt = indexSource.indexOf('const recoverFromChildExit = (): void =>')
-const pinnedGateAt = indexSource.indexOf("if (pinned > 0 && webUi?.lastSource !== undefined)", exitHandlerAt)
-const heldProbeAt = indexSource.indexOf('loopbackPortHeld(pinned)', pinnedGateAt)
+const exitHandlerAt = connectionSource.indexOf('const recoverFromChildExit = (): void =>')
+const pinnedGateAt = connectionSource.indexOf("if (pinned > 0 && options.runtime()?.lastSource !== undefined)", exitHandlerAt)
+const heldProbeAt = connectionSource.indexOf('loopbackPortHeld(pinned)', pinnedGateAt)
 check('a pre-spawn resolution failure bypasses the pinned-port occupancy message',
   exitHandlerAt >= 0 && pinnedGateAt > exitHandlerAt && heldProbeAt > pinnedGateAt,
   pinnedGateAt < 0 ? 'the failed-spawn port gate does not require a selected source'
     : heldProbeAt < 0 ? 'the guarded occupancy probe is missing'
     : undefined)
-const retryPortSelections = indexSource.match(/respawnLocalRuntime\(generation\)/g)?.length ?? 0
+const retryPortSelections = connectionSource.match(/respawnLocalRuntime\(generation\)/g)?.length ?? 0
 check('every retry and source fallback re-resolves automatic mode',
   retryPortSelections === 3,
   String(retryPortSelections) + ' retry path(s) use respawnLocalRuntime; expected 3')
 
-console.log('\n# override version: official manifest only, --version first')
+console.log('\n# src/main/runtime-catalog.ts: override version')
 const officialBinOutfile = join(outDir, 'official-dsh-bin.mjs')
 await esbuild.build({
   entryPoints: [join(APP_DIR, 'src', 'main', 'official-dsh-bin.ts')],
@@ -232,10 +235,11 @@ writeFileSync(join(impostorRoot, 'lib', 'bin.js'), '')
 equal('lib/bin.js with the wrong package name is not a dsh version',
   officialDshPackageVersion(join(impostorRoot, 'lib', 'bin.js')), undefined)
 
-const resolveAt = indexSource.indexOf('function resolveDshCommand')
-const resolveEnd = indexSource.indexOf('const enabled = enabledSmartRuntimes()', resolveAt)
+const catalogSource = readFileSync(join(APP_DIR, 'src', 'main', 'runtime-catalog.ts'), 'utf8')
+const resolveAt = catalogSource.indexOf('function resolveDshCommand')
+const resolveEnd = catalogSource.indexOf('const enabled = enabledSmartRuntimes()', resolveAt)
 const resolveBody = resolveAt >= 0 && resolveEnd > resolveAt
-  ? indexSource.slice(resolveAt, resolveEnd)
+  ? catalogSource.slice(resolveAt, resolveEnd)
   : ''
 const jsVersionAt = resolveBody.indexOf('readCommandVersionSync(command, [explicit])')
 const jsManifestAt = resolveBody.indexOf('officialDshPackageVersion(explicit)')
@@ -251,7 +255,7 @@ check('a .cmd/exe override prefers --version over the official manifest',
   cmdVersionAt < 0 ? 'readCommandVersionSync missing from the .cmd/exe override'
     : undefined)
 check('override version no longer reads any nearby package.json',
-  !indexSource.includes('dshPackageVersionNearBin'))
+  !catalogSource.includes('dshPackageVersionNearBin'))
 
 if (failures.length > 0) {
   console.error('\n' + String(failures.length) + ' check(s) failed')

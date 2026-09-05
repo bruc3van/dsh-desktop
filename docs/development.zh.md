@@ -90,3 +90,43 @@ Linux 安装包暂不在自动发布范围内；源码中的通用平台兼容�
 桌面外壳、智能/固定地址模式、共享 `DSH_HOME`、托盘常驻、运行时监护、应用内在线更新、系统通知权限、内置官方 `@deepseek-ai/dsh`、内置安全市场（先审查、再安装，随安装包发布）、macOS/Windows 打包和 tag 自动发布流程均已实现；同一 `DSH_HOME` 下有运行时锁定与遗留进程接管，智能模式会一并探测 profile 补丁层配置的端口。发布流水线会在空 PATH 下启动打包应用并探测 Web UI，阻止遗漏内置运行时的产物发布。当前自动产物尚无正式代码签名：Windows/Linux 使用原生通知，macOS 则将 Web Notification 降级为 Dock 角标、弹跳和应用内提醒；正式签名仍是面向普通用户无警告安装及使用 macOS 通知中心的前置条件。OS Keychain 与语音输入也属于后续工作，见 [TODO](../TODO.md)。
 
 欢迎提交贡献与问题反馈，尤其是 Windows 使用、固定地址连接和打包方面的反馈。
+
+## 桌面设置与页面模块
+
+`src/main/pages/` 存放加载、错误、设置、更新提示和通知页的纯渲染函数，以及设置页脚本。语言、图标和动态文案由主进程传入；窗口生命周期、文件读取与调用方校验留在主进程。
+
+`src/main/settings-adapter.ts` 集中管理官方设置 DOM 的只读探测。注入诊断区分 `absent`（未发现可识别弹窗）、`mounted`（入口已挂载）与 `unsupported`（已识别弹窗但结构不支持）。后者会撤销注入产生的导航和显示状态，同一文档内每种失败原因仅告警一次。主进程状态接口的 `settingsIntegration` 字段提供诊断，不包含页面文本、地址或密钥。无法识别的全新弹窗仍可能显示为 `absent`，此字段不用于判断上游版本兼容性。
+
+运行 `npm run build:shell && npm run check:settings-integration`，用隔离的 Electron 实例验证结构变更、清理、重新挂载、原生设置入口和安全市场持久化。该检查已加入 macOS/Windows CI；模拟页面不代替实际官方 Web UI 的版本兼容验证。
+
+## 运行时与连接边界
+
+入口文件组装服务并保留启动、退出和跨模块协调。运行时状态由下列模块分别维护；模块之间传递操作与只读查询，不传递一个可任意修改的应用状态对象。
+
+| 模块 | 负责的状态和操作 |
+|---|---|
+| `client-settings.ts` | 客户端设置的读取、字段合并与原子写入 |
+| `runtime-environment.ts` | 内置程序路径、命令 shim、登录 shell 的 PATH，以及 shim 初始化缓存 |
+| `runtime-catalog.ts` | PATH/npx/内置/开发覆盖命令选择、版本发现缓存和本次会话的来源拒绝状态 |
+| `web-ui-manager.ts` | 当前子进程代际、就绪 Promise、输出诊断和串行停止流程 |
+| `web-ui-probe.ts`、`loopback-port.ts` | Web UI API 验证、浏览器会话准入和可用端口探测，不启动进程 |
+| `runtime-survivor.ts`、`runtime-process.ts` | 遗留进程的身份核对、接管和停止，以及异常退出时的同步清理 |
+| `connection-controller.ts` | 连接代际、当前目标、每次启动的端口选择、主动替换、来源回退和重试预算 |
+
+`connection-controller` 对窗口层提供只读状态和显式操作。异步探测与就绪结果仍须匹配发起时的连接代际；退出状态由应用层提供。初次启动和三条重试路径（内置插件撤回、来源失败、崩溃重启）都会重新选择自动端口。窗口层通过 `readyForConnection()` 等待就绪，不直接发布子进程的目标地址。
+
+`npm run check:connection-controller` 验证延迟端口探测、过期就绪、并发主动停止、三条重试路径和遗留进程优先级。`npm run check:runtime-survivor` 启动隔离的真实子进程，验证无归属记录和已复用 PID 不会被结束、可用遗留进程会被接管、重启会停止经核实归属的进程。两项检查均接入 CI。
+
+已有的 Electron 检查继续覆盖连接切换、已安装来源、自动回退、认证占用及插件恢复。自动端口回退检查允许本机其他程序占用 13080：空闲时验证回退至 13080，已占用时验证系统分配端口；测试不会为了固定端口而停止其他程序。
+
+`settings-server.ts` 拥有私有路径、监听端口和 HTTP 路由；设置校验、确认弹窗和业务操作通过回调接入。`native-menus.ts` 根据语言、更新状态和操作回调生成菜单模板。`npm run check:settings-server` 通过实际 HTTP 请求验证 Host/私有路径、请求体上限、设置写入结果和更新器就绪状态，不读取真实用户配置。
+
+## Preload 与主进程业务模块
+
+`preload.ts` 只初始化桥接和文档功能。`preload/bridge.ts` 提供固定 IPC 接口；`theme.ts` 负责主题观察；`settings-observer.ts` 协调探测和诊断；`settings-navigation.ts` 管理官方导航的临时显示状态；连接卡片、更新卡片和 API Key 帮助分别位于独立模块。`pagehide` 会取消帧回调、观察器、定时器和 IPC 订阅，并恢复官方导航；从后退缓存恢复时重新挂载。
+
+主进程的 `settings-commands.ts` 拥有保存队列、端口保存代际和数据环境重启状态；`plugin-recovery-controller.ts` 拥有兼容恢复防重入状态；`update-controller.ts` 负责更新交互、调度和安装器交接。`desktop-ipc.ts` 注册业务频道，`bridge-policy.ts` 核对调用窗口、顶层 frame、当前 origin 和本地交接窗口。`main-window.ts` 创建窗口并绑定导航和 renderer 事件；`window-health.ts` 管理空白窗口恢复；`window-theme.ts` 管理窗口主题；`locale-controller.ts` 跟踪本地语言设置。业务模块通过操作回调和实时查询协作，跨模块查询不得在初始化时缓存可变状态。
+
+`npm run build:shell && npm run check:official-settings` 启动临时 DSH_HOME 和 Chromium 配置中的内置官方 UI，分别验证中文和英文的注入、官方导航恢复及重开，输出实际 DSH 版本。测试不使用真实凭据、不发送模型请求。2026-09-05 本机覆盖版本为 `0.1.2-rc.1`；这不代表其他版本也已验证。结构变体和文档销毁/恢复另由 `check:settings-integration` 覆盖。
+
+官方 UI 检查已接入 macOS/Windows 应用 CI，并在准备目标平台运行时之后执行。本机 macOS 执行 Windows 参数或补丁契约检查时，不能把被跳过的原生控制台、安装器与窗口行为算作通过；Windows 原生验收需要实际 Windows runner 对当前改动执行 CI。

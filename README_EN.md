@@ -101,6 +101,8 @@ Smart mode uses only what **already exists** on your machine — a `dsh` on PATH
 
 Connection settings split **Smart** and **Custom**: Smart shows only the four sources, and toggling them takes effect immediately; the address field and **Save and connect** appear after you choose Custom. Choosing **Smart** switches back immediately — the address stays stored.
 
+Open **Desktop settings…** from the tray menu or the macOS application menu. In the main window, use `Cmd+,` on macOS or `Ctrl+,` on Windows/Linux. This independent window includes connection, runtime sources, port, data environment, safe marketplace, and updates, and remains available when the injected entry in the official settings dialog cannot be used.
+
 ![Desktop settings inside the official settings dialog: the live connection and the four source toggles, the Safe Market switch, and both version numbers](docs/images/dsh-desktop-setting.png)
 
 Connection status is described by **who started the runtime**, so "local" and "bundled" no longer overlap:

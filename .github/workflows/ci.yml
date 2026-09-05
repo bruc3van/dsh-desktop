@@ -58,6 +58,9 @@ jobs:
       - name: 校验客户端身份指纹 / Verify client identity fingerprint
         run: pnpm run check:identity
 
+      - name: 校验客户端设置读取诊断 / Verify settings read diagnostics
+        run: pnpm run check:client-settings
+
       - name: 校验 Web UI 权限策略 / Verify Web UI permission policy
         run: pnpm run check:permissions
 
@@ -169,6 +172,26 @@ jobs:
       - name: 验证连接切换与跳转围堵 / Verify connection switching and redirect containment
         if: ${{ !cancelled() }}
         run: pnpm run check:connection
+
+      - name: 验证遗留进程接管与停止 / Verify survivor adoption and stop
+        if: ${{ !cancelled() }}
+        run: pnpm run check:runtime-survivor
+
+      - name: 验证连接协调器 / Verify connection controller
+        if: ${{ !cancelled() }}
+        run: pnpm run check:connection-controller
+
+      - name: 验证设置 HTTP 服务 / Verify settings HTTP transport
+        if: ${{ !cancelled() }}
+        run: pnpm run check:settings-server
+
+      - name: 验证内置官方设置界面 / Verify bundled official settings UI
+        if: ${{ !cancelled() }}
+        run: pnpm run check:official-settings
+
+      - name: 验证桌面设置降级 / Verify desktop settings fallback
+        if: ${{ !cancelled() }}
+        run: pnpm run check:settings-integration
 
       - name: 验证已安装运行时解析 / Verify installed-runtime resolution
         if: ${{ !cancelled() }}

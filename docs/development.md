@@ -90,3 +90,43 @@ After every platform succeeds, the workflow generates SHA-256 checksums and `lat
 The desktop shell, Smart/Pinned address modes, shared `DSH_HOME`, tray behavior, runtime supervision, in-app updates, system-notification permissions, bundled official `@deepseek-ai/dsh`, the bundled safe marketplace (review-before-install, shipped in the installer), macOS/Windows packaging, and tag-based release automation are implemented; a runtime lock with legacy-process adoption keeps a second harness from writing one `DSH_HOME`, and Smart mode also probes ports configured in the profile's patch layer. The release workflow launches each packaged app with an empty PATH and probes its Web UI, preventing artifacts that accidentally omit the bundled runtime. Automated artifacts still lack formal signing: Windows/Linux use native notifications, while macOS preserves Web Notification behavior through Dock badges, bouncing, and in-app reminders. Proper signing remains a prerequisite for warning-free installation and macOS Notification Center delivery. OS keychain integration and voice input are also future work — see [TODO](../TODO.md).
 
 Contributions and issue reports are welcome, especially around Windows behavior, Pinned address connections, and packaging.
+
+## Desktop settings and page modules
+
+`src/main/pages/` contains pure renderers for loading, error, settings, update, and notice pages, plus the settings script. The main process supplies locale, icon, and dynamic copy, and retains window lifecycle, filesystem access, and caller authorization.
+
+`src/main/settings-adapter.ts` owns read-only detection of the official settings DOM. Integration diagnostics distinguish `absent` (no recognizable dialog), `mounted` (entry attached), and `unsupported` (recognizable dialog with an unsupported structure). Unsupported structures trigger cleanup of injected navigation and display changes. Each failure reason is logged once per document. The main-process status field `settingsIntegration` contains fixed codes, without page text, addresses, or credentials. An entirely unrecognizable new dialog can still appear as `absent`; this is not an upstream version compatibility verdict.
+
+Run `npm run build:shell && npm run check:settings-integration` for an isolated Electron check of structural changes, cleanup, remounting, native settings access, and marketplace persistence. This check runs in macOS/Windows CI. Its fixture does not replace compatibility checks against actual official Web UI releases.
+
+## Runtime and connection boundaries
+
+The entry point assembles services and retains startup, shutdown, and coordination across modules. The following modules own their state; dependencies expose operations and read-only queries instead of a shared mutable application context.
+
+| Module | Ownership |
+|---|---|
+| `client-settings.ts` | Settings reads, field merging, and atomic writes |
+| `runtime-environment.ts` | Bundled executable paths, command shims, login-shell PATH, and shim initialization cache |
+| `runtime-catalog.ts` | PATH/npx/bundled/development command selection, version detection cache, and session source rejection |
+| `web-ui-manager.ts` | Child generations, readiness promises, output diagnostics, and serialized stopping |
+| `web-ui-probe.ts`, `loopback-port.ts` | API verification, native browser admission, and available-port probing; no process spawning |
+| `runtime-survivor.ts`, `runtime-process.ts` | Survivor identity, adoption and termination, plus synchronous emergency disposal |
+| `connection-controller.ts` | Connection intent generation, targets, per-spawn port selection, intentional replacement, fallback, and retry budget |
+
+The controller exposes read-only state and explicit operations to the window layer. Delayed probes and readiness results must still match the initiating connection generation; the application supplies its quit state. Initial starts and all three retry paths (bundled-plugin withdrawal, failed source, and crash restart) select an automatic port again. Windows await `readyForConnection()` instead of directly publishing child readiness URLs.
+
+`npm run check:connection-controller` covers delayed port probes, stale readiness, overlapping intentional stops, the three retry paths, and survivor precedence. `npm run check:runtime-survivor` starts an isolated real child to verify that unowned/recycled processes survive, a serving leftover is adopted, and restart stops the verified owned process. Both run in CI.
+
+Existing Electron checks continue to cover connection switching, installed sources, automatic fallback, authentication occupancy, and plugin recovery. The automatic fallback check respects another program holding port 13080: it verifies 13080 when available and an OS-assigned port otherwise, without stopping other programs to free a test port.
+
+`settings-server.ts` owns the private path, listening port and HTTP routes; callbacks retain application validation, confirmation dialogs and side effects. `native-menus.ts` builds menu templates from locale, update state and action callbacks. `npm run check:settings-server` exercises Host/private-path rejection, body limits, save results and updater readiness through real HTTP requests without reading a user profile.
+
+## Preload and application modules
+
+`preload.ts` initializes the bridge and document features. Under `preload/`, `bridge.ts` exposes fixed IPC operations, `theme.ts` observes appearance, `settings-observer.ts` coordinates detection and diagnostics, and `settings-navigation.ts` owns temporary official-navigation changes. Connection, update and API-key-help cards have separate modules. `pagehide` cancels observers, frame callbacks, timers and IPC subscriptions and restores official navigation; a back-forward-cache restoration mounts again.
+
+`settings-commands.ts` owns save serialization, port-save generations and data-mode restart state. `plugin-recovery-controller.ts` owns recovery reentrancy. `update-controller.ts` owns update interactions, scheduling and installer handoff. `desktop-ipc.ts` registers business channels; `bridge-policy.ts` checks window identity, top-level frames, active origins and local handoff. `main-window.ts` creates windows and binds navigation/renderer events; `window-health.ts`, `window-theme.ts` and `locale-controller.ts` own recovery, appearance and local language tracking respectively. Dependencies use explicit operations and live queries; never cache mutable cross-module state at initialization.
+
+`npm run build:shell && npm run check:official-settings` starts the bundled official UI with temporary DSH and Chromium homes, checks Chinese and English mounting, official navigation restoration and reopening, and reports the actual DSH version. It uses no real credentials and sends no model requests. Local coverage on 2026-09-05 was `0.1.2-rc.1`, not a claim about other versions. `check:settings-integration` separately covers structural variants and document teardown/restoration.
+
+The official UI check runs in macOS/Windows application CI after preparing the target runtime. Windows argument/patch checks on macOS do not establish native console, installer or window behavior; native acceptance requires a Windows runner executing CI for these changes.

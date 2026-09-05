@@ -64,9 +64,11 @@ try {
     console.log('✓ plugin-removal timeout kills the complete POSIX process group')
   }
 
-  const mainSource = readFileSync(join(APP_DIR, 'src', 'main', 'index.ts'), 'utf8')
-  if (!mainSource.slice(mainSource.indexOf('function schedulePluginCompatibilityFallback'), mainSource.indexOf('function schedulePluginCompatibilityFallback') + 6000).includes('defaultId: isolatedIndex')) {
-    throw new Error('destructive plugin removal is still the recovery dialog default')
+  // Source guard: src/main/plugin-recovery-controller.ts owns the native default.
+  // A missing function/default anchor must fail, not skip the subsequent live checks.
+  const recoverySource = readFileSync(join(APP_DIR, 'src', 'main', 'plugin-recovery-controller.ts'), 'utf8')
+  if (!recoverySource.slice(recoverySource.indexOf('function schedulePluginCompatibilityFallback'), recoverySource.indexOf('function schedulePluginCompatibilityFallback') + 6000).includes('defaultId: isolatedIndex')) {
+    throw new Error('src/main/plugin-recovery-controller.ts: destructive plugin removal is still the recovery dialog default')
   }
   console.log('✓ plugin removal is not the recovery dialog default')
 

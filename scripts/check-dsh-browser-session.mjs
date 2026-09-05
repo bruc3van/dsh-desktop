@@ -129,8 +129,10 @@ for (const invalid of [
 }
 console.log('✓ missing, malformed, and future credential records fail closed')
 
-const indexSource = await readFile(join(APP_DIR, 'src', 'main', 'index.ts'), 'utf8')
-if (!indexSource.includes('this.onLog(sanitizeRuntimeOutput(stdoutBuffer))')) {
-  throw new Error('the final unterminated stdout fragment bypasses credential redaction')
+// Source guard in src/main/web-ui-manager.ts supplements the runtime redaction checks.
+// Keep the exact EOF logging anchor here in sync when moving or renaming the manager.
+const managerSource = await readFile(join(APP_DIR, 'src', 'main', 'web-ui-manager.ts'), 'utf8')
+if (!managerSource.includes('this.options.onLog(sanitizeRuntimeOutput(stdoutBuffer))')) {
+  throw new Error('src/main/web-ui-manager.ts: the final unterminated stdout fragment bypasses credential redaction')
 }
 console.log('✓ an unterminated final stdout line cannot bypass credential redaction')
