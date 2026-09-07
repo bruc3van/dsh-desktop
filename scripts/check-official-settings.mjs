@@ -25,30 +25,38 @@ try {
     console.error('Official UI did not load:', (await page.locator('body').innerText()).slice(0, 1500))
     throw error
   })
-  // #root can render a loading screen before onboarding arrives. Keep
-  // observing the first-run flow until the actual settings entry is usable;
-  // a single "overlay absent" sample can race asynchronous initialization.
-  const settingsButton = page.getByRole('button', { name: /设置|Settings/ }).first()
-  const deadline = Date.now() + 60_000
-  let ready = false
-  while (Date.now() < deadline) {
+  // #root can render a loading screen before onboarding arrives. Let the
+  // first-run surface settle, then finish onboarding before handling the
+  // separate notice/model modal. Treating both as one loop can observe the
+  // Settings button between the two overlays and click through a blocking mask.
+  await page.waitForTimeout(3_000)
+  for (let step = 0; step < 8; step += 1) {
     const onboarding = page.locator('[class*="onboardingOverlay"]').last()
-    const modal = page.locator('[role="presentation"]').filter({ visible: true }).last()
-    if (await onboarding.isVisible()) {
-      await onboarding.getByRole('button').last().click()
-    } else if (await modal.isVisible()) {
-      const buttons = modal.locator('button:not([disabled])').filter({ visible: true })
-      if (await buttons.count()) await buttons.last().click()
-      else await page.keyboard.press('Escape')
-    } else if (await settingsButton.isVisible()) {
-      ready = true
-      break
-    }
-    await page.waitForTimeout(100)
+    if (!await onboarding.isVisible().catch(() => false)) break
+    const buttons = onboarding.getByRole('button')
+    const count = await buttons.count()
+    if (count === 0) break
+    await buttons.nth(count - 1).click()
+    await page.waitForTimeout(500)
   }
-  assert.ok(ready, 'official first-run flow did not reach the settings entry')
+  await page.waitForFunction(() => document.querySelector('[class*="onboardingOverlay"]') === null, null, { timeout: 60_000 })
+  for (let step = 0; step < 8; step += 1) {
+    const mask = page.locator('div[aria-hidden="true"][class*="_mask_"]').last()
+    if (!await mask.isVisible().catch(() => false)) break
+    const modal = page.locator('[role="presentation"]').filter({ visible: true }).last()
+    const buttons = modal.locator('button:not([disabled])').filter({ visible: true })
+    const count = await buttons.count()
+    if (count > 0) await buttons.nth(count - 1).click()
+    else await page.keyboard.press('Escape')
+    await page.waitForTimeout(500)
+  }
+  const settingsButton = page.getByRole('button', { name: /设置|Settings/ }).first()
+  await settingsButton.waitFor({ state: 'visible', timeout: 60_000 }).catch(async error => {
+    console.error('Official settings entry did not become usable:', (await page.locator('body').innerText()).slice(0, 1500))
+    throw error
+  })
   const open = async () => {
-    await page.getByRole('button', { name: /设置|Settings/ }).first().click()
+    await settingsButton.click()
     await page.waitForSelector('#dsh-desktop-tab')
     assert.equal(await page.locator('#dsh-desktop-tab').innerText(), language === 'en' ? 'Desktop' : '桌面设置')
     await page.locator('#dsh-desktop-tab').click()
