@@ -86,7 +86,6 @@ export interface UpdateState {
   progress: UpdateProgress | null
   error: string | null
   dismissed: boolean
-  isChecking: boolean
 }
 
 export type CheckUpdateResult =
@@ -389,7 +388,6 @@ export class DesktopUpdater {
   private progress: UpdateProgress | null = null
   private error: string | null = null
   private dismissed = false
-  private checking = false
   private checkInFlight: Promise<CheckUpdateResult> | undefined
   private readonly listeners = new Set<(state: UpdateState) => void>()
   private readonly fetchImpl: typeof fetch
@@ -437,7 +435,6 @@ export class DesktopUpdater {
       progress: this.progress,
       error: this.error,
       dismissed: this.dismissed,
-      isChecking: this.checking,
     }
   }
 
@@ -482,7 +479,6 @@ export class DesktopUpdater {
   }
 
   private async performCheck(): Promise<CheckUpdateResult> {
-    this.checking = true
     this.error = null
     this.setPhase('checking')
     try {
@@ -529,9 +525,6 @@ export class DesktopUpdater {
       this.error = describeFetchError(err)
       this.setPhase('error')
       return { hasUpdate: false }
-    } finally {
-      this.checking = false
-      this.emit()
     }
   }
 

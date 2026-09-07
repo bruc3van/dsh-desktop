@@ -143,7 +143,7 @@ export function createSettingsServer(options: SettingsServerOptions) {
       if (pathname === '/desktop/update') {
         const state = desktopUpdater?.getState()
         writeJson(res, 200, state === undefined
-          ? { phase: 'idle', currentVersion: desktopClientVersion(), info: null, progress: null, error: 'updater not ready', dismissed: false, isChecking: false }
+          ? { phase: 'idle', currentVersion: desktopClientVersion(), info: null, progress: null, error: 'updater not ready', dismissed: false }
           : updateStateForPage(state))
         return
       }

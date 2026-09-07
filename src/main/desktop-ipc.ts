@@ -1,10 +1,7 @@
 import { app, ipcMain } from 'electron'
 import type { ClientSettings } from './client-settings.ts'
 import type { DshDataMode } from './data-home.ts'
-import {
-  validateSmartRuntimes,
-  type SmartRuntimeId
-} from './smart-runtimes.ts'
+import type { SmartRuntimeId } from './smart-runtimes.ts'
 import type { DesktopUpdater, UpdateState } from './updater.ts'
 interface BridgeCaller { trusted: boolean; remote: boolean }
 interface Options {
@@ -13,11 +10,10 @@ interface Options {
   getStatusJson: (includeLocalDetail?: boolean) => Record<string, unknown>
   loadSettings: () => ClientSettings
   setBundledMarketEnabled: (enabled: unknown, remoteCaller: boolean) => Promise<{ enabled: boolean }>
-  enabledSmartRuntimes: () => SmartRuntimeId[]
   localeChinese: () => boolean
   confirmSensitiveAction: (message: string, detail: string) => Promise<boolean>
   currentTarget: () => string | undefined
-  persistSmartRuntimes: (ids: SmartRuntimeId[]) => Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string }>
+  requestSmartRuntimesSave: (value: unknown, remoteCaller?: boolean) => Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string }>
   requestLocalWebPortSave: (value: unknown, remoteCaller: boolean) => Promise<{ saved: boolean; localWebPort: number; applied?: boolean; error?: string }>
   selectedDshDataMode: (settings?: ClientSettings) => DshDataMode
   requestDshDataModeSave: (value: unknown) => { saved: boolean; dshDataMode: DshDataMode; applied?: boolean; error?: string }
@@ -35,7 +31,7 @@ interface Options {
 }
 
 export function createDesktopIpc(options: Options) {
-  const { bridgeCaller, bridgeDenied, getStatusJson, loadSettings, setBundledMarketEnabled, enabledSmartRuntimes, localeChinese, confirmSensitiveAction, currentTarget, persistSmartRuntimes, requestLocalWebPortSave, selectedDshDataMode, requestDshDataModeSave, probeDefaultWebUi, requestServerUrlSave, switchConnectionMode, openSettingsWindow, localDocumentCaller, retryConnection, useSmartFromLocalDocument, updateStateForCaller, installDesktopUpdate, scheduleQuitAfterWindowsInstall } = options
+  const { bridgeCaller, bridgeDenied, getStatusJson, loadSettings, setBundledMarketEnabled, localeChinese, confirmSensitiveAction, currentTarget, requestSmartRuntimesSave, requestLocalWebPortSave, selectedDshDataMode, requestDshDataModeSave, probeDefaultWebUi, requestServerUrlSave, switchConnectionMode, openSettingsWindow, localDocumentCaller, retryConnection, useSmartFromLocalDocument, updateStateForCaller, installDesktopUpdate, scheduleQuitAfterWindowsInstall } = options
 
 
   function registerDesktopIpc(): void {
@@ -64,31 +60,7 @@ export function createDesktopIpc(options: Options) {
     ipcMain.handle('desktop:connection:smartRuntimes', async (event, runtimes: unknown) => {
       const caller = bridgeCaller(event)
       if (!caller.trusted) throw bridgeDenied()
-      const parsed = validateSmartRuntimes(runtimes)
-      if (parsed === undefined) {
-        return {
-          saved: false,
-          smartRuntimes: enabledSmartRuntimes(),
-          error: localeChinese() ? '至少保留一种来源' : 'Keep at least one source',
-        }
-      }
-      if (caller.remote) {
-        const confirmed = await confirmSensitiveAction(
-          localeChinese() ? '当前页面请求更改智能连接来源' : 'The current page asked to change Smart-mode sources',
-          (localeChinese()
-            ? '这会决定智能模式下尝试哪些来源（本机已运行、本机已安装、npx 缓存、客户端内置）。请求来自：'
-            : 'This chooses which sources Smart mode may try (already running, installed, npx cache, bundled). Requested by: ')
-          + (currentTarget() ?? ''),
-        )
-        if (!confirmed) {
-          return {
-            saved: false,
-            smartRuntimes: enabledSmartRuntimes(),
-            error: localeChinese() ? '已取消' : 'Cancelled',
-          }
-        }
-      }
-      return persistSmartRuntimes(parsed)
+      return requestSmartRuntimesSave(runtimes, caller.remote)
     })
     ipcMain.handle('desktop:connection:localWebPort', async (event, port: unknown) => {
       const caller = bridgeCaller(event)

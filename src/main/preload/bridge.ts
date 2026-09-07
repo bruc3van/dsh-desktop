@@ -104,7 +104,6 @@ export interface UpdateState {
   progress: { total: number; downloaded: number; percent: number } | null
   error: string | null
   dismissed: boolean
-  isChecking: boolean
 }
 
 type CheckUpdateResult = { hasUpdate: false } | { hasUpdate: true; info: UpdateInfo }

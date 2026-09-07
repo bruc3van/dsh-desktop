@@ -64,20 +64,6 @@ export function createSettingsCommands(options: Options) {
    * when the child had not become ready, or spending a retry and showing
    * "本地服务意外退出" when it had.
    */
-  async function persistSmartRuntimes(ids: SmartRuntimeId[]): Promise<{
-    saved: boolean
-    smartRuntimes: SmartRuntimeId[]
-    error?: string
-  }> {
-    const run = smartRuntimesSaveChain.then(
-      () => persistSmartRuntimesNow(ids),
-      () => persistSmartRuntimesNow(ids),
-    )
-    smartRuntimesSaveChain = run.then(() => undefined, () => undefined)
-    return run
-  }
-
-
   async function persistSmartRuntimesNow(ids: SmartRuntimeId[]): Promise<{
     saved: boolean
     smartRuntimes: SmartRuntimeId[]
@@ -117,7 +103,7 @@ export function createSettingsCommands(options: Options) {
   }
 
 
-  async function requestSmartRuntimesSave(value: unknown): Promise<{
+  async function requestSmartRuntimesSave(value: unknown, remoteCaller = false): Promise<{
     saved: boolean
     smartRuntimes: SmartRuntimeId[]
     error?: string
@@ -130,7 +116,28 @@ export function createSettingsCommands(options: Options) {
         error: localeChinese() ? '至少保留一种来源' : 'Keep at least one source',
       }
     }
-    return persistSmartRuntimes(parsed)
+    if (remoteCaller) {
+      const confirmed = await confirmSensitiveAction(
+        localeChinese() ? '当前页面请求更改智能连接来源' : 'The current page asked to change Smart-mode sources',
+        (localeChinese()
+          ? '这会决定智能模式下尝试哪些来源（本机已运行、本机已安装、npx 缓存、客户端内置）。请求来自：'
+          : 'This chooses which sources Smart mode may try (already running, installed, npx cache, bundled). Requested by: ')
+        + (currentTarget() ?? ''),
+      )
+      if (!confirmed) {
+        return {
+          saved: false,
+          smartRuntimes: enabledSmartRuntimes(),
+          error: localeChinese() ? '已取消' : 'Cancelled',
+        }
+      }
+    }
+    const run = smartRuntimesSaveChain.then(
+      () => persistSmartRuntimesNow(parsed),
+      () => persistSmartRuntimesNow(parsed),
+    )
+    smartRuntimesSaveChain = run.then(() => undefined, () => undefined)
+    return run
   }
 
 
@@ -415,5 +422,5 @@ export function createSettingsCommands(options: Options) {
       return { switched: false, error: error instanceof Error ? error.message : String(error) }
     }
   }
-  return { persistSmartRuntimes, requestSmartRuntimesSave, requestLocalWebPortSave, requestDshDataModeSave, requestServerUrlSave, switchConnectionMode }
+  return { requestSmartRuntimesSave, requestLocalWebPortSave, requestDshDataModeSave, requestServerUrlSave, switchConnectionMode }
 }

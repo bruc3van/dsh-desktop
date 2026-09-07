@@ -55,6 +55,39 @@ try {
   assert.equal((await racedSave).saved, false)
   console.log('✓ isolated source saves preserve a runnable source, including data-mode changes during occupancy checks')
 
+  // Exercise the shared command through the real IPC handler: trust rejection,
+  // invalid input and declined consent must all precede persistence.
+  const handlers = new Map()
+  const { createDesktopIpc } = load('desktop-ipc', { electron: {
+    app: {}, ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} },
+  } })
+  let trusted = true, consent = false, confirmations = 0, saves = 0
+  const sharedCommands = createSettingsCommands({
+    enabledSmartRuntimes: () => ['bundled'], loadSettings: () => ({ serverUrl: 'https://example.com', connectionMode: 'connect' }),
+    getActiveDshDataMode: () => 'shared', selectedDshDataMode: () => 'shared',
+    localeChinese: () => false, currentTarget: () => 'https://example.com',
+    confirmSensitiveAction: async () => { confirmations++; return consent },
+    patchSettings: () => { saves++ }, resetRuntimeFailure() {},
+  })
+  createDesktopIpc({ bridgeCaller: () => ({ trusted, remote: true }), bridgeDenied: () => new Error('denied'),
+    requestSmartRuntimesSave: sharedCommands.requestSmartRuntimesSave,
+  }).registerDesktopIpc()
+  const saveSources = handlers.get('desktop:connection:smartRuntimes')
+  trusted = false
+  await assert.rejects(saveSources({}, ['bundled']), /denied/)
+  trusted = true
+  assert.equal((await saveSources({}, [])).saved, false)
+  assert.equal(confirmations, 0)
+  assert.equal((await saveSources({}, ['bundled'])).saved, false)
+  assert.equal(saves, 0)
+  consent = true
+  assert.equal((await saveSources({}, ['bundled'])).saved, true)
+  assert.equal(saves, 1)
+  assert.equal((await sharedCommands.requestSmartRuntimesSave(['bundled'])).saved, true)
+  assert.equal(saves, 2)
+  assert.equal(confirmations, 2)
+  console.log('✓ IPC and local source saves share validation while preserving trust and remote consent')
+
   const { createWebUiProbe } = load('web-ui-probe', { electron: { app: { isReady: () => false, isPackaged: true }, net: {} } })
   let responseMode = 'silent'
   const server = createServer((req, res) => {

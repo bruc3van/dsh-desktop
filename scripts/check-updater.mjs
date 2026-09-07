@@ -4,6 +4,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -212,6 +213,35 @@ const feedOnlyUpdater = (platform, arch, feed = matrixFeed, currentVersion = '0.
   savePersistence: () => {},
   dryRun: true,
 })
+// One phase stream owns check progress. Concurrent checks share the request,
+// and a failed check can be retried without a second checking flag/reset event.
+let finishCheck, checkRequests = 0
+const phases = []
+const checkStateUpdater = new DesktopUpdater({
+  currentVersion: '0.0.1', feedUrl: 'https://example.invalid/latest.json',
+  platform: 'win32', arch: 'x64', packaged: true, downloadDir: work,
+  loadPersistence: () => ({}), savePersistence() {}, dryRun: true,
+  fetchImpl: () => {
+    checkRequests++
+    return new Promise(resolve => { finishCheck = resolve })
+  },
+})
+checkStateUpdater.onChange(state => phases.push(state.phase))
+const firstCheck = checkStateUpdater.check()
+const overlappingCheck = checkStateUpdater.check()
+assert.equal(checkRequests, 1)
+assert.equal(checkStateUpdater.getState().phase, 'checking')
+finishCheck(new Response('unavailable', { status: 503 }))
+assert.equal((await firstCheck).hasUpdate, false)
+assert.equal((await overlappingCheck).hasUpdate, false)
+assert.deepEqual(phases, ['checking', 'error'])
+const retriedCheck = checkStateUpdater.check()
+finishCheck(new Response(JSON.stringify(matrixFeed), { status: 200 }))
+assert.equal((await retriedCheck).hasUpdate, true)
+assert.equal(checkRequests, 2)
+assert.deepEqual(phases, ['checking', 'error', 'checking', 'available'])
+console.log('✓ one phase stream covers overlapping checks, failure and retry')
+
 // A failed Mac preflight must neither fetch an installer nor stop the runtime.
 let preflightFetches = 0
 let stoppedForPreflight = false

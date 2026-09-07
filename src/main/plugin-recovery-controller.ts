@@ -54,44 +54,37 @@ export function createPluginRecoveryController(services: Options) {
   }
 
 
+  // Read afresh before and after removal; a successful CLI exit is not proof
+  // that both manifest entries were removed.
+  function readProfilePlugins(home: string) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(home, 'profiles', WEB_PROFILE, 'package.json'), 'utf8')) as {
+        dependencies?: unknown
+        dsh?: { profile?: { bundles?: unknown } }
+      }
+      return {
+        dependencies: new Set(manifest.dependencies !== null && typeof manifest.dependencies === 'object'
+          ? Object.keys(manifest.dependencies) : []),
+        bundles: new Set(Array.isArray(manifest.dsh?.profile?.bundles)
+          ? manifest.dsh.profile.bundles.filter((value): value is string => typeof value === 'string') : []),
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   /** Only direct profile plugins explicitly named by the diagnostic may be removed. */
   function removableProfilePlugins(home: string, candidates: readonly string[]): string[] {
-    try {
-      const manifest = JSON.parse(readFileSync(join(home, 'profiles', WEB_PROFILE, 'package.json'), 'utf8')) as {
-        dependencies?: unknown
-        dsh?: { profile?: { bundles?: unknown } }
-      }
-      const dependencies = manifest.dependencies !== null && typeof manifest.dependencies === 'object'
-        ? new Set(Object.keys(manifest.dependencies))
-        : new Set<string>()
-      const bundles = Array.isArray(manifest.dsh?.profile?.bundles)
-        ? new Set(manifest.dsh.profile.bundles.filter((value): value is string => typeof value === 'string'))
-        : new Set<string>()
-      return candidates.filter(name => dependencies.has(name) && bundles.has(name))
-    } catch {
-      return []
-    }
+    const profile = readProfilePlugins(home)
+    return profile === undefined ? []
+      : candidates.filter(name => profile.dependencies.has(name) && profile.bundles.has(name))
   }
-
 
   function profilePluginsRemoved(home: string, plugins: readonly string[]): boolean {
-    try {
-      const manifest = JSON.parse(readFileSync(join(home, 'profiles', WEB_PROFILE, 'package.json'), 'utf8')) as {
-        dependencies?: unknown
-        dsh?: { profile?: { bundles?: unknown } }
-      }
-      const dependencies = manifest.dependencies !== null && typeof manifest.dependencies === 'object'
-        ? new Set(Object.keys(manifest.dependencies))
-        : new Set<string>()
-      const bundles = Array.isArray(manifest.dsh?.profile?.bundles)
-        ? new Set(manifest.dsh.profile.bundles.filter((value): value is string => typeof value === 'string'))
-        : new Set<string>()
-      return plugins.every(name => !dependencies.has(name) && !bundles.has(name))
-    } catch {
-      return false
-    }
+    const profile = readProfilePlugins(home)
+    return profile !== undefined
+      && plugins.every(name => !profile.dependencies.has(name) && !profile.bundles.has(name))
   }
-
 
   /** Run the same official CLI and pnpm path as a user-issued `dsh plugin remove`. */
   function removeProfilePlugins(command: DshCommand, plugins: readonly string[]): Promise<void> {

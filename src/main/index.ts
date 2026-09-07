@@ -308,7 +308,7 @@ function offerBundledPluginSeat(dsh: DshCommand): void {
 
 function onManagedReady(command: DshCommand | undefined): void {
   if (command !== undefined && !bundledPluginSeatInUse && !bundledPluginSuppressed) offerBundledPluginSeat(command)
-  promptPluginCompatibilityFallback()
+  pluginRecovery.promptPluginCompatibilityFallback()
 }
 
 function withdrawFailedSeat(): boolean {
@@ -1055,7 +1055,7 @@ async function setBundledMarketEnabled(enabled: unknown, remoteCaller: boolean):
 const nativeMenuActions = {
   openSettings: openSettingsWindow,
   showWindow: showMainWindow,
-  checkUpdates: () => { void handleManualUpdateCheck(true) },
+  checkUpdates: () => { void updateController.handleManualUpdateCheck(true) },
   restart: restartApp,
   quit: () => { app.quit() },
 }
@@ -1090,17 +1090,13 @@ function restartApp(): void {
   app.relaunch()
   app.quit()
 }
-function compatibilityFallbackPlugins(settings: ClientSettings): string[] {
-  return pluginRecovery.compatibilityFallbackPlugins(settings)
-}
+
 
 function schedulePluginCompatibilityFallback(code: number | null, signal: NodeJS.Signals | null): boolean {
   return pluginRecovery.schedulePluginCompatibilityFallback(code, signal)
 }
 
-function promptPluginCompatibilityFallback(): void {
-  return pluginRecovery.promptPluginCompatibilityFallback()
-}
+
 
 
 function refreshTrayMenu(): void {
@@ -1149,7 +1145,7 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     dshDataModeSelectable: dshDataModeSelectable(),
     dshDataFallbackReason: settings.dshDataFallbackReason,
     dshDataFallbackPlugin: normalizePluginPackageName(settings.dshDataFallbackPlugin),
-    dshDataFallbackPlugins: compatibilityFallbackPlugins(settings),
+    dshDataFallbackPlugins: pluginRecovery.compatibilityFallbackPlugins(settings),
     ...includeLocalDetail && { dshDataHome: childHome() },
     ...includeLocalDetail && webUi?.pid() !== undefined && { childPid: webUi.pid() },
     ...includeLocalDetail && webUi?.lastError !== null && webUi?.lastError !== undefined && { lastError: webUi.lastError },
@@ -1230,9 +1226,7 @@ function bundledDshVersion(): string | null {
   cachedBundledDshVersion = officialDshPackageVersion(bin) ?? null
   return cachedBundledDshVersion
 }
-function createDesktopUpdater(): DesktopUpdater {
-  return updateController.createDesktopUpdater()
-}
+
 
 function updateStateForCaller(state: UpdateState, remote: boolean): UpdateState {
   return updateController.updateStateForCaller(state, remote)
@@ -1249,9 +1243,7 @@ function permissionTrustedSurface(contents: Electron.WebContents | null): boolea
 function permissionGranted(contents: Electron.WebContents | null, permission: string, requestingUrl: string, isMainFrame: boolean): boolean {
   return bridgePolicy.permissionGranted(contents, permission, requestingUrl, isMainFrame)
 }
-function broadcastUpdateState(state: UpdateState): void {
-  return updateController.broadcastUpdateState(state)
-}
+
 
 
 function showMainWindow(): void {
@@ -1267,9 +1259,7 @@ function localeChinese(): boolean {
   return localeController.localeChinese()
 }
 
-function watchLocalePreference(): void {
-  return localeController.watchLocalePreference()
-}
+
 
 /**
  * A native confirmation for an action a page asked for. Native on purpose: the
@@ -1295,9 +1285,7 @@ async function confirmSensitiveAction(message: string, detail: string): Promise<
 }
 let clientNoticeWindow: BrowserWindow | null = null
 
-function handleManualUpdateCheck(prompt: boolean): Promise<void> {
-  return updateController.handleManualUpdateCheck(prompt)
-}
+
 
 function scheduleQuitAfterWindowsInstall(): void {
   return updateController.scheduleQuitAfterWindowsInstall()
@@ -1307,19 +1295,13 @@ function installDesktopUpdate(): Promise<{ started: boolean; error?: string; }> 
   return updateController.installDesktopUpdate()
 }
 
-function scheduleLegacyBundleNotice(): void {
-  return updateController.scheduleLegacyBundleNotice()
-}
+
 
 /** Whether the official Web UI has loaded at least once (re-arms the auto check). */
 let webUiEverLoaded = false
-function scheduleAutoUpdateCheck(): void {
-  return updateController.scheduleAutoUpdateCheck()
-}
 
-function schedulePeriodicAutoUpdateChecks(): void {
-  return updateController.schedulePeriodicAutoUpdateChecks()
-}
+
+
 
 function updateStateForPage(state: UpdateState): UpdateState & { notesHtml: string; } {
   return updateController.updateStateForPage(state)
@@ -1495,9 +1477,6 @@ async function refuseOccupiedLocalSpawn(
   if (occupied === undefined) return undefined
   warnOccupiedUserInstance(occupied)
   return occupied
-}
-function persistSmartRuntimes(ids: SmartRuntimeId[]): Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string; }> {
-  return settingsCommands.persistSmartRuntimes(ids)
 }
 
 function requestSmartRuntimesSave(value: unknown): Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string; }> {
@@ -1703,11 +1682,10 @@ const desktopIpc = createDesktopIpc({
   getStatusJson,
   loadSettings,
   setBundledMarketEnabled,
-  enabledSmartRuntimes,
   localeChinese,
   confirmSensitiveAction,
   currentTarget,
-  persistSmartRuntimes,
+  requestSmartRuntimesSave: settingsCommands.requestSmartRuntimesSave,
   requestLocalWebPortSave,
   selectedDshDataMode,
   requestDshDataModeSave,
@@ -1733,9 +1711,7 @@ const bridgePolicy = createBridgePolicy({
     && connection.childTarget !== undefined && webUi?.pid() !== undefined
     && origin === appOrigin(connection.childTarget),
 })
-function getUpdatePromptWindow(): BrowserWindow | null {
-  return updateController.getUpdatePromptWindow()
-}
+
 
 function isInstallerHandoff(): boolean {
   return updateController.isInstallerHandoff()
@@ -1769,7 +1745,7 @@ function resetPageAppearance(): void {
 const windowTheme = createWindowTheme({
   getMainWindow: () => mainWindow,
   getSettingsWindow: () => settingsWindow,
-  getUpdatePromptWindow,
+  getUpdatePromptWindow: updateController.getUpdatePromptWindow,
   getClientNoticeWindow: () => clientNoticeWindow,
   bridgeCaller,
 })
@@ -1809,7 +1785,7 @@ const mainWindowFactory = createMainWindowFactory({
   releaseSmartBridgeHandoff,
   bindErrorPageSeats,
   markWebUiLoaded,
-  scheduleAutoUpdateCheck,
+  scheduleAutoUpdateCheck: updateController.scheduleAutoUpdateCheck,
   recoverBlankWindow,
   markLoadingDocument,
   resetPageAppearance,
@@ -1950,21 +1926,21 @@ if (!gotLock) {
     mainWindowRequested = true
     createWindow()
     const guiPathReady = restoreMacGuiPath()
-    desktopUpdater = createDesktopUpdater()
-    desktopUpdater.onChange(broadcastUpdateState)
+    desktopUpdater = updateController.createDesktopUpdater()
+    desktopUpdater.onChange(updateController.broadcastUpdateState)
     await settingsServer.start()
     installMenu()
     createTray()
     // After both exist: the watcher's first pass rebuilds them if the Web UI's
     // language setting disagrees with the system locale they were built from.
-    watchLocalePreference()
+    localeController.watchLocalePreference()
     // After the locale watcher: the notice's wording follows the Web UI's
     // language setting, and this is the first point where that is settled.
-    scheduleLegacyBundleNotice()
+    updateController.scheduleLegacyBundleNotice()
     powerMonitor.on('resume', () => { scheduleWindowHealthCheck('system resume', 3_000) })
     windowHealthTimer = setInterval(() => { void recoverBlankWindow('periodic health check') }, WINDOW_HEALTH_INTERVAL_MS)
     windowHealthTimer.unref()
-    schedulePeriodicAutoUpdateChecks()
+    updateController.schedulePeriodicAutoUpdateChecks()
     registerDesktopIpc()
     await guiPathReady
     boot()
