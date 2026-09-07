@@ -29,6 +29,25 @@
 import { renameSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+const WINDOWS_RENAME_RETRIES = 10
+const renameRetrySignal = new Int32Array(new SharedArrayBuffer(4))
+
+/** Windows scanners can briefly deny a same-directory rename. Keep the old
+ * record intact and retry the atomic swap; all other errors still fail fast. */
+export function retryRuntimeLockRename(
+  rename: () => void,
+  platform: NodeJS.Platform = process.platform,
+  pause: (milliseconds: number) => void = milliseconds => { Atomics.wait(renameRetrySignal, 0, 0, milliseconds) },
+): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try { rename(); return } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (platform !== 'win32' || !['EACCES', 'EBUSY', 'EPERM'].includes(code ?? '') || attempt >= WINDOWS_RENAME_RETRIES) throw error
+      pause(Math.min(25 * (2 ** attempt), 200))
+    }
+  }
+}
+
 /** One managed runtime, as the next start needs to reason about it. */
 export interface RuntimeLock {
   /** The `dsh web` child this client spawned. */
@@ -96,7 +115,7 @@ export function writeRuntimeLock(home: string, lock: RuntimeLock): void {
   const temporary = file + '.' + String(process.pid) + '.tmp'
   try {
     writeFileSync(temporary, JSON.stringify(lock), { mode: 0o600 })
-    renameSync(temporary, file)
+    retryRuntimeLockRename(() => { renameSync(temporary, file) })
   } catch (error) {
     try { unlinkSync(temporary) } catch { /* nothing to clean up */ }
     throw new Error('Could not persist the local runtime record: ' + describe(error))

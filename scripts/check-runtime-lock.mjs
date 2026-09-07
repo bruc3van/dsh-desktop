@@ -16,6 +16,7 @@
  * @module desktop/scripts/check-runtime-lock
  */
 
+import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -37,8 +38,24 @@ await esbuild.build({
   outfile: lockBundle,
   logLevel: 'silent',
 })
-const { clearRuntimeLock, isProcessAlive, readRuntimeLock, recordRuntimeLockUrl, runtimeLockFile, writeRuntimeLock } =
+const { clearRuntimeLock, isProcessAlive, readRuntimeLock, recordRuntimeLockUrl, retryRuntimeLockRename, runtimeLockFile, writeRuntimeLock } =
   await import(pathToFileURL(lockBundle).href)
+
+let renameAttempts = 0
+const retryDelays = []
+retryRuntimeLockRename(() => {
+  renameAttempts += 1
+  if (renameAttempts < 4) throw Object.assign(new Error('scanner fixture'), { code: 'EPERM' })
+}, 'win32', milliseconds => { retryDelays.push(milliseconds) })
+assert.equal(renameAttempts, 4)
+assert.deepEqual(retryDelays, [25, 50, 100])
+let permanentAttempts = 0
+assert.throws(() => retryRuntimeLockRename(() => {
+  permanentAttempts += 1
+  throw Object.assign(new Error('permanent fixture'), { code: 'EINVAL' })
+}, 'win32', () => {}), /permanent fixture/)
+assert.equal(permanentAttempts, 1, 'non-transient rename errors must fail immediately')
+console.log('✓ Windows runtime-record rename retries transient scanner locks and fails fast otherwise')
 
 const home = join(work, 'dsh-home')
 mkdirSync(home, { recursive: true })
