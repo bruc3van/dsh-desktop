@@ -7,12 +7,11 @@
 ; that guard is the load-bearing part. Silent installs (`/S`) are unchanged.
 !include LogicLib.nsh
 
-; Whether customInit found a usable pre-rename installation in the selected
-; install context. The assisted installer template consults this before adding
+; A nonempty recovered path identifies an existing installation in the selected
+; install context. The assisted installer template checks it before adding
 ; APP_FILENAME to an unchanged directory; an explicit directory choice still
 ; keeps electron-builder's normal "selected parent\product name" behaviour.
 !ifndef BUILD_UNINSTALLER
-Var /GLOBAL dshExistingInstallFound
 Var /GLOBAL dshRecoveredInstallDir
 Var /GLOBAL dshOriginalInstallDir
 Var /GLOBAL dshExplicitInstallDir
@@ -34,16 +33,12 @@ Var /GLOBAL dshPreviousInstallRemoved
 ; Refresh the selected old/original pair after the install-mode page may have
 ; called setInstallModePerUser or setInstallModePerAllUsers again.
 !macro dshRefreshSelectedInstallContext
-  StrCpy $dshExistingInstallFound "false"
   ${If} $installMode == "CurrentUser"
     StrCpy $dshRecoveredInstallDir $dshPerUserRecoveredInstallDir
     StrCpy $dshOriginalInstallDir $dshPerUserOriginalInstallDir
   ${Else}
     StrCpy $dshRecoveredInstallDir $dshPerMachineRecoveredInstallDir
     StrCpy $dshOriginalInstallDir $dshPerMachineOriginalInstallDir
-  ${EndIf}
-  ${If} $dshRecoveredInstallDir != ""
-    StrCpy $dshExistingInstallFound "true"
   ${EndIf}
 !macroend
 
@@ -52,7 +47,7 @@ Var /GLOBAL dshPreviousInstallRemoved
 ; the user actually changed remain authoritative.
 !macro dshRestoreUnchangedInstallTarget
   !insertmacro dshRefreshSelectedInstallContext
-  ${If} $dshExistingInstallFound == "true"
+  ${If} $dshRecoveredInstallDir != ""
     ${If} $INSTDIR == $dshRecoveredInstallDir
     ${OrIf} $INSTDIR == $dshOriginalInstallDir
       ${If} $dshExplicitInstallDir != ""
@@ -150,7 +145,6 @@ FunctionEnd
   Push $R8
   Push $R9
 
-  StrCpy $dshExistingInstallFound "false"
   StrCpy $dshRecoveredInstallDir ""
   StrCpy $dshOriginalInstallDir ""
   StrCpy $dshExplicitInstallDir ""
@@ -181,7 +175,7 @@ FunctionEnd
   ${EndIf}
 
   !insertmacro dshRefreshSelectedInstallContext
-  ${If} $dshExistingInstallFound == "true"
+  ${If} $dshRecoveredInstallDir != ""
     ; initMultiUser has already applied /D=. Only replace its initial registry
     ; value when no explicit command-line target was supplied.
     !insertmacro GetDParameter $R0
@@ -363,7 +357,7 @@ FunctionEnd
   ; customInit. Restore that unchanged registry value before $appExe/SetOutPath
   ; capture $INSTDIR, while preserving an explicit /D= target.
   !insertmacro dshRestoreUnchangedInstallTarget
-  ${If} $dshExistingInstallFound == "true"
+  ${If} $dshRecoveredInstallDir != ""
     ; The legacy uninstaller initializes itself from this key before removing
     ; files. Repair it so `_?=$installationDir` and the uninstaller agree on the
     ; same absolute directory.

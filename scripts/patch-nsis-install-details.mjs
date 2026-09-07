@@ -233,7 +233,7 @@ const UPGRADE_SAFE_DIRECTORY_NORMALIZATION = `\
       !ifmacrodef dshRestoreUnchangedInstallTarget
         !insertmacro dshRestoreUnchangedInstallTarget
       !endif
-      \${If} $dshExistingInstallFound == "true"
+      \${If} $dshRecoveredInstallDir != ""
       \${AndIf} $INSTDIR == $dshRecoveredInstallDir
         Return
       \${EndIf}
@@ -351,14 +351,6 @@ function withoutDetailsEdits(body) {
     .join('\n')
 }
 
-/**
- * @param {string} extractAppPackage
- * @returns {boolean}
- */
-export function hasFastExtractMark(extractAppPackage) {
-  return extractAppPackage.includes(FAST_PATH_MARK_BEGIN)
-}
-
 /** The prologue this revision expects, for a given `$OUTDIR` budget. */
 function expectedPrologue(budget) {
   return FAST_EXTRACT_PROLOGUE.replace(BUDGET_TOKEN, String(budget))
@@ -404,18 +396,6 @@ function stripFastExtract(extractAppPackage) {
   const label = FAST_EXTRACT_DONE_LABEL + eol
   if (stripped.includes(label)) stripped = stripped.replace(label, '')
   return stripped
-}
-
-/**
- * @param {string} installSection
- * @param {string} extractAppPackage
- * @returns {boolean}
- */
-export function isNsisDetailsPatched(installSection, extractAppPackage, budget) {
-  return installSection.includes('SetDetailsPrint both')
-    && !installSection.includes('SetDetailsPrint none')
-    && isFastExtractPatched(extractAppPackage, budget)
-    && extractAppPackage.includes(COPYING_STAGE)
 }
 
 /**
@@ -499,9 +479,6 @@ export function patchNsisDetailsTemplates(installSection, extractAppPackage, bud
   if (!Number.isInteger(budget)) {
     throw new Error('patchNsisDetailsTemplates needs an integer $OUTDIR budget, got ' + String(budget))
   }
-  if (isNsisDetailsPatched(installSection, extractAppPackage, budget)) {
-    return { installSection, extractAppPackage, changed: false }
-  }
   const blockers = nsisDetailsPatchBlockers(installSection, extractAppPackage)
   if (blockers.length > 0) {
     throw new Error('electron-builder NSIS templates changed; cannot enable install details:\n- '
@@ -527,7 +504,11 @@ export function patchNsisDetailsTemplates(installSection, extractAppPackage, bud
     nextExtract = insertLineAfter(nextExtract, SET_OUT_PATH_7Z, 'DetailPrint "' + EXTRACTING_STAGE + '"')
     nextExtract = insertLineBefore(nextExtract, COPY_FILES, 'DetailPrint "' + COPYING_STAGE + '"')
   }
-  return { installSection: nextInstall, extractAppPackage: nextExtract, changed: true }
+  return {
+    installSection: nextInstall,
+    extractAppPackage: nextExtract,
+    changed: nextInstall !== installSection || nextExtract !== extractAppPackage,
+  }
 }
 
 /**
@@ -538,36 +519,20 @@ export function patchNsisDetailsTemplates(installSection, extractAppPackage, bud
  * @param {string} assistedInstaller
  * @param {string} installUtil
  * @param {string} multiUserUi
- * @returns {{ assistedInstaller: string, installUtil: string, multiUserUi: string, assistedChanged: boolean, installUtilChanged: boolean, multiUserUiChanged: boolean, changed: boolean }}
+ * @returns {{ assistedInstaller: string, installUtil: string, multiUserUi: string, changed: boolean }}
  */
 export function patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiUserUi) {
+  // Accept cached templates from before the redundant found flag was removed.
+  const originalAssisted = assistedInstaller
+  assistedInstaller = assistedInstaller.replaceAll('$dshExistingInstallFound == "true"', '$dshRecoveredInstallDir != ""')
   const directoryPatched = assistedInstaller.includes(UPGRADE_SAFE_DIRECTORY_NORMALIZATION)
-  // Replacing the only `IDRETRY OneMoreAttempt` branch also makes its label
-  // dead. makensis warning 6012 is fatal under electron-builder, so a template
-  // is complete only after both halves have been patched. Treat the residual
-  // label as migratable: a developer tree may already carry the older partial
-  // patch even though a clean CI checkout always starts from the generic line.
-  const retryLabelPresent = installUtil.includes(UNUSED_UNINSTALL_RETRY_LABEL)
-  const failurePatched = installUtil.includes(PRECISE_UNINSTALL_FAILURE) && !retryLabelPresent
+  const failurePatched = installUtil.includes(PRECISE_UNINSTALL_FAILURE)
   const modeLeavePatched = multiUserUi.includes(UPGRADE_SAFE_INSTALL_MODE_LEAVE)
-  if (directoryPatched && failurePatched && modeLeavePatched) {
-    return {
-      assistedInstaller,
-      installUtil,
-      multiUserUi,
-      assistedChanged: false,
-      installUtilChanged: false,
-      multiUserUiChanged: false,
-      changed: false,
-    }
-  }
   if (!directoryPatched && !assistedInstaller.includes(DIRECTORY_NORMALIZATION)) {
     throw new Error('electron-builder NSIS assistedInstaller.nsh directory normalization changed, '
       + 'or this repository changed its replacement text; reinstall app-builder-lib and retry')
   }
-  if (!failurePatched
-    && !installUtil.includes(GENERIC_UNINSTALL_FAILURE)
-    && !installUtil.includes(PRECISE_UNINSTALL_FAILURE)) {
+  if (!failurePatched && !installUtil.includes(GENERIC_UNINSTALL_FAILURE)) {
     // Also what a developer tree hits after this repository edits its own
     // replacement text: the installed template still carries the previous
     // patch, so neither string matches. Reinstalling restores the pristine one.
@@ -577,24 +542,23 @@ export function patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiU
   if (!modeLeavePatched && !multiUserUi.includes(INSTALL_MODE_LEAVE)) {
     throw new Error('electron-builder NSIS multiUserUi.nsh install-mode Leave hook changed')
   }
-  let nextInstallUtil = installUtil.includes(PRECISE_UNINSTALL_FAILURE)
+  let nextInstallUtil = failurePatched
     ? installUtil
     : installUtil.replace(GENERIC_UNINSTALL_FAILURE, PRECISE_UNINSTALL_FAILURE)
-  if (retryLabelPresent) {
+  if (nextInstallUtil.includes(UNUSED_UNINSTALL_RETRY_LABEL)) {
     nextInstallUtil = removeStandaloneLine(nextInstallUtil, UNUSED_UNINSTALL_RETRY_LABEL)
   }
+  const nextAssisted = directoryPatched
+    ? assistedInstaller
+    : assistedInstaller.replace(DIRECTORY_NORMALIZATION, UPGRADE_SAFE_DIRECTORY_NORMALIZATION)
+  const nextMultiUser = modeLeavePatched
+    ? multiUserUi
+    : multiUserUi.replace(INSTALL_MODE_LEAVE, UPGRADE_SAFE_INSTALL_MODE_LEAVE)
   return {
-    assistedInstaller: directoryPatched
-      ? assistedInstaller
-      : assistedInstaller.replace(DIRECTORY_NORMALIZATION, UPGRADE_SAFE_DIRECTORY_NORMALIZATION),
+    assistedInstaller: nextAssisted,
     installUtil: nextInstallUtil,
-    multiUserUi: modeLeavePatched
-      ? multiUserUi
-      : multiUserUi.replace(INSTALL_MODE_LEAVE, UPGRADE_SAFE_INSTALL_MODE_LEAVE),
-    assistedChanged: !directoryPatched,
-    installUtilChanged: !failurePatched,
-    multiUserUiChanged: !modeLeavePatched,
-    changed: true,
+    multiUserUi: nextMultiUser,
+    changed: nextAssisted !== originalAssisted || nextInstallUtil !== installUtil || nextMultiUser !== multiUserUi,
   }
 }
 
@@ -653,20 +617,17 @@ export function patchInstalledNsisTemplates() {
   const details = patchNsisDetailsTemplates(installSection, extractAppPackage, budget)
   const upgrade = patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiUserUi)
   const upgradeSection = patchNsisUpgradeInstallSection(details.installSection)
-  if (details.changed || upgradeSection.changed) {
-    rewriteFile(paths.installSection, upgradeSection.installSection)
-  }
-  if (details.changed) {
-    rewriteFile(paths.extractAppPackage, details.extractAppPackage)
-  }
-  if (upgrade.assistedChanged) {
-    rewriteFile(paths.assistedInstaller, upgrade.assistedInstaller)
-  }
-  if (upgrade.installUtilChanged) {
-    rewriteFile(paths.installUtil, upgrade.installUtil)
-  }
-  if (upgrade.multiUserUiChanged) {
-    rewriteFile(paths.multiUserUi, upgrade.multiUserUi)
+  let changed = false
+  for (const [file, before, after] of [
+    [paths.installSection, installSection, upgradeSection.installSection],
+    [paths.extractAppPackage, extractAppPackage, details.extractAppPackage],
+    [paths.assistedInstaller, assistedInstaller, upgrade.assistedInstaller],
+    [paths.installUtil, installUtil, upgrade.installUtil],
+    [paths.multiUserUi, multiUserUi, upgrade.multiUserUi],
+  ]) {
+    if (before === after) continue
+    rewriteFile(file, after)
+    changed = true
   }
   // What the budget was computed against, so smoke-package.mjs can re-derive
   // the real longest path from the packed output and refuse a budget that was
@@ -677,7 +638,7 @@ export function patchInstalledNsisTemplates() {
     maxPathUsable: MAX_PATH_USABLE,
     measuredFrom: RUNTIME_PACKED_PREFIX,
   }, null, 2) + '\n', 'utf8')
-  return { changed: details.changed || upgrade.changed || upgradeSection.changed, paths, longestPackedPath, budget }
+  return { changed, paths, longestPackedPath, budget }
 }
 
 /**
@@ -829,6 +790,15 @@ export function checkNsisInstallDetails() {
   if (nsisDetailsPatchBlockers(FIXTURE_INSTALL_SECTION, tampered).length === 0) {
     failures.push('an extractUsing7za body with an extra upstream step was accepted for patching')
   }
+  // Already-patched inputs must pass the same integrity check as pristine ones.
+  const tamperedPatched = fixture.extractAppPackage.replace('  Push $OUTDIR\n',
+    '  Push $OUTDIR\n  Call someNewUpstreamSafetyStep\n')
+  try {
+    patchNsisDetailsTemplates(fixture.installSection, tamperedPatched, FIXTURE_BUDGET)
+    failures.push('an already-patched template bypassed upstream integrity validation')
+  } catch (error) {
+    if (!describe(error).includes('not the pinned electron-builder body')) throw error
+  }
   // And a tree carrying only the older details patch must still migrate.
   const migrated = patchNsisDetailsTemplates(
     FIXTURE_INSTALL_SECTION, FIXTURE_DETAILS_ONLY_EXTRACT_APP, FIXTURE_BUDGET)
@@ -839,7 +809,7 @@ export function checkNsisInstallDetails() {
   try {
     const upgrade = patchNsisUpgradeTemplates(FIXTURE_ASSISTED_INSTALLER, FIXTURE_INSTALL_UTIL, FIXTURE_MULTI_USER_UI)
     if (!upgrade.changed) failures.push('upgrade fixture templates were already patched')
-    if (!upgrade.assistedInstaller.includes('$dshExistingInstallFound == "true"')
+    if (!upgrade.assistedInstaller.includes('$dshRecoveredInstallDir != ""')
       || !upgrade.assistedInstaller.includes('$INSTDIR == $dshRecoveredInstallDir')) {
       failures.push('fixture assistedInstaller.nsh does not preserve an existing install directory')
     }
@@ -854,6 +824,11 @@ export function checkNsisInstallDetails() {
     }
     const upgradeAgain = patchNsisUpgradeTemplates(upgrade.assistedInstaller, upgrade.installUtil, upgrade.multiUserUi)
     if (upgradeAgain.changed) failures.push('patching already-patched upgrade templates was not a no-op')
+    const cached = upgrade.assistedInstaller.replace('$dshRecoveredInstallDir != ""', '$dshExistingInstallFound == "true"')
+    const migratedUpgrade = patchNsisUpgradeTemplates(cached, upgrade.installUtil, upgrade.multiUserUi)
+    if (!migratedUpgrade.changed || migratedUpgrade.assistedInstaller !== upgrade.assistedInstaller) {
+      failures.push('a cached template did not migrate from the removed installation-found flag')
+    }
     const upgradeSection = patchNsisUpgradeInstallSection(FIXTURE_UPGRADE_INSTALL_SECTION)
     if (!upgradeSection.changed || !upgradeSection.installSection.includes('customPrepareUpgrade')) {
       failures.push('fixture installSection.nsh does not prepare the recovered directory before uninstall')
