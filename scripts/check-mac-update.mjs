@@ -102,8 +102,16 @@ try {
     assert.equal(launched, '2.0.0', 'native helper must launch the replaced bundle through LaunchServices')
     const transactions = (await readdir(work)).filter(name => name.startsWith('.dsh-update-'))
     assert.equal(transactions.length, 1)
-    await access(join(work, transactions[0], 'completed'))
-    await assert.rejects(access(join(work, transactions[0], 'image')), { code: 'ENOENT' })
+    let finalized = false
+    for (let i = 0; i < 100; i++) {
+      try {
+        await access(join(work, transactions[0], 'completed'))
+        await assert.rejects(access(join(work, transactions[0], 'image')), { code: 'ENOENT' })
+        finalized = true
+        break
+      } catch { await new Promise(resolve => setTimeout(resolve, 50)) }
+    }
+    assert.equal(finalized, true, 'detached helper must finish recording the completed transaction')
     console.log('✓ detached helper launches new native app and records a reclaimable completed transaction')
   }
 } finally {
