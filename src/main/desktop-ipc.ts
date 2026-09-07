@@ -13,7 +13,7 @@ interface Options {
   localeChinese: () => boolean
   confirmSensitiveAction: (message: string, detail: string) => Promise<boolean>
   currentTarget: () => string | undefined
-  requestSmartRuntimesSave: (value: unknown, remoteCaller?: boolean) => Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string }>
+  requestSmartRuntimesSave: (value: unknown, remoteCaller: boolean) => Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string }>
   requestLocalWebPortSave: (value: unknown, remoteCaller: boolean) => Promise<{ saved: boolean; localWebPort: number; applied?: boolean; error?: string }>
   selectedDshDataMode: (settings?: ClientSettings) => DshDataMode
   requestDshDataModeSave: (value: unknown) => { saved: boolean; dshDataMode: DshDataMode; applied?: boolean; error?: string }

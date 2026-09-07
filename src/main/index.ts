@@ -1480,7 +1480,7 @@ async function refuseOccupiedLocalSpawn(
 }
 
 function requestSmartRuntimesSave(value: unknown): Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string; }> {
-  return settingsCommands.requestSmartRuntimesSave(value)
+  return settingsCommands.requestSmartRuntimesSave(value, false)
 }
 
 function requestLocalWebPortSave(value: unknown, remoteCaller: boolean): Promise<{ saved: boolean; localWebPort: number; applied?: boolean; error?: string; }> {

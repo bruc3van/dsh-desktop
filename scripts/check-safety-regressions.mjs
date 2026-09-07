@@ -38,10 +38,10 @@ try {
       applySmartLocalRuntimeChange: () => applied++, resetRuntimeFailure() {},
     })
     const allowed = active === 'shared' && selected === 'shared'
-    assert.equal((await commands.requestSmartRuntimesSave(['probe'])).saved, allowed)
+    assert.equal((await commands.requestSmartRuntimesSave(['probe'], false)).saved, allowed)
     assert.equal(applied, allowed ? 1 : 0)
     assert.equal(settings.smartRuntimes.includes('bundled'), !allowed)
-    assert.equal((await commands.requestSmartRuntimesSave(['bundled'])).saved, true)
+    assert.equal((await commands.requestSmartRuntimesSave(['bundled'], false)).saved, true)
   }
   let selectedMode = 'shared', resumeSave
   const commands = createSettingsCommands({
@@ -50,13 +50,11 @@ try {
     refuseOccupiedLocalSpawn: () => new Promise(resolve => { resumeSave = resolve }),
     localeChinese: () => false, patchSettings: () => assert.fail('must not persist a raced probe-only save'),
   })
-  const racedSave = commands.requestSmartRuntimesSave(['probe'])
+  const racedSave = commands.requestSmartRuntimesSave(['probe'], false)
   await turn(); selectedMode = 'isolated'; resumeSave(undefined)
   assert.equal((await racedSave).saved, false)
   console.log('✓ isolated source saves preserve a runnable source, including data-mode changes during occupancy checks')
 
-  // Exercise the shared command through the real IPC handler: trust rejection,
-  // invalid input and declined consent must all precede persistence.
   const handlers = new Map()
   const { createDesktopIpc } = load('desktop-ipc', { electron: {
     app: {}, ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} },
@@ -83,7 +81,7 @@ try {
   consent = true
   assert.equal((await saveSources({}, ['bundled'])).saved, true)
   assert.equal(saves, 1)
-  assert.equal((await sharedCommands.requestSmartRuntimesSave(['bundled'])).saved, true)
+  assert.equal((await sharedCommands.requestSmartRuntimesSave(['bundled'], false)).saved, true)
   assert.equal(saves, 2)
   assert.equal(confirmations, 2)
   console.log('✓ IPC and local source saves share validation while preserving trust and remote consent')

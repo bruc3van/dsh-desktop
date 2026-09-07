@@ -522,7 +522,8 @@ export function patchNsisDetailsTemplates(installSection, extractAppPackage, bud
  * @returns {{ assistedInstaller: string, installUtil: string, multiUserUi: string, changed: boolean }}
  */
 export function patchNsisUpgradeTemplates(assistedInstaller, installUtil, multiUserUi) {
-  // Accept cached templates from before the redundant found flag was removed.
+  // Normalize cached flag-based templates before detecting the directory patch,
+  // or a compatible cached template would fail the upstream-template guard.
   const originalAssisted = assistedInstaller
   assistedInstaller = assistedInstaller.replaceAll('$dshExistingInstallFound == "true"', '$dshRecoveredInstallDir != ""')
   const directoryPatched = assistedInstaller.includes(UPGRADE_SAFE_DIRECTORY_NORMALIZATION)

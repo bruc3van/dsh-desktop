@@ -103,7 +103,7 @@ export function createSettingsCommands(options: Options) {
   }
 
 
-  async function requestSmartRuntimesSave(value: unknown, remoteCaller = false): Promise<{
+  async function requestSmartRuntimesSave(value: unknown, remoteCaller: boolean): Promise<{
     saved: boolean
     smartRuntimes: SmartRuntimeId[]
     error?: string

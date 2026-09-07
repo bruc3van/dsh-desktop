@@ -213,8 +213,6 @@ const feedOnlyUpdater = (platform, arch, feed = matrixFeed, currentVersion = '0.
   savePersistence: () => {},
   dryRun: true,
 })
-// One phase stream owns check progress. Concurrent checks share the request,
-// and a failed check can be retried without a second checking flag/reset event.
 let finishCheck, checkRequests = 0
 const phases = []
 const checkStateUpdater = new DesktopUpdater({
