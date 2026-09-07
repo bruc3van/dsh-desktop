@@ -839,6 +839,19 @@ function openSettingsWindow(): void {
   })
   mainWindowFactory.installPageContextMenu(settingsWindow.webContents)
   settingsWindow.on('closed', () => { settingsWindow = null })
+  settingsWindow.webContents.on('will-prevent-unload', (event) => {
+    const owner = settingsWindow
+    if (owner === null || owner.isDestroyed()) return
+    const chinese = localeChinese()
+    const choice = dialog.showMessageBoxSync(owner, {
+      type: 'question',
+      message: chinese ? '来源更改尚未应用。要放弃更改吗？' : 'Source changes have not been applied. Discard them?',
+      buttons: chinese ? ['继续编辑', '放弃更改'] : ['Continue editing', 'Discard changes'],
+      defaultId: 0,
+      cancelId: 0,
+    })
+    if (choice === 1) event.preventDefault()
+  })
   // The page carries links now — the ones inside rendered release notes — and
   // they must leave for the system browser rather than do nothing at all. The
   // window itself still never navigates anywhere (see will-navigate below).
@@ -1577,7 +1590,9 @@ function showLocalRuntimeStartupFailure(code: number | null, signal: NodeJS.Sign
     code === null ? undefined : (chinese ? '代码 ' : 'code ') + String(code),
     signal === null ? undefined : (chinese ? '信号 ' : 'signal ') + signal,
   ].filter((part): part is string => part !== undefined).join(chinese ? '、' : ', ')
+  const cause = sanitizeRuntimeOutput(webUi?.lastError ?? '')
   const detail = [
+    cause === '' ? undefined : (chinese ? '失败原因：' : 'Failure reason: ') + cause,
     source === undefined ? undefined : (chinese ? '运行时：' : 'Runtime: ') + source,
     command === undefined ? undefined : (chinese ? '启动目标：' : 'Launch target: ') + command.label,
     (chinese ? '退出状态：' : 'Exit status: ') + (exitStatus === '' ? (chinese ? '未知' : 'unknown') : exitStatus),

@@ -286,15 +286,21 @@ export function createRuntimeEnvironment(options: { appDir: string; clientHome()
 
   /**
    * The bundled dsh CLI. Release builds use pnpm deploy to materialize the
-   * complete production closure outside app.asar; development resolves the same
-   * pinned package from the dsh-runtime workspace. An end user needs neither a
-   * system Node nor a separately installed dsh command.
+   * complete production closure outside app.asar. After prepare:runtime,
+   * development uses that same deployed closure; otherwise it falls back to the
+   * pinned package from the dsh-runtime workspace. The deployed closure matters
+   * for plugins that resolve siblings from the profile directory rather than
+   * from dsh's own pnpm-linked package tree. An end user needs neither a system
+   * Node nor a separately installed dsh command.
    */
   function resolveBundledDsh(): DshCommand | undefined {
     try {
+      const deployed = join(APP_DIR, '.runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
       const bin = app.isPackaged
         ? join(process.resourcesPath, 'dsh-runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
-        : createRequire(join(APP_DIR, 'dsh-runtime', 'package.json')).resolve('@deepseek-ai/dsh/lib/bin.js')
+        : existsSync(deployed)
+          ? deployed
+          : createRequire(join(APP_DIR, 'dsh-runtime', 'package.json')).resolve('@deepseek-ai/dsh/lib/bin.js')
       if (!existsSync(bin)) return undefined
       return {
         command: nodeForChild(),

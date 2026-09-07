@@ -1,3 +1,4 @@
+import { choiceControlsCss } from '../choice-controls.ts'
 import { releaseNotesCss } from '../release-notes.ts'
 import { RELEASES_PAGE_URL } from '../updater.ts'
 
@@ -16,12 +17,12 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + '<meta name="color-scheme" content="light dark">'
     + '<style>:root{color-scheme:light dark}'
     + '*{box-sizing:border-box;margin:0;padding:0}'
-    + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;font-size:14px;line-height:1.6;background:#fff;color:#0f1115;min-height:100vh;display:flex;justify-content:center;padding:48px 24px 40px}'
+    + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;font-size:14px;line-height:1.6;background:#fff;color:#0f1115;min-height:100vh;display:flex;justify-content:center;padding:24px 24px 32px}'
     + '.container{width:100%;max-width:560px}'
-    // Header: centered logo + title, matching loading page
-    + '.header{text-align:center;margin-bottom:36px}'
-    + '.mark{width:56px;height:56px;border-radius:14px;box-shadow:0 12px 32px rgba(15,17,21,.14)}'
-    + '.page-title{margin:18px 0 0;font-size:18px;font-weight:600;letter-spacing:-.01em}'
+    // Compact settings header using the existing logo and typography.
+    + '.header{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:24px}'
+    + '.mark{display:block;width:36px;height:36px;border-radius:9px;box-shadow:0 6px 16px rgba(15,17,21,.12)}'
+    + '.page-title{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em}'
     // Section titles with badge
     + '.section{margin-bottom:24px}'
     + '.section-title{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:14px;font-weight:500}'
@@ -63,7 +64,7 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + releaseNotesCss('#update-notes', { text: '#6e7480', strong: '#0f1115', border: '#d8d8d4', surface: '#ebeef2' })
     // Dark mode
     + '@media(prefers-color-scheme:dark){body{background:#17181a;color:#f4f5f6}'
-    + '.mark{box-shadow:0 12px 32px rgba(0,0,0,.34)}'
+    + '.mark{box-shadow:0 6px 16px rgba(0,0,0,.28)}'
     + '.badge{background:#2c2e33;color:#818791}'
     + '.status-text{color:#aeb3bb}.version-text{color:#818791}'
     + 'input{background:#1e1f22;border-color:#3a3d42;color:#f4f5f6}'
@@ -77,6 +78,14 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + '.status-text.error{color:#ff6b6b}'
     + releaseNotesCss('#update-notes', { text: '#aeb3bb', strong: '#f4f5f6', border: '#3a3d42', surface: '#232529' })
     + '}'
+    + 'body{--choice-text:#0f1115;--choice-muted:#6e7480;--choice-border:#d8d8d4;--choice-surface:#f5f6f7;--choice-inverse:#fff}'
+    + '@media(prefers-color-scheme:dark){body{--choice-text:#f4f5f6;--choice-muted:#aeb3bb;--choice-border:#3a3d42;--choice-surface:#232529;--choice-inverse:#17181a}}'
+    + choiceControlsCss('body', 'primary')
+    + '#market-toggle{position:relative;flex-shrink:0;width:40px;height:22px;padding:0;border:0;border-radius:999px;background:var(--choice-border)}'
+    + '#market-toggle[aria-checked="true"]{background:var(--choice-text)}'
+    + '#market-toggle::before{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--choice-inverse);transition:transform .15s ease;pointer-events:none}'
+    + '#market-toggle[aria-checked="true"]::before{transform:translateX(18px)}'
+    + '#market-toggle:focus-visible{outline:2px solid var(--choice-text);outline-offset:3px}'
     // Reduced motion
     + '@media(prefers-reduced-motion:reduce){*{transition:none!important}}'
     + '</style></head><body><div class="container">'
@@ -84,21 +93,24 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + '<div class="header">' + icon + '<h1 class="page-title">' + h('DSH Desktop 设置', 'DSH Desktop settings') + '</h1></div>'
     // Connection section
     + '<div class="section">'
-    + '<div class="section-title">' + h('连接', 'Connection') + '<span class="badge">' + h('增强功能', 'Enhanced') + '</span></div>'
+    + '<div class="section-title">' + h('连接', 'Connection') + '</div>'
     + '<p class="status-text" id="status">' + h('连接状态读取中…', 'Reading connection status…') + '</p>'
     + '<div class="runtime-picks" role="radiogroup" aria-label="' + h('连接方式', 'Connection mode') + '">'
     + '<button type="button" id="mode-smart" class="primary">' + h('智能', 'Smart') + '</button>'
     + '<button type="button" id="mode-custom">' + h('自定义', 'Custom') + '</button>'
     + '</div>'
     + '<div id="smart-block">'
-    + '<p class="note" style="margin-top:14px">' + h('可多选，按优先级依次尝试', 'Pick any; tried in this order') + '</p>'
+    + '<div id="runtime-editor">'
+    + '<p class="note" style="margin-top:14px">' + h('可多选，按优先级依次尝试；应用后生效。关掉的来源会跳过。至少保留一种。', 'Pick any; tried in this order after applying. Sources you turn off are skipped. Keep at least one.') + '</p>'
     + '<div class="runtime-picks">'
     + '<button type="button" data-smart-runtime="probe" class="primary" data-tip="' + h('本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。', 'Connect to an official Web UI already running on this machine (3080 by default) instead of starting another.') + '" aria-description="' + h('本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。', 'Connect to an official Web UI already running on this machine (3080 by default) instead of starting another.') + '">' + h('本机已运行', 'Already running') + '</button>'
     + '<button type="button" data-smart-runtime="installed" class="primary" data-tip="' + h('用你 PATH 上自己安装的 dsh，由客户端在后台启动。', 'Start the dsh on your own PATH, in the background, from this client.') + '" aria-description="' + h('用你 PATH 上自己安装的 dsh，由客户端在后台启动。', 'Start the dsh on your own PATH, in the background, from this client.') + '">' + h('本机已安装', 'Installed') + '</button>'
     + '<button type="button" data-smart-runtime="npx" class="primary" data-tip="' + h('用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。', 'Start from the package that npx @deepseek-ai/dsh left in your cache. No network.') + '" aria-description="' + h('用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。', 'Start from the package that npx @deepseek-ai/dsh left in your cache. No network.') + '">' + h('npx 缓存', 'npx cache') + '</button>'
     + '<button type="button" data-smart-runtime="bundled" class="primary" data-tip="' + h('用安装包自带的官方运行时，不用另装 Node 或 dsh。', 'Use the official runtime shipped inside this client. No separate Node or dsh needed.') + '" aria-description="' + h('用安装包自带的官方运行时，不用另装 Node 或 dsh。', 'Use the official runtime shipped inside this client. No separate Node or dsh needed.') + '">' + h('客户端内置', 'Bundled') + '</button>'
     + '</div>'
-    + '<p class="note" id="runtime-note">' + h('关掉的来源会跳过。至少保留一种。', 'Sources you turn off are skipped. Keep at least one.') + '</p>'
+    + '<p class="note" data-runtime-status role="status" aria-live="polite"></p>'
+    + '<div class="actions"><button type="button" data-runtime-undo disabled>' + h('撤销更改', 'Undo changes') + '</button>'
+    + '<button type="button" class="primary" data-runtime-apply disabled>' + h('应用并重新连接', 'Apply and reconnect') + '</button></div></div>'
     + '<p class="note" style="margin-top:14px">' + h('本地服务端口', 'Local service port') + '</p>'
     + '<div class="runtime-picks" role="radiogroup" aria-label="' + h('本地服务端口', 'Local service port') + '">'
     + '<button type="button" id="port-random" class="primary">' + h('自动', 'Automatic') + '</button>'
@@ -137,11 +149,11 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     // The native settings window remains complete when official DOM integration is unavailable.
     + '<div class="section"><div class="section-title"><span id="market-label">' + h('安全市场', 'Safe marketplace') + '</span>'
     + '<div class="actions"><button id="market-toggle" type="button" role="switch" aria-checked="false" aria-labelledby="market-label" disabled>'
-    + h('正在读取…', 'Loading…') + '</button></div></div>'
+    + '</button></div></div>'
     + '<p class="status-text" id="market-note" aria-live="polite"></p></div><hr class="divider">'
     // Update section
     + '<div class="section">'
-    + '<div class="section-title">' + h('应用更新', 'App updates') + '<span class="badge">' + h('增强功能', 'Enhanced') + '</span>'
+    + '<div class="section-title">' + h('应用更新', 'App updates')
     + '<div class="actions">'
     + '<a class="icon-link" id="update-page" href="' + RELEASES_PAGE_URL + '" target="_blank" rel="noreferrer"'
     + ' title="' + h('打开 GitHub 发布页手动下载', 'Open the GitHub releases page to download manually') + '" aria-label="' + h('打开 GitHub 发布页手动下载', 'Open the GitHub releases page to download manually') + '">' + EXTERNAL_LINK_SVG + '</a>'

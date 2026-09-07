@@ -21,7 +21,10 @@ try {
     env: { ...sanitizedElectronEnv(), DSH_HOME: join(home, 'dsh'), DSH_DESKTOP_HOME: desktopHome,
       DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_SKIP_INSTALLED_DSH: '1', DSH_DESKTOP_SKIP_UPDATE_PROMPT: '1' } })
   const page = await app.firstWindow()
-  await page.waitForFunction(() => document.querySelector('#root')?.children.length > 0, null, { timeout: 60000 })
+  await page.waitForFunction(() => document.querySelector('#root')?.children.length > 0, null, { timeout: 60000 }).catch(async error => {
+    console.error('Official UI did not load:', (await page.locator('body').innerText()).slice(0, 1500))
+    throw error
+  })
   // #root can render a loading screen before onboarding arrives. Keep
   // observing the first-run flow until the actual settings entry is usable;
   // a single "overlay absent" sample can race asynchronous initialization.
@@ -57,6 +60,19 @@ try {
     return state
   }
   const status = await open()
+  await page.waitForFunction(() => !document.querySelector('[data-smart-runtime="bundled"]').disabled)
+  await page.locator('[data-smart-runtime="installed"]').click()
+  await page.locator('[data-smart-runtime="npx"]').click()
+  const pendingStatus = await page.evaluate(() => window.desktop.connection.getStatus())
+  assert.equal(pendingStatus.childPid, status.childPid, 'editing sources must not restart the runtime')
+  assert.deepEqual(pendingStatus.smartRuntimes, ['bundled'], 'draft must not persist before apply')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click()
+  assert.equal(await page.locator('[data-smart-runtime="installed"]').getAttribute('aria-pressed'), 'true')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '放弃更改', exact: true }).click()
+  await page.waitForSelector('#dsh-desktop-panel', { state: 'detached' })
+  await open()
   await page.getByText(/^(通用设置|General|General Settings)$/).click()
   assert.equal(await page.locator('#dsh-desktop-panel').count(), 0)
   await page.keyboard.press('Escape')

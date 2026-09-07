@@ -255,6 +255,9 @@ try {
     try {
       await assert.rejects(managed.ready(), /startup timed out/)
       assert.equal((await exited).retryable, true)
+      assert.match(managed.lastError, /startup timed out/)
+      assert.match(managed.lastDiagnostic, /startup timed out/)
+      if (announce) assert.match(managed.lastDiagnostic, /dsh web:/)
       assert.equal(managed.pid(), undefined)
       assert.equal(lock.readRuntimeLock(startupHome), undefined)
       resolveProbe?.(); await turn()

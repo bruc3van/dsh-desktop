@@ -390,6 +390,9 @@ FunctionEnd
 !macroend
 
 !macro customHeader
+  ; Render at the system DPI instead of letting Windows bitmap-stretch the
+  ; whole wizard (including its multi-resolution app icon) on scaled displays.
+  ManifestDPIAware true
   ShowInstDetails show
   ShowUninstDetails show
 !macroend

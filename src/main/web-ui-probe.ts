@@ -207,11 +207,14 @@ export function createWebUiProbe(options: { childHome(): string; configuredLocal
    */
   async function waitForWebUiReady(base: string): Promise<void> {
     const deadline = Date.now() + 20_000
+    let lastResult: WebUiProbeResult['kind'] = 'unavailable'
     while (Date.now() < deadline) {
-      if (await probeWebUi(base, 300) !== undefined) return
+      const result = await inspectWebUi(base, 300)
+      if (result.kind === 'verified') return
+      lastResult = result.kind
       await new Promise(resolve => setTimeout(resolve, 100))
     }
-    throw new Error('dsh web reported readiness but did not accept API requests')
+    throw new Error('dsh web reported readiness but API verification failed within 20s (last result: ' + lastResult + ')')
   }
 
   return { defaultWebProbeUrl, probeSmartTargets, inspectWebUi, probeWebUi, prepareLocalWebPort, waitForWebUiReady }

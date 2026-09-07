@@ -5,7 +5,7 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { type ClientSettings } from './client-settings.ts'
 import { devFlag } from './development-options.ts'
-import { renderUpdatePromptPageUrl } from './pages/update.ts'
+import { renderUpdatePromptPageUrl, updatePromptStateScript } from './pages/update.ts'
 import { renderReleaseNotes } from './release-notes.ts'
 import {
   AUTO_CHECK_DELAY_MS,
@@ -161,6 +161,7 @@ export function createUpdateController(services: Options) {
 
 
   function broadcastUpdateState(state: UpdateState): void {
+    paintUpdatePromptState(state)
     const mainWindow = services.getMainWindow()
     if (mainWindow !== null && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('desktop:update:changed', updateStateForCaller(state, mainWindowShowsRemote()))
@@ -230,6 +231,13 @@ export function createUpdateController(services: Options) {
 
   let updatePromptWindow: BrowserWindow | null = null
 
+  function paintUpdatePromptState(state: UpdateState): void {
+    const prompt = updatePromptWindow
+    if (prompt === null || prompt.isDestroyed() || prompt.webContents.isDestroyed()) return
+    void prompt.webContents.executeJavaScript(updatePromptStateScript(state, localeChinese()))
+      .catch(() => { /* The user may close the prompt while a progress update is queued. */ })
+  }
+
 
   /**
    * The update prompt is one of the client's own surfaces, so it uses the same
@@ -276,6 +284,7 @@ export function createUpdateController(services: Options) {
     // hidden window to its natural content height. The footer remains at the
     // bottom and a short changelog does not leave a blank half-window below it.
     prompt.webContents.once('did-finish-load', () => {
+      if (desktopUpdater !== undefined) paintUpdatePromptState(desktopUpdater.getState())
       const measure = mainContentHeightScript(560)
       void prompt.webContents.executeJavaScript(measure, true)
         .then((height: unknown) => {
@@ -293,14 +302,23 @@ export function createUpdateController(services: Options) {
     const handleAction = (targetUrl: string): boolean => {
       if (!targetUrl.startsWith('dsh-update-action:')) return false
       const action = targetUrl.slice('dsh-update-action:'.length)
+      if (action === 'install') {
+        const phase = desktopUpdater?.getState().phase
+        if (phase === 'downloading' || phase === 'installing' || phase === 'restartRequired') return true
+        void installDesktopUpdate().then((installed) => {
+          if (installed.started) scheduleQuitAfterWindowsInstall()
+        })
+        return true
+      }
+      if (action === 'ignore') {
+        const phase = desktopUpdater?.getState().phase
+        if (phase === 'downloading' || phase === 'installing' || phase === 'restartRequired') return true
+      }
       prompt.close()
       if (action === 'ignore') {
         desktopUpdater?.dismiss()
         return true
       }
-      if (action === 'install') void installDesktopUpdate().then((installed) => {
-        if (installed.started) scheduleQuitAfterWindowsInstall()
-      })
       return true
     }
     prompt.webContents.setWindowOpenHandler(({ url }) => {

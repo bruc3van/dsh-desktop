@@ -199,6 +199,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: pnpm run check:settings-integration
 
+      - name: 验证运行时来源批量选择 / Verify runtime source batch selection
+        if: ${{ !cancelled() }}
+        run: pnpm run check:runtime-selection
+
       - name: 验证已安装运行时解析 / Verify installed-runtime resolution
         if: ${{ !cancelled() }}
         run: pnpm run check:installed-runtime

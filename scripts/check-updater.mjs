@@ -544,6 +544,9 @@ const redirectFeed = {
 
 let feedMode = 'available'
 let pageDelayMs = 0
+let payloadDelayMs = 0
+let corruptPayload = false
+let payloadRequests = 0
 const fixture = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1')
   if (url.pathname === '/latest.json') {
@@ -560,8 +563,12 @@ const fixture = createServer((req, res) => {
     return
   }
   if (url.pathname === '/payload') {
+    payloadRequests++
+    const body = corruptPayload ? Buffer.alloc(payload.length) : payload
     res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(payload.length) })
-    res.end(payload)
+    res.write(body.subarray(0, 10))
+    if (payloadDelayMs > 0) setTimeout(() => res.end(body.subarray(10)), payloadDelayMs)
+    else res.end(body.subarray(10))
     return
   }
   // A real GitHub release asset is served behind a 302; the download must
@@ -625,6 +632,7 @@ noHashFeed.platforms[currentKey].url = origin + '/payload'
 hangFeed.platforms[currentKey].url = origin + '/hang'
 redirectFeed.platforms[currentKey].url = origin + '/redirect-payload'
 
+const launchedApps = []
 const launchApp = async (home, extraEnv = {}, options = {}) => {
   // `extraEnv` is applied after the strip, so a caller's knob still lands —
   // but an ambient one does not. That matters most for the prompt run below,
@@ -648,6 +656,7 @@ const launchApp = async (home, extraEnv = {}, options = {}) => {
     args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(home, 'chromium')],
     env: electronEnv,
   })
+  launchedApps.push(launched)
   await launched.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
   })
@@ -774,6 +783,36 @@ try {
     || promptLayout.actionBottomGap > 32) {
     throw new Error('update prompt layout/copy mismatch: ' + JSON.stringify(promptLayout))
   }
+  payloadDelayMs = 1_500
+  corruptPayload = true
+  const requestsBefore = payloadRequests
+  await prompt.locator('#update-install').click({ noWaitAfter: true })
+  await prompt.waitForFunction(() => {
+    const progress = document.getElementById('update-progress')
+    return !progress.hidden && progress.value > 0 && progress.value < 100
+  })
+  const progressLayout = await prompt.evaluate(() => ({
+    disabled: document.getElementById('update-install').getAttribute('aria-disabled'),
+    details: document.getElementById('update-progress-detail').textContent,
+    bottom: document.querySelector('.actions').getBoundingClientRect().bottom,
+    height: innerHeight,
+  }))
+  if (progressLayout.disabled !== 'true' || !progressLayout.details.includes('%') || progressLayout.bottom > progressLayout.height) {
+    throw new Error('prompt must show progress with visible disabled actions: ' + JSON.stringify(progressLayout))
+  }
+  // Even a stale action from before the button repaint cannot start twice.
+  await prompt.evaluate(() => { window.open('dsh-update-action:install') })
+  await prompt.waitForFunction(() => document.getElementById('update-status').textContent.includes('SHA-256'))
+  if (payloadRequests !== requestsBefore + 1) throw new Error('duplicate prompt action started another download')
+  if (await prompt.locator('#update-install').getAttribute('aria-disabled') !== 'false') throw new Error('failed download must enable retry')
+  corruptPayload = false
+  await prompt.locator('#update-install').click({ noWaitAfter: true })
+  await prompt.locator('#update-progress').waitFor({ state: 'visible' })
+  await prompt.waitForFunction(() => document.getElementById('update-progress').hidden
+    && document.getElementById('update-status').hidden)
+  if (payloadRequests !== requestsBefore + 2) throw new Error('retry did not download again')
+  payloadDelayMs = 0
+  console.log('✓ update prompt stays open for progress, blocks duplicates, and retries a failed download')
   const promptClosed = prompt.waitForEvent('close', { timeout: 3_000 })
   // The click deliberately destroys its own page; Playwright can observe the
   // teardown before its click promise settles, so closure is the assertion.
@@ -843,7 +882,11 @@ try {
   }
   await hang.app.close()
   console.log('✓ a stalled download times out and unlocks the updater')
+} catch (error) {
+  console.error('Updater regression failed:', error)
+  throw error
 } finally {
+  await Promise.allSettled(launchedApps.map(app => app.close()))
   // closeAllConnections() before close(): the `/hang` route answers nothing by
   // design, so close() alone would wait on a connection that never completes.
   // rmSync retries because Chromium can release its profile files a moment

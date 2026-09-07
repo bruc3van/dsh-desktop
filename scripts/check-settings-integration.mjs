@@ -100,6 +100,36 @@ try {
   await page.waitForSelector('#dsh-desktop-panel')
   assert.equal(await page.locator('#official-panel').evaluate(el => el.style.display), 'none')
 
+  // The fixture is a custom connection, so applying sources persists the
+  // preference without replacing the test server. Exercise the actual IPC.
+  await page.waitForFunction(() => !document.querySelector('[data-smart-runtime="bundled"]').disabled)
+  await page.locator('#dsh-enhance-smart').evaluate(el => { el.hidden = false })
+  const sourcesBefore = await page.evaluate(async () => (await window.desktop.connection.getStatus()).smartRuntimes)
+  await page.locator('[data-smart-runtime="installed"]').click()
+  await page.locator('[data-smart-runtime="npx"]').click()
+  assert.deepEqual(await page.evaluate(async () => (await window.desktop.connection.getStatus()).smartRuntimes), sourcesBefore)
+  await page.locator('.navList button').first().click()
+  await page.waitForSelector('dialog[open]')
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('#dsh-desktop-panel').count(), 1)
+  assert.equal(await page.locator('dialog[open]').count(), 0)
+  assert.equal(await page.locator('[data-smart-runtime="installed"]').getAttribute('aria-pressed'), 'false', 'closing warning retains draft')
+  assert.equal(await page.locator('[data-runtime-apply]').isEnabled(), true)
+  await app.evaluate(({ dialog }) => {
+    const original = dialog.showMessageBox
+    dialog.showMessageBox = async () => {
+      dialog.showMessageBox = original
+      return { response: 1, checkboxChecked: false }
+    }
+  })
+  await page.locator('[data-runtime-apply]').click()
+  await page.waitForFunction(() => document.querySelector('[data-runtime-status]').textContent === '已应用来源设置', null, { timeout: 10000 }).catch(async error => {
+    console.error('runtime editor:', await page.locator('#dsh-enhance-runtime-editor').innerText())
+    throw error
+  })
+  assert.deepEqual(await page.evaluate(async () => (await window.desktop.connection.getStatus()).smartRuntimes), ['probe', 'bundled'])
+  console.log('✓ source draft stays local; navigation warning preserves edits; one batch persists through real IPC')
+
   // A new wrapper breaks the known content hierarchy while preserving live
   // official elements. Cleanup must restore their exact inline display/class.
   await page.evaluate(() => {

@@ -191,9 +191,9 @@ export class WebUiManager {
       this.lastDiagnostic = failure.message
       rejectReady(failure)
       void this.stop().catch((stopError: unknown) => {
-        this.lastDiagnostic = failure.message + '\n' + String(stopError)
+        this.lastDiagnostic = (this.lastDiagnostic ?? failure.message) + '\n' + String(stopError)
       }).finally(() => {
-        this.options.onExit({ wasReady: false, code: null, signal: null, retryable: this.fatalError === undefined })
+        this.options.onExit({ wasReady: false, code: child.exitCode, signal: child.signalCode, retryable: this.fatalError === undefined })
       })
     }
     gen.startupTimer = setTimeout(() => {
@@ -287,8 +287,13 @@ export class WebUiManager {
       if (!gen.readyReported) {
         const diagnostic = runtimeStartupDiagnostic(stderrTail, stdoutTail)
         if (diagnostic !== undefined) {
-          this.lastDiagnostic = diagnostic
-          this.lastError = runtimeDiagnosticSummary(diagnostic)
+          if (failureReported) {
+            // Preserve the initiating failure when stopping its child produces output.
+            this.lastDiagnostic = (this.lastDiagnostic ?? this.lastError ?? '') + '\n\n' + diagnostic
+          } else {
+            this.lastDiagnostic = diagnostic
+            this.lastError = runtimeDiagnosticSummary(diagnostic)
+          }
         } else if (this.lastError === null) {
           this.lastError = 'dsh web exited before ready (code=' + String(code) + ', signal=' + String(signal) + ')'
         }

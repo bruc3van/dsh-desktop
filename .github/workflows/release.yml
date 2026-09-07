@@ -298,6 +298,9 @@ jobs:
       - name: 验证智能连接来源契约 / Verify Smart-mode source preference
         run: pnpm run check:smart-runtimes
 
+      - name: 验证运行时来源批量选择 / Verify runtime source batch selection
+        run: pnpm run check:runtime-selection
+
       - name: 验证本地服务端口契约 / Verify local-bind port preference
         run: pnpm run check:local-web-port
 

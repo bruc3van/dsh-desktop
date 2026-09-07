@@ -27,7 +27,7 @@ export function renderErrorPageUrl(copy: {
     + '<meta name="color-scheme" content="light dark"><title>' + escapeHtml(copy.title) + '</title><style>'
     + ':root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}'
     + '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fff;color:#0f1115;padding:32px 24px}'
-    + 'main{width:min(420px,100%);text-align:center}'
+    + 'main{width:min(720px,100%);text-align:center}'
     + '.mark{width:64px;height:64px;border-radius:16px;box-shadow:0 12px 32px rgba(15,17,21,.14)}'
     + 'h1{margin:22px 0 0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.01em}'
     + '.hint{margin:10px 0 0;color:#6e7480;font-size:14px;line-height:22px}'

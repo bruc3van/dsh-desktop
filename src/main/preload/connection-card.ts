@@ -1,3 +1,5 @@
+import { choiceControlsCss } from '../choice-controls.ts'
+import { installRuntimeSelection } from '../runtime-selection.ts'
 import { connection, type ConnectionStatus } from './bridge.ts'
 import { releaseNotesCss } from '../release-notes.ts'
 import { ENHANCE_ID, UPDATE_ID, DESKTOP_PANEL_ID } from './constants.ts'
@@ -52,6 +54,8 @@ export function injectEnhance(panel: Element): void {
         + '#' + ENHANCE_ID + ' #dsh-enhance-port-block[hidden]{display:none}',
       '#' + ENHANCE_ID + ' .dsh-enhance-runtimes{flex-wrap:wrap;margin-top:8px}',
       '#' + ENHANCE_ID + ' .dsh-enhance-runtime{padding:5px 12px}',
+      '#' + ENHANCE_ID + '{--choice-text:var(--dsw-alias-label-primary,#0f1115);--choice-muted:var(--dsw-alias-label-secondary,#6e7480);--choice-border:var(--dsw-alias-border-l2,#d8d8d4);--choice-surface:var(--dsw-alias-bg-module-platform,#f5f6f7);--choice-inverse:var(--dsw-alias-bg-layer-1,#fff)}',
+      choiceControlsCss('#' + ENHANCE_ID, 'dsh-enhance-switch'),
       '#' + UPDATE_ID + '{margin:0;padding:16px 0;border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
       '#' + UPDATE_ID + ' .dsh-update-title{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + UPDATE_ID + ' .dsh-update-version{margin:0 0 4px;font-size:12px;color:var(--dsw-alias-label-tertiary,#8A9099)}',
@@ -97,14 +101,18 @@ export function injectEnhance(panel: Element): void {
     + '<button class="dsh-enhance-button" id="dsh-enhance-mode-custom" type="button" role="radio" aria-checked="false">自定义</button>'
     + '</div>'
     + '<div class="dsh-enhance-smart" id="dsh-enhance-smart">'
-    + '<p class="dsh-enhance-note">可多选，按优先级依次尝试</p>'
+    + '<div id="dsh-enhance-runtime-editor">'
+    + '<p class="dsh-enhance-note">可多选，按优先级依次尝试；应用后生效。关掉的来源会跳过。至少保留一种。</p>'
     + '<div class="dsh-enhance-row dsh-enhance-runtimes" id="dsh-enhance-runtimes">'
     + runtimePick('probe', '本机已运行', '本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。')
     + runtimePick('installed', '本机已安装', '用你 PATH 上自己安装的 dsh，由客户端在后台启动。')
     + runtimePick('npx', 'npx 缓存', '用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。')
     + runtimePick('bundled', '客户端内置', '用安装包自带的官方运行时，不用另装 Node 或 dsh。')
     + '</div>'
-    + '<p class="dsh-enhance-note" id="dsh-enhance-runtimeNote">关掉的来源会跳过。至少保留一种。</p>'
+    + '<p class="dsh-enhance-note" data-runtime-status role="status" aria-live="polite"></p>'
+    + '<div class="dsh-enhance-row dsh-enhance-runtimes">'
+    + '<button class="dsh-enhance-button" type="button" data-runtime-undo disabled>撤销更改</button>'
+    + '<button class="dsh-enhance-button dsh-enhance-switch" type="button" data-runtime-apply disabled>应用并重新连接</button></div></div>'
     + '<p class="dsh-enhance-note" style="margin-top:14px">本地服务端口</p>'
     + '<div class="dsh-enhance-row dsh-enhance-runtimes" role="radiogroup" aria-label="本地服务端口">'
     + '<button class="dsh-enhance-button dsh-enhance-runtime dsh-enhance-switch" id="dsh-enhance-port-random" type="button">自动</button>'
@@ -150,13 +158,11 @@ export function injectEnhance(panel: Element): void {
   const modeCustomEl = block.querySelector('#dsh-enhance-mode-custom') as HTMLButtonElement
   const smartBlockEl = block.querySelector('#dsh-enhance-smart') as HTMLElement
   const customBlockEl = block.querySelector('#dsh-enhance-custom') as HTMLElement
-  const runtimeNoteEl = block.querySelector('#dsh-enhance-runtimeNote') as HTMLElement
   const portRandomEl = block.querySelector('#dsh-enhance-port-random') as HTMLButtonElement
   const portFixedEl = block.querySelector('#dsh-enhance-port-fixed') as HTMLButtonElement
   const portBlockEl = block.querySelector('#dsh-enhance-port-block') as HTMLElement
   const portEl = block.querySelector('#dsh-enhance-port') as HTMLInputElement
   const portNoteEl = block.querySelector('#dsh-enhance-portNote') as HTMLElement
-  const runtimeDefaultNote = '关掉的来源会跳过。至少保留一种。'
   const dataSharedEl = block.querySelector('#dsh-enhance-data-shared') as HTMLButtonElement
   const dataIsolatedEl = block.querySelector('#dsh-enhance-data-isolated') as HTMLButtonElement
   const dataPathEl = block.querySelector('#dsh-enhance-dataPath') as HTMLElement
@@ -329,84 +335,15 @@ export function injectEnhance(panel: Element): void {
       marketEl.disabled = false
     }
   })
-  const runtimeButtons = [...block.querySelectorAll('[data-smart-runtime]')] as HTMLButtonElement[]
-  const allRuntimes: Array<'probe' | 'installed' | 'npx' | 'bundled'> = ['probe', 'installed', 'npx', 'bundled']
-  const paintRuntimes = (ids: Array<'probe' | 'installed' | 'npx' | 'bundled'> | undefined): void => {
-    const on = new Set(ids !== undefined && ids.length > 0 ? ids : allRuntimes)
-    for (const button of runtimeButtons) {
-      const id = button.getAttribute('data-smart-runtime')
-      button.classList.toggle('dsh-enhance-switch', id !== null && on.has(id as typeof allRuntimes[number]))
-    }
-  }
-  type SmartRuntimePick = 'probe' | 'installed' | 'npx' | 'bundled'
-  let runtimeSaveBusy = false
-  let runtimeSaveQueued: SmartRuntimePick[] | undefined
-  const selectedRuntimes = (): SmartRuntimePick[] => runtimeButtons
-    .filter((entry) => entry.classList.contains('dsh-enhance-switch'))
-    .map((entry) => entry.getAttribute('data-smart-runtime'))
-    .filter((entry): entry is SmartRuntimePick => entry !== null)
-  const bridgeFailure = (error: unknown): string => {
-    const text = error instanceof Error ? error.message : String(error)
-    if (text.includes('sender is not the active Web UI') || text.includes('Render frame was disposed')) {
-      return '正在重新启动本地服务，请稍后再试'
-    }
-    return text
-  }
-  const commitRuntimes = (ids: SmartRuntimePick[]): void => {
-    paintRuntimes(ids)
-    runtimeNoteEl.textContent = '正在更新智能连接来源…'
-    if (runtimeSaveBusy) {
-      runtimeSaveQueued = ids
-      return
-    }
-    runtimeSaveBusy = true
-    void connection.setSmartRuntimes(ids).then((result) => {
-      runtimeSaveBusy = false
-      if (runtimeSaveQueued !== undefined) {
-        const queued = runtimeSaveQueued
-        runtimeSaveQueued = undefined
-        commitRuntimes(queued)
-        return
-      }
-      paintRuntimes(result.smartRuntimes)
-      runtimeNoteEl.textContent = result.saved
-        ? '已更新智能连接来源'
-        : ('保存失败：' + (result.error ?? '至少保留一种来源'))
-    }, (error: unknown) => {
-      runtimeSaveBusy = false
-      if (runtimeSaveQueued !== undefined) {
-        const queued = runtimeSaveQueued
-        runtimeSaveQueued = undefined
-        commitRuntimes(queued)
-        return
-      }
-      runtimeNoteEl.textContent = '保存失败：' + bridgeFailure(error)
-      void connection.getStatus().then((status) => { paintRuntimes(status.smartRuntimes) }, () => {})
-    })
-  }
-  for (const button of runtimeButtons) {
-    button.addEventListener('click', () => {
-      const id = button.getAttribute('data-smart-runtime')
-      if (id === null) return
-      const current = selectedRuntimes()
-      const next = current.includes(id as SmartRuntimePick)
-        ? current.filter((entry) => entry !== id)
-        : [...current, id as SmartRuntimePick]
-      if (next.length === 0) {
-        runtimeNoteEl.textContent = '至少保留一种来源'
-        return
-      }
-      commitRuntimes(next)
-    })
+  const runtimeEditor = installRuntimeSelection({
+    root: block.querySelector('#dsh-enhance-runtime-editor') as HTMLElement,
+    selectedClass: 'dsh-enhance-switch',
+    chinese: true,
+    save: ids => connection.setSmartRuntimes(ids),
+  })
+  for (const button of block.querySelectorAll<HTMLButtonElement>('[data-smart-runtime]')) {
     const tip = button.getAttribute('data-tip') ?? ''
-    button.addEventListener('mouseenter', () => { runtimeNoteEl.textContent = tip })
-    button.addEventListener('focus', () => { runtimeNoteEl.textContent = tip })
-    button.addEventListener('mouseleave', () => {
-      if (runtimeNoteEl.textContent === tip) runtimeNoteEl.textContent = runtimeDefaultNote
-    })
-    button.addEventListener('blur', () => {
-      if (runtimeNoteEl.textContent === tip) runtimeNoteEl.textContent = runtimeDefaultNote
-    })
+    button.title = tip
   }
   void connection.getStatus().then((status) => {
     // Named by WHO started the runtime, then which dsh it is — "本地"/"内置"
@@ -429,7 +366,7 @@ export function injectEnhance(panel: Element): void {
         : '')
     urlEl.value = status.savedServerUrl
     paintMode(status.selectedMode)
-    paintRuntimes(status.smartRuntimes)
+    runtimeEditor.load(status.smartRuntimes, status.dshDataMode === 'isolated')
     paintPort(status.localWebPort)
     paintDataMode(status)
   }).catch(() => { statusEl.textContent = '连接状态不可用' })
