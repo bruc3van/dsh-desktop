@@ -212,8 +212,25 @@ process.exit(1)
   })
   const probeOnlyFailure = await app.firstWindow()
   await probeOnlyFailure.waitForSelector('#error-settings', { timeout: 35_000 })
+  let releaseStatus
+  const statusGate = new Promise(resolve => { releaseStatus = resolve })
+  await app.context().route('**/desktop/status', async route => {
+    await statusGate
+    await route.continue()
+  })
+  const settingsOpened = app.waitForEvent('window', { timeout: 10_000 })
   await probeOnlyFailure.locator('#error-settings').click()
-  const probeOnlySettings = await app.waitForEvent('window', { timeout: 10_000 })
+  const probeOnlySettings = await settingsOpened
+  try {
+    await probeOnlySettings.waitForSelector('#data-isolated')
+    for (const id of ['data-shared', 'data-isolated']) {
+      if (!await probeOnlySettings.locator('#' + id).isDisabled()) {
+        throw new Error('data mode controls must wait for the initial status response: ' + id)
+      }
+    }
+  } finally {
+    releaseStatus()
+  }
   await probeOnlySettings.locator('#data-isolated').click()
   await probeOnlySettings.waitForFunction(() => {
     const note = document.querySelector('#data-note')?.textContent ?? ''
