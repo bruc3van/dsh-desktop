@@ -21,6 +21,11 @@ try {
     env: { ...sanitizedElectronEnv(), DSH_HOME: join(home, 'dsh'), DSH_DESKTOP_HOME: desktopHome,
       DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_SKIP_INSTALLED_DSH: '1', DSH_DESKTOP_SKIP_UPDATE_PROMPT: '1' } })
   const page = await app.firstWindow()
+  // Hosted Windows display scaling can leave the 1280-DIP BrowserWindow below
+  // the official UI's desktop breakpoint, where its sidebar Settings seat is
+  // intentionally absent. This check targets the shipped desktop settings
+  // integration, so pin a desktop CSS viewport instead of inheriting runner DPI.
+  await page.setViewportSize({ width: 1600, height: 1000 })
   await page.waitForFunction(() => document.querySelector('#root')?.children.length > 0, null, { timeout: 60000 }).catch(async error => {
     console.error('Official UI did not load:', (await page.locator('body').innerText()).slice(0, 1500))
     throw error
