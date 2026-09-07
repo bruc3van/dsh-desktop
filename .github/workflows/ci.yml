@@ -404,15 +404,19 @@ jobs:
         shell: pwsh
         run: ./scripts/check-nsis-install.ps1 -Scenario deep
 
-      # Run last: this deliberately mutates the product's HKCU installer state
-      # and desktop shortcuts, and its own cleanup failure must fail this step.
-      - name: 缓存旧版 NSIS 测试夹具 / Cache legacy NSIS fixture
+      # Upgrade from the v0.3.0 baseline; pre-0.3 rename repair is retired.
+      # Run it on explicit CI dispatch and before every release (release.yml),
+      # rather than repeating it on every main push. Current installer branches
+      # remain covered above on every main push. Keep this last because it
+      # mutates HKCU installer state and desktop shortcuts.
+      - name: 缓存 v0.3.0 NSIS 升级夹具 / Cache v0.3.0 NSIS upgrade fixture
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && steps.package.outcome == 'success' }}
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}\dsh-desktop-upgrade-fixtures
-          key: dsh-desktop-nsis-upgrade-v0.2.2-win-x64
+          key: dsh-desktop-nsis-upgrade-v0.3.0-win-x64
 
-      - name: 验证旧版 NSIS 改名升级 / Smoke legacy NSIS rename upgrade
-        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+      - name: 验证 v0.3.0 升级 / Smoke upgrade from v0.3.0
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && steps.package.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/check-nsis-upgrade.ps1

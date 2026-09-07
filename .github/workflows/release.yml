@@ -368,14 +368,14 @@ jobs:
 
       # Run last on Windows: this deliberately mutates the product's HKCU
       # installer state and desktop shortcuts; cleanup failures fail the step.
-      - name: 缓存旧版 NSIS 测试夹具 / Cache legacy NSIS fixture
+      - name: 缓存 v0.3.0 NSIS 升级夹具 / Cache v0.3.0 NSIS upgrade fixture
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}\dsh-desktop-upgrade-fixtures
-          key: dsh-desktop-nsis-upgrade-v0.2.2-win-x64
+          key: dsh-desktop-nsis-upgrade-v0.3.0-win-x64
 
-      - name: 验证旧版 NSIS 改名升级 / Smoke legacy NSIS rename upgrade
+      - name: 验证 v0.3.0 升级 / Smoke upgrade from v0.3.0
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/check-nsis-upgrade.ps1

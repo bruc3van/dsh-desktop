@@ -14,16 +14,15 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
   throw 'check-nsis-upgrade.ps1 is Windows-only'
 }
 
-$legacyUrl = 'https://github.com/bruc3van/dsh-desktop/releases/download/v0.2.2/dsh-desktop-0.2.2-win-x64.exe'
-$legacySha256 = '8fb63ddbf1806d0171faea66ed1eeb41564a6206757785003265ef3bef2a5915'
+$baselineUrl = 'https://github.com/bruc3van/dsh-desktop/releases/download/v0.3.0/dsh-desktop-0.3.0-win-x64.exe'
+$baselineSha256 = 'd622a9f8a959f24ee5585638ea5f7a275d7b2fcd452521077af3d2e8b864fba7'
 $productKey = 'HKCU:\Software\986c9051-a721-5678-bb71-26cd03957e6c'
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\986c9051-a721-5678-bb71-26cd03957e6c'
 $desktop = [Environment]::GetFolderPath('Desktop')
-$legacyShortcut = Join-Path $desktop 'DeepSeek Harness Desktop.lnk'
 $currentShortcut = Join-Path $desktop 'DSH Desktop.lnk'
 $fixtureRoot = Join-Path $env:RUNNER_TEMP 'dsh-desktop-upgrade-fixtures'
 $testRoot = Join-Path $env:RUNNER_TEMP ('dsh-desktop-upgrade-' + [guid]::NewGuid().ToString('N'))
-$legacyInstaller = Join-Path $fixtureRoot 'dsh-desktop-0.2.2-win-x64.exe'
+$baselineInstaller = Join-Path $fixtureRoot 'dsh-desktop-0.3.0-win-x64.exe'
 
 if ($Installer -eq '') {
   $releaseDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'release'
@@ -49,9 +48,8 @@ function Write-Step([string]$Message) {
   Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $Message)
 }
 
-# An NSIS installer that stops making progress never returns. That happened on
-# a GitHub runner (a silent upgrade over v0.2.2 sat until the job timed out),
-# and `Start-Process -Wait` gives no way to notice. Wait with a deadline, then
+# An NSIS installer that stops making progress may never return, and
+# `Start-Process -Wait` gives no way to notice. Wait with a deadline, then
 # report which processes are still alive before failing — a headless runner
 # cannot answer a UAC consent prompt or any dialog without an /SD default, and
 # the process list is what tells those apart.
@@ -171,14 +169,14 @@ function Wait-ForInstallerFamilyQuiet([datetime]$Deadline) {
   throw 'A relaunched NSIS uninstaller was still running past the deadline'
 }
 
-function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$TargetDir = '', [string]$LegacyDir = '') {
+function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$TargetDir = '', [string]$BaselineDir = '') {
   Write-Step "run: $(Split-Path -Leaf $Path) $($Arguments -join ' ')"
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   # Every install and uninstall this script runs goes through here, so timing it
   # here is what makes an upgrade's real cost visible: the uninstall deletes one
   # full tree before the install writes the next, and both are paid per file.
   $clock = [Diagnostics.Stopwatch]::StartNew()
-  $process = Start-Process -FilePath $Path -ArgumentList $Arguments -PassThru
+  $process = Start-Process -FilePath $Path -ArgumentList $Arguments -WindowStyle Hidden -PassThru
   try {
     Wait-ForProcess $process "Installer $Path" $TimeoutSeconds
     Wait-ForInstallerFamilyQuiet $deadline
@@ -191,7 +189,7 @@ function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeco
     # from opposite ends. Recursing all of TEMP would be neither.
     $dirs = @()
     if ($TargetDir -ne '') { $dirs += $TargetDir }
-    if ($LegacyDir -ne '') { $dirs += $LegacyDir }
+    if ($BaselineDir -ne '') { $dirs += $BaselineDir }
     $dirs += @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue |
       Select-Object -ExpandProperty FullName)
     foreach ($dir in $dirs) {
@@ -248,14 +246,14 @@ function Remove-InstalledProduct {
     throw "Existing product uninstaller was not found: $uninstaller"
   }
   Write-Step "run: $(Split-Path -Leaf $uninstaller) /S /currentuser"
-  $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', '/currentuser') -PassThru
+  $process = Start-Process -FilePath $uninstaller -ArgumentList @('/S', '/currentuser') -WindowStyle Hidden -PassThru
   Wait-ForProcess $process "Existing product uninstaller $uninstaller" 300
   Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
   if ($process.ExitCode -ne 0) {
     throw "Existing product cleanup exited with code $($process.ExitCode): $uninstaller"
   }
   Write-Step "done: $(Split-Path -Leaf $uninstaller)"
-  Remove-Item -LiteralPath $legacyShortcut -Force -ErrorAction SilentlyContinue
+
   Remove-Item -LiteralPath $currentShortcut -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $productKey -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
@@ -263,55 +261,41 @@ function Remove-InstalledProduct {
 
 function Invoke-UpgradeScenario(
   [string]$Name,
-  [bool]$RemoveUninstallString,
   [bool]$UseExplicitTarget
 ) {
   Write-Step "scenario: $Name"
   $scenarioRoot = Join-Path $testRoot $Name
-  $legacyDir = Join-Path $scenarioRoot 'existing-custom-dir'
+  $baselineDir = Join-Path $scenarioRoot 'existing-custom-dir'
   $explicitDir = Join-Path $scenarioRoot 'new-explicit-dir'
-  $targetDir = if ($UseExplicitTarget) { $explicitDir } else { $legacyDir }
+  $targetDir = if ($UseExplicitTarget) { $explicitDir } else { $baselineDir }
   $cleanupFailure = $null
 
   try {
-    Invoke-Installer $legacyInstaller @('/S', "/D=$legacyDir")
-    $legacyExe = Join-Path $legacyDir 'DeepSeek Harness Desktop.exe'
-    if (-not (Test-Path -LiteralPath $legacyExe -PathType Leaf)) {
-      throw "Legacy executable was not installed at the custom directory: $legacyExe"
+    Invoke-Installer $baselineInstaller @('/S', "/D=$baselineDir")
+    $baselineExe = Join-Path $baselineDir 'DSH Desktop.exe'
+    if (-not (Test-Path -LiteralPath $baselineExe -PathType Leaf)) {
+      throw "Baseline executable was not installed at the custom directory: $baselineExe"
     }
 
-    # Reproduce #11, then select which recovery source this scenario exercises.
-    $brokenLocation = $legacyDir.Replace('\', '')
-    if ($RemoveUninstallString) {
-      # Source 2 is drive-relative and must be rejected; source 3 is the first
-      # usable absolute path. With no uninstall string, this scenario checks
-      # directory recovery only—the legacy uninstaller is intentionally skipped.
-      Set-ItemProperty -Path $productKey -Name InstallLocation -Value $legacyDir
-      Set-ItemProperty -Path $uninstallKey -Name InstallLocation -Value $brokenLocation
-      Remove-ItemProperty -Path $uninstallKey -Name UninstallString
-    } else {
-      Set-ItemProperty -Path $productKey -Name InstallLocation -Value $brokenLocation
-      Set-ItemProperty -Path $uninstallKey -Name InstallLocation -Value $legacyDir
-    }
-    Remove-Item -LiteralPath $legacyShortcut -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $currentShortcut -Force -ErrorAction SilentlyContinue
+    # Upgrade an intact v0.3.0 installation; pre-0.3 rename/path repair
+    # scenarios are no longer part of the release validation baseline.
 
     $arguments = @('/S')
     if ($UseExplicitTarget) {
       $arguments += "/D=$explicitDir"
     }
-    Invoke-Installer $currentInstaller $arguments -TargetDir $targetDir -LegacyDir $legacyDir
+    Invoke-Installer $currentInstaller $arguments -TargetDir $targetDir -BaselineDir $baselineDir
 
     $currentExe = Join-Path $targetDir 'DSH Desktop.exe'
     if (-not (Test-Path -LiteralPath $currentExe -PathType Leaf)) {
-      throw "Renamed executable was not installed at the expected directory: $currentExe"
+      throw "Current executable was not installed at the expected directory: $currentExe"
     }
     foreach ($nestedDir in @(
-      (Join-Path $legacyDir 'DSH Desktop'),
+      (Join-Path $baselineDir 'DSH Desktop'),
       (Join-Path $targetDir 'DSH Desktop')
     )) {
       if (Test-Path -LiteralPath $nestedDir) {
-        throw "Upgrade appended the new product name to an installation directory: $nestedDir"
+        throw "Upgrade appended the product name to an installation directory: $nestedDir"
       }
     }
     $registeredLocation = (Get-ItemProperty -Path $productKey -Name InstallLocation).InstallLocation
@@ -319,24 +303,36 @@ function Invoke-UpgradeScenario(
       throw "InstallLocation mismatch: expected $targetDir, got $registeredLocation"
     }
     if (-not (Test-Path -LiteralPath $currentShortcut -PathType Leaf)) {
-      throw "Renamed desktop shortcut was not recreated: $currentShortcut"
+      throw "Desktop shortcut is missing: $currentShortcut"
     }
 
-    Write-Host "✓ $Name repaired the damaged path and avoided a nested product directory"
+    $expectedVersion = (Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'package.json') -Raw | ConvertFrom-Json).version
+    $installedVersion = (Get-ItemProperty -Path $uninstallKey -Name DisplayVersion).DisplayVersion
+    if ($installedVersion -ne $expectedVersion) {
+      throw "Upgraded version mismatch: expected $expectedVersion, got $installedVersion"
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcutTarget = $shell.CreateShortcut($currentShortcut).TargetPath
+    if ($shortcutTarget -ne $currentExe) {
+      throw "Desktop shortcut target mismatch: expected $currentExe, got $shortcutTarget"
+    }
+    node (Join-Path $PSScriptRoot 'smoke-package.mjs') "$currentExe"
+    if ($LASTEXITCODE -ne 0) { throw "upgraded runtime smoke failed with code $LASTEXITCODE" }
+    Write-Host "✓ $Name upgraded v0.3.0 to $expectedVersion and passed runtime smoke"
   } finally {
     $currentUninstaller = Join-Path $targetDir 'Uninstall DSH Desktop.exe'
-    $legacyUninstaller = Join-Path $legacyDir 'Uninstall DeepSeek Harness Desktop.exe'
+    $baselineUninstaller = Join-Path $baselineDir 'Uninstall DSH Desktop.exe'
     $cleanupUninstaller = if (Test-Path -LiteralPath $currentUninstaller -PathType Leaf) {
       $currentUninstaller
-    } elseif (Test-Path -LiteralPath $legacyUninstaller -PathType Leaf) {
-      $legacyUninstaller
+    } elseif (Test-Path -LiteralPath $baselineUninstaller -PathType Leaf) {
+      $baselineUninstaller
     } else {
       $null
     }
     if ($null -ne $cleanupUninstaller) {
       try {
         Write-Step "cleanup: $(Split-Path -Leaf $cleanupUninstaller) /S /currentuser"
-        $cleanup = Start-Process -FilePath $cleanupUninstaller -ArgumentList @('/S', '/currentuser') -PassThru
+        $cleanup = Start-Process -FilePath $cleanupUninstaller -ArgumentList @('/S', '/currentuser') -WindowStyle Hidden -PassThru
         Wait-ForProcess $cleanup "Cleanup uninstaller $cleanupUninstaller" 300
         Wait-ForInstallerFamilyQuiet (Get-Date).AddSeconds(300)
         if ($cleanup.ExitCode -ne 0) {
@@ -346,7 +342,7 @@ function Invoke-UpgradeScenario(
         $cleanupFailure = $_
       }
     }
-    Remove-Item -LiteralPath $legacyShortcut -Force -ErrorAction SilentlyContinue
+
     Remove-Item -LiteralPath $currentShortcut -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $productKey -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
@@ -360,22 +356,22 @@ function Invoke-UpgradeScenario(
 New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
-  Write-Step 'checking the cached v0.2.2 fixture'
-  if (Test-Path -LiteralPath $legacyInstaller -PathType Leaf) {
-    $cachedSha256 = (Get-FileHash -LiteralPath $legacyInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($cachedSha256 -ne $legacySha256) {
-      Remove-Item -LiteralPath $legacyInstaller -Force
+  Write-Step 'checking the cached v0.3.0 fixture'
+  if (Test-Path -LiteralPath $baselineInstaller -PathType Leaf) {
+    $cachedSha256 = (Get-FileHash -LiteralPath $baselineInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($cachedSha256 -ne $baselineSha256) {
+      Remove-Item -LiteralPath $baselineInstaller -Force
     }
   }
-  if (-not (Test-Path -LiteralPath $legacyInstaller -PathType Leaf)) {
+  if (-not (Test-Path -LiteralPath $baselineInstaller -PathType Leaf)) {
     for ($attempt = 1; $attempt -le 3; $attempt++) {
       try {
-        Write-Step "download attempt $attempt : $legacyUrl"
-        Invoke-WebRequest -Uri $legacyUrl -OutFile $legacyInstaller -UseBasicParsing -TimeoutSec 300
+        Write-Step "download attempt $attempt : $baselineUrl"
+        Invoke-WebRequest -Uri $baselineUrl -OutFile $baselineInstaller -UseBasicParsing -TimeoutSec 300
         Write-Step 'download complete'
         break
       } catch {
-        Remove-Item -LiteralPath $legacyInstaller -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $baselineInstaller -Force -ErrorAction SilentlyContinue
         if ($attempt -eq 3) {
           throw
         }
@@ -383,28 +379,21 @@ try {
       }
     }
   }
-  $actualSha256 = (Get-FileHash -LiteralPath $legacyInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($actualSha256 -ne $legacySha256) {
-    throw "Legacy installer SHA-256 mismatch: expected $legacySha256, got $actualSha256"
+  $actualSha256 = (Get-FileHash -LiteralPath $baselineInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actualSha256 -ne $baselineSha256) {
+    throw "Baseline installer SHA-256 mismatch: expected $baselineSha256, got $actualSha256"
   }
-  Unblock-File -LiteralPath $legacyInstaller
+  Unblock-File -LiteralPath $baselineInstaller
 
-  # The preceding fresh-install smoke intentionally leaves the current build
-  # installed. Remove it before asking v0.2.2 to create the legacy fixture.
+  # Ensure no earlier smoke installation interferes with the baseline.
   Write-Step 'removing the freshly installed current build'
   Remove-InstalledProduct
 
-  # Covers UninstallString-parent recovery and proves /D= remains authoritative.
-  Invoke-UpgradeScenario 'uninstaller-parent-explicit-target' $false $true
-  # Closest to the reported upgrade: keep UninstallString, omit /D=, and run the
-  # real legacy uninstaller while preserving its exact custom directory.
-  Invoke-UpgradeScenario 'uninstaller-parent-in-place' $false $false
-  # Rejects a drive-relative source 2 and forces primary-key source 3. It does
-  # not cover legacy uninstall execution because UninstallString is absent.
-  Invoke-UpgradeScenario 'primary-location-fallback-no-uninstall' $true $false
+  # Cover the normal updater path and an explicitly chosen new directory.
+  Invoke-UpgradeScenario 'in-place' $false
+  Invoke-UpgradeScenario 'explicit-target' $true
 
-  Write-Host '✓ renamed desktop shortcut is present when the legacy link was missing'
-  Write-Host '✓ explicit /D= and unchanged upgrade targets both preserve their intended directories'
+  Write-Host '✓ v0.3.0 upgrades preserve the selected directory, version and shortcut target'
 } finally {
   Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
