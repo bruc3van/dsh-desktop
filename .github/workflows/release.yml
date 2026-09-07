@@ -207,19 +207,16 @@ jobs:
             id: macos-arm64
             os: macos-15
             command: pnpm exec electron-builder --mac dmg --arm64 --publish never
-            smoke: pnpm run smoke:package
             runtime_target: darwin-arm64
           - name: macOS Intel
             id: macos-x64
             os: macos-15-intel
             command: pnpm exec electron-builder --mac dmg --x64 --publish never
-            smoke: pnpm run smoke:package
             runtime_target: darwin-x64
           - name: Windows x64
             id: windows-x64
             os: windows-latest
             command: pnpm exec electron-builder --win nsis --x64 --publish never
-            smoke: pnpm run smoke:package
             runtime_target: win32-x64
 
     steps:
@@ -341,7 +338,7 @@ jobs:
         run: pnpm run check:plugin-recovery
 
       - name: 验证安装包内置运行时 / Smoke packaged runtime
-        run: ${{ matrix.smoke }}
+        run: pnpm run smoke:package
 
       # 三个场景合起来才说明问题。安装器退出码 0 不能证明任何事：直接解压把写不
       # 进去的文件直接丢掉且不置错误标志，所以守卫失效的表现是「装完了、能启动、
