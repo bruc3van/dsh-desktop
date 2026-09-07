@@ -66,6 +66,26 @@ export const LONG_INSTDIR_STAGE = '安装路径较深，改用支持长路径的
 const EXTRACT_COMMAND = 'Nsis7z::Extract "${FILE}"'
 const EXTRACT_WITH_DETAILS = 'Nsis7z::ExtractWithDetails "${FILE}" "' + EXTRACT_PROGRESS + '"'
 const COPY_FILES = 'CopyFiles /SILENT "$PLUGINSDIR\\7z-out\\*" $OUTDIR'
+// NSIS CopyFiles uses the shell API and does not support long paths. Keep its
+// existing retry flow for ordinary paths; robocopy handles deep destinations
+// without deleting unrelated files (/E, never /MIR). Mismatches (bit 4) also fail an installation.
+export const STAGED_COPY = `\
+\${If} $dshOutDirState == "toolong"
+      Push $R0
+      nsExec::ExecToLog '"$SYSDIR\\robocopy.exe" "$PLUGINSDIR\\7z-out" "$OUTDIR" /E /COPY:DAT /DCOPY:DAT /IS /IT /IM /R:2 /W:1 /NFL /NDL /NJH /NJS /NP'
+      Pop $R0
+      \${If} $R0 == "error"
+      \${OrIf} $R0 == "timeout"
+      \${OrIf} $R0 >= 4
+        DetailPrint "Long-path copy failed: $R0"
+        SetErrorLevel 1
+        Quit
+      \${EndIf}
+      Pop $R0
+      ClearErrors
+    \${Else}
+      ${COPY_FILES}
+    \${EndIf}`
 const SET_OUT_PATH_7Z = 'SetOutPath "$PLUGINSDIR\\7z-out"'
 const EXTRACT_MACRO_OPEN = '!macro extractUsing7za FILE'
 const MACRO_END = '!macroend'
@@ -90,7 +110,7 @@ export const PRISTINE_EXTRACT_MACRO_SHA256 =
 
 /**
  * A direct-extract fast path spliced in *ahead of* electron-builder's body,
- * which is left exactly as upstream wrote it.
+ * with a long-path-capable copy command in the staged branch.
  *
  * Why the fast path: upstream extracts the app 7z into `$PLUGINSDIR\7z-out`
  * and then `CopyFiles`-es the tree into `$OUTDIR`, so every packaged file is
@@ -147,10 +167,9 @@ export function fastPathInstDirBudget(longestRelativePath) {
 }
 
 /**
- * The second thing the staging copy was doing, which cost a full day to find:
- * it keeps every write inside MAX_PATH. `$PLUGINSDIR\7z-out\` is ~50 characters,
- * so 7-Zip never approaches the limit, and the `CopyFiles` that follows goes
- * through SHFileOperation, which reaches targets past 260 that 7-Zip cannot.
+ * Staging keeps 7-Zip writes inside MAX_PATH: `$PLUGINSDIR\7z-out\` is
+ * about 50 characters. Robocopy then reaches deep destination paths without
+ * the shell CopyFiles limit.
  *
  * Extract straight into a deep `$INSTDIR` and the longest paths simply do not
  * arrive — and Nsis7z does not set the error flag when that happens, so the
@@ -345,6 +364,7 @@ export function macroBodyHash(body) {
  */
 function withoutDetailsEdits(body) {
   return body
+    .replaceAll(STAGED_COPY, COPY_FILES)
     .replaceAll(EXTRACT_WITH_DETAILS, EXTRACT_COMMAND)
     .split('\n')
     .filter(line => !line.includes(EXTRACTING_STAGE) && !line.includes(COPYING_STAGE))
@@ -504,6 +524,8 @@ export function patchNsisDetailsTemplates(installSection, extractAppPackage, bud
     nextExtract = insertLineAfter(nextExtract, SET_OUT_PATH_7Z, 'DetailPrint "' + EXTRACTING_STAGE + '"')
     nextExtract = insertLineBefore(nextExtract, COPY_FILES, 'DetailPrint "' + COPYING_STAGE + '"')
   }
+  const stagedCopy = withLineBreak(STAGED_COPY, lineBreak(nextExtract))
+  if (!nextExtract.includes(stagedCopy)) nextExtract = nextExtract.replace(COPY_FILES, stagedCopy)
   return {
     installSection: nextInstall,
     extractAppPackage: nextExtract,
@@ -744,6 +766,11 @@ export function checkNsisInstallDetails() {
   }
   const again = patchNsisDetailsTemplates(fixture.installSection, fixture.extractAppPackage, FIXTURE_BUDGET)
   if (again.changed) failures.push('patching already-patched templates was not a no-op')
+  const shellCopyOnly = fixture.extractAppPackage.replace(STAGED_COPY, COPY_FILES)
+  const longPathMigrated = patchNsisDetailsTemplates(fixture.installSection, shellCopyOnly, FIXTURE_BUDGET)
+  if (!longPathMigrated.changed || !longPathMigrated.extractAppPackage.includes(STAGED_COPY)) {
+    failures.push('cached shell-copy templates did not gain long-path copying')
+  }
 
   // Lifting the prologue back out has to restore electron-builder's body
   // exactly, because that is what every re-patch starts from.

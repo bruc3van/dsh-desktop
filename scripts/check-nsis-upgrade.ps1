@@ -286,6 +286,18 @@ function Invoke-UpgradeScenario(
     }
     Invoke-Installer $currentInstaller $arguments -TargetDir $targetDir -BaselineDir $baselineDir
 
+    $unpacked = Join-Path (Split-Path -Parent $PSScriptRoot) 'release\win-unpacked'
+    $packed = @(Get-ChildItem -LiteralPath $unpacked -Recurse -File |
+      ForEach-Object { $_.FullName.Substring($unpacked.Length + 1) })
+    $installed = [System.Collections.Generic.HashSet[string]]::new([string[]]@(
+      Get-ChildItem -LiteralPath $targetDir -Recurse -File |
+        ForEach-Object { $_.FullName.Substring($targetDir.Length + 1) }))
+    $missing = @($packed | Where-Object { -not $installed.Contains($_) })
+    if ($missing.Count -gt 0) {
+      throw "Upgrade lost $($missing.Count) packed files: $($missing -join ', ')"
+    }
+    Write-Step "all $($packed.Count) packed files survived the upgrade"
+
     $currentExe = Join-Path $targetDir 'DSH Desktop.exe'
     if (-not (Test-Path -LiteralPath $currentExe -PathType Leaf)) {
       throw "Current executable was not installed at the expected directory: $currentExe"

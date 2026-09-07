@@ -25,7 +25,7 @@
   Scenarios:
     fast   empty target, short path            -> direct extract
     dirty  target seeded with a leftover file  -> staged copy
-    deep   empty target, one character past the installer's MAX_PATH budget
+    deep   empty target, 48 characters past the installer's MAX_PATH budget
                                                -> staged copy
 
   The product's HKCU registration and desktop shortcut are backed up, removed
@@ -109,10 +109,9 @@ $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
 $seeded = @()
 switch ($Scenario) {
   'deep' {
-    # Exactly one character past the budget: over the line for the fast path,
-    # but still inside what SHFileOperation reaches, so the staged copy must
-    # succeed. Overshooting further would test Windows, not this guard.
-    $target = $budget + 1
+    # Well beyond MAX_PATH: a one-character overflow can pass with the shell
+    # copy while longer upgrade paths silently lose runtime modules.
+    $target = $budget + 48
     $prefix = Join-Path $base 'dsh-deep-'
     if ($prefix.Length -ge $target) {
       throw "cannot build a $target-character install path under $base (already $($prefix.Length))"
