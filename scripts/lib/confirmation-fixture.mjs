@@ -13,6 +13,12 @@ export async function respondToConfirmations(app, response = 1) {
       if (!page.url().startsWith('data:text/html')) return
       if (!await page.locator('.eyebrow').count()) return
       await page.waitForFunction(() => document.activeElement?.id === 'default-action', null, { timeout: 10_000 })
+      const nativeWindow = await app.browserWindow(page)
+      const deadline = Date.now() + 10_000
+      while (!await nativeWindow.evaluate(window => window.isVisible())) {
+        if (Date.now() >= deadline) throw new Error('Confirmation window never became visible')
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
       await app.evaluate(() => { globalThis.confirmationCalls++ })
       const closed = page.waitForEvent('close', { timeout: 10_000 })
       // Modal sheets can consume synthetic mouse clicks on macOS. Dialog UI
