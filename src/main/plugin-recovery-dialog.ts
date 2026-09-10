@@ -71,8 +71,10 @@ function showClientDialog(owner: BrowserWindow | null, options: MessageBoxOption
     void prompt.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(pluginRecoveryPage(options, plugins, chinese, confirmation)))
       .then(async () => {
         if (prompt.isDestroyed()) return
+        // A hidden macOS sheet can defer script completion until it is shown.
+        // Do not make showing it depend on a renderer round-trip.
+        prompt.show()
         await prompt.webContents.executeJavaScript('document.getElementById("default-action")?.focus()')
-        if (!prompt.isDestroyed()) prompt.show()
       })
       .catch(() => { if (!prompt.isDestroyed()) prompt.close() })
   })

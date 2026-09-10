@@ -14,9 +14,9 @@ try {
     import { showPluginRecoveryDialog, showConfirmationDialog } from './dialog.mjs';
     app.on('window-all-closed', () => {});
     void app.whenReady().then(() => {
-    globalThis.openConfirmation = () => {
+    globalThis.openConfirmation = (owner = null) => {
       globalThis.answer = undefined;
-      void showConfirmationDialog(null, {
+      void showConfirmationDialog(owner, {
         message: '当前页面请求更改智能连接来源',
         detail: '这会决定智能模式下尝试哪些来源（本机已运行、本机已安装、npx 缓存、客户端内置）。请求来自：http://127.0.0.1:3080',
         buttons: ['取消', '继续'], defaultId: 0, cancelId: 0,
@@ -105,6 +105,25 @@ try {
     assert.equal(await app.evaluate(() => globalThis.answer), expected)
     console.log('✓ confirmation', theme, action, 'layout and response', expected)
   }
+  await app.evaluate(async ({ BrowserWindow }) => {
+    globalThis.confirmationOwner = new BrowserWindow({ width: 640, height: 480 })
+    await globalThis.confirmationOwner.loadURL('data:text/html,<title>Confirmation owner</title>')
+  })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const opened = app.waitForEvent('window', { timeout: 10_000 })
+    await app.evaluate(() => { globalThis.openConfirmation(globalThis.confirmationOwner) })
+    const page = await opened
+    const native = await app.browserWindow(page)
+    for (let poll = 0; poll < 100 && !await native.evaluate(window => window.isVisible()); poll++) await new Promise(resolve => setTimeout(resolve, 50))
+    assert.equal(await native.evaluate(window => window.isVisible() && window.isModal()), true)
+    await page.waitForFunction(() => document.activeElement?.id === 'default-action', null, { timeout: 10_000 })
+    const closed = page.waitForEvent('close', { timeout: 10_000 })
+    await page.locator('.primary').click({ noWaitAfter: true }).catch(error => { if (!page.isClosed()) throw error })
+    await closed
+    for (let poll = 0; poll < 100 && await app.evaluate(() => globalThis.answer) === undefined; poll++) await new Promise(resolve => setTimeout(resolve, 50))
+    assert.equal(await app.evaluate(() => globalThis.answer), 1)
+  }
+  console.log('✓ consecutive parent-owned confirmations become visible and accept real button clicks')
 } finally {
   await app?.close()
   rmSync(work, { recursive: true, force: true })
