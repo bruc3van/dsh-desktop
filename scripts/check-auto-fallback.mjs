@@ -143,6 +143,12 @@ const waitForSettledLocalRuntime = async (app, timeoutMs, quietMs = 2_000) => {
 
 let app
 let runtimeLog = ''
+const watchdog = setTimeout(() => {
+  console.error('auto-fallback timed out; windows:', app?.windows().map(page => page.url()))
+  console.error(runtimeLog)
+  process.exit(1)
+}, 120_000)
+watchdog.unref()
 try {
   app = await electron.launch({
     args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(checkHome, 'chromium')],
@@ -326,6 +332,7 @@ try {
   await recovered.window.waitForFunction(() => document.title === 'Installed Harness Fixture', null, { timeout: 20_000 })
   console.log('✓ exited managed runtime relaunched with a new PID (' + String(recovered.status.childPid) + ')')
 } finally {
+  clearTimeout(watchdog)
   await app?.close().catch(() => {})
   if (probeServer.listening) await new Promise(resolve => probeServer.close(resolve))
   rmSync(checkHome, { recursive: true, force: true })
