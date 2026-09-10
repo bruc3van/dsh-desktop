@@ -333,6 +333,7 @@ try {
   console.log('✓ exited managed runtime relaunched with a new PID (' + String(recovered.status.childPid) + ')')
 } finally {
   clearTimeout(watchdog)
+  console.log('auto-fallback runtime log:', runtimeLog)
   await app?.close().catch(() => {})
   if (probeServer.listening) await new Promise(resolve => probeServer.close(resolve))
   rmSync(checkHome, { recursive: true, force: true })

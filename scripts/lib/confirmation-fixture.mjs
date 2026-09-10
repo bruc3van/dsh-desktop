@@ -19,6 +19,12 @@ export async function respondToConfirmations(app, response = 1) {
         if (Date.now() >= deadline) throw new Error('Confirmation window never became visible')
         await new Promise(resolve => setTimeout(resolve, 50))
       }
+      console.log('confirmation fixture:', await page.locator('h1').innerText(), await nativeWindow.evaluate(window => {
+        window.on('close', event => console.log('confirmation native close:', window.id, event.defaultPrevented))
+        window.on('closed', () => console.log('confirmation native closed'))
+        window.webContents.on('will-navigate', (_event, url) => console.log('confirmation navigation:', url))
+        return { id: window.id, modal: window.isModal(), visible: window.isVisible(), parent: window.getParentWindow()?.id }
+      }))
       await app.evaluate(() => { globalThis.confirmationCalls++ })
       const closed = page.waitForEvent('close', { timeout: 10_000 })
       // Modal sheets can consume synthetic mouse clicks on macOS. Dialog UI
@@ -31,6 +37,7 @@ export async function respondToConfirmations(app, response = 1) {
       }, state.response).catch(error => {
         if (!page.isClosed()) throw error
       })
+      console.log('confirmation action dispatched')
       await closed
     })().catch(error => {
       console.error('confirmation fixture:', error)
