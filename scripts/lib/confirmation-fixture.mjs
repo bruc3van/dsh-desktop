@@ -19,17 +19,10 @@ export async function respondToConfirmations(app, response = 1) {
         if (Date.now() >= deadline) throw new Error('Confirmation window never became visible')
         await new Promise(resolve => setTimeout(resolve, 50))
       }
-      console.log('confirmation fixture:', await page.locator('h1').innerText(), await nativeWindow.evaluate(window => {
-        window.on('close', event => console.log('confirmation native close:', window.id, event.defaultPrevented))
-        window.on('closed', () => console.log('confirmation native closed'))
-        window.webContents.on('will-navigate', (_event, url) => console.log('confirmation navigation:', url))
-        return { id: window.id, modal: window.isModal(), visible: window.isVisible(), parent: window.getParentWindow()?.id }
-      }))
       await app.evaluate(() => { globalThis.confirmationCalls++ })
       const closed = page.waitForEvent('close', { timeout: 10_000 })
-      // Modal sheets can consume synthetic mouse clicks on macOS. Dialog UI
-      // checks cover actual clicks/keys; these integration checks exercise the
-      // same action through the window-open handler without depending on focus.
+      // Dialog UI checks cover actual clicks/keys; these integration checks
+      // exercise the same action without depending on pointer focus.
       await page.evaluate(response => {
         const action = document.querySelector(`a[href="dsh-plugin-recovery:${response}"]`)
         if (!action) throw new Error('Confirmation action is missing')
@@ -37,11 +30,29 @@ export async function respondToConfirmations(app, response = 1) {
       }, state.response).catch(error => {
         if (!page.isClosed()) throw error
       })
-      console.log('confirmation action dispatched')
       await closed
     })().catch(error => {
       console.error('confirmation fixture:', error)
       void app.evaluate(({ app }) => app.exit(1)).catch(() => {})
     })
   })
+}
+
+/** A preceding notice must be dismissed before macOS can show another sheet. */
+export async function dismissClientNotice(app) {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    for (const page of app.windows()) {
+      if (!page.url().startsWith('data:text/html')) continue
+      if (!await page.locator('a[href^="dsh-notice-action:"]').count()) continue
+      const closed = page.waitForEvent('close', { timeout: 10_000 })
+      await page.evaluate(() => window.open(document.querySelector('a[href^="dsh-notice-action:"]').href)).catch(error => {
+        if (!page.isClosed()) throw error
+      })
+      await closed
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error('Expected occupancy notice did not appear')
 }

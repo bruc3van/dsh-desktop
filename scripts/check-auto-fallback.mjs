@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { _electron as electron } from 'playwright-core'
 import { sanitizedElectronEnv } from './lib/electron-env.mjs'
-import { respondToConfirmations } from './lib/confirmation-fixture.mjs'
+import { respondToConfirmations, dismissClientNotice } from './lib/confirmation-fixture.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RUNTIME_FIXTURE = join(APP_DIR, 'scripts', 'fixtures', 'fake-dsh.mjs')
@@ -192,6 +192,7 @@ try {
     throw new Error('refusing the toggle left the external instance unresponsive')
   }
   console.log('✓ disabling reuse while a probed instance is live is refused and leaves the instance running')
+  await dismissClientNotice(app)
 
   const keepReuse = await window.evaluate(() =>
     window.desktop.connection.setSmartRuntimes(['probe', 'bundled']))
@@ -262,6 +263,7 @@ try {
     throw new Error('refusing a managed-source change replaced the local page: ' + await window.title())
   }
   console.log('✓ changing installed/npx/bundled while a user instance occupies is refused')
+  await dismissClientNotice(app)
 
   const asSmart = await window.evaluate((url) => window.desktop.connection.saveServerUrl(url), probeOrigin)
   if (asSmart.saved) {
@@ -272,6 +274,7 @@ try {
     throw new Error('refusing a probe-equivalent save left the local runtime: ' + JSON.stringify(stillLocalAfterSave))
   }
   console.log('✓ saving the probe-equivalent origin while occupied is refused')
+  await dismissClientNotice(app)
 
   const customServer = createServer((req, res) => {
     if (req.url === '/api/host.describe' && req.method === 'POST') {
@@ -300,6 +303,7 @@ try {
   }
   window = (await waitForStatus(app, status => status.mode === 'connect' && status.targetUrl === customOrigin, 20_000)).window
   console.log('✓ switching to Smart while reuse is off and a loopback instance occupies is refused')
+  await dismissClientNotice(app)
 
   const enableReuse = await window.evaluate(() =>
     window.desktop.connection.setSmartRuntimes(['probe', 'bundled']))
@@ -333,7 +337,6 @@ try {
   console.log('✓ exited managed runtime relaunched with a new PID (' + String(recovered.status.childPid) + ')')
 } finally {
   clearTimeout(watchdog)
-  console.log('auto-fallback runtime log:', runtimeLog)
   await app?.close().catch(() => {})
   if (probeServer.listening) await new Promise(resolve => probeServer.close(resolve))
   rmSync(checkHome, { recursive: true, force: true })
