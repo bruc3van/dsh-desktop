@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as esbuild from 'esbuild'
 import { _electron as electron } from 'playwright-core'
 import { sanitizedElectronEnv } from './lib/electron-env.mjs'
+import { respondToConfirmations } from './lib/confirmation-fixture.mjs'
 import { artifactName, RELEASE_TARGETS, requiredPlatformKeys } from './release-artifacts.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
@@ -685,9 +686,7 @@ const launchApp = async (home, extraEnv = {}, options = {}) => {
     env: electronEnv,
   })
   launchedApps.push(launched)
-  await launched.evaluate(({ dialog }) => {
-    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
-  })
+  await respondToConfirmations(launched)
   const window = await launched.firstWindow()
   await window.waitForFunction(() => document.title === 'Updater Fixture', null, { timeout: 15_000 })
   return { app: launched, window }

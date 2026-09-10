@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { _electron as electron } from 'playwright-core'
 import { sanitizedElectronEnv } from './lib/electron-env.mjs'
+import { respondToConfirmations } from './lib/confirmation-fixture.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RUNTIME_FIXTURE = join(APP_DIR, 'scripts', 'fixtures', 'fake-dsh.mjs')
@@ -147,11 +148,9 @@ try {
     args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(checkHome, 'chromium')],
     env: electronEnv,
   })
-  // Probe-discovered pages now require native consent just like Connect pages.
+  // Probe-discovered pages now require client-owned consent just like Connect pages.
   // This recovery fixture supplies consent; check:connection verifies refusal.
-  await app.evaluate(({ dialog }) => {
-    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
-  })
+  await respondToConfirmations(app)
   const runner = app.process()
   runner.stdout?.on('data', chunk => { runtimeLog += chunk.toString() })
   runner.stderr?.on('data', chunk => { runtimeLog += chunk.toString() })

@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
 import { sanitizedElectronEnv } from './lib/electron-env.mjs'
+import { respondToConfirmations } from './lib/confirmation-fixture.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const home = mkdtempSync(join(tmpdir(), 'dsh-settings-integration-'))
@@ -115,13 +116,7 @@ try {
   assert.equal(await page.locator('dialog[open]').count(), 0)
   assert.equal(await page.locator('[data-smart-runtime="installed"]').getAttribute('aria-pressed'), 'false', 'closing warning retains draft')
   assert.equal(await page.locator('[data-runtime-apply]').isEnabled(), true)
-  await app.evaluate(({ dialog }) => {
-    const original = dialog.showMessageBox
-    dialog.showMessageBox = async () => {
-      dialog.showMessageBox = original
-      return { response: 1, checkboxChecked: false }
-    }
-  })
+  await respondToConfirmations(app)
   await page.locator('[data-runtime-apply]').click()
   await page.waitForFunction(() => document.querySelector('[data-runtime-status]').textContent === '已应用来源设置', null, { timeout: 10000 }).catch(async error => {
     console.error('runtime editor:', await page.locator('#dsh-enhance-runtime-editor').innerText())

@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
 import { sanitizedElectronEnv } from './lib/electron-env.mjs'
+import { respondToConfirmations } from './lib/confirmation-fixture.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const checkHome = await mkdtemp(join(tmpdir(), 'dsh-desktop-connection-'))
@@ -280,19 +281,14 @@ try {
     serverUrl: remoteOrigin,
     connectionMode: 'connect',
   }, null, 2) + '\n')
-  // A selected loopback fixture is not client-owned. Native confirmation must
+  // A selected loopback fixture is not client-owned. Client-owned confirmation must
   // be reached, and declining it must leave the saved connection untouched.
-  await app.evaluate(({ dialog }) => {
-    globalThis.confirmationCalls = 0
-    dialog.showMessageBox = async () => { globalThis.confirmationCalls++; return { response: 0, checkboxChecked: false } }
-  })
+  await respondToConfirmations(app, 0)
   const declined = await window.evaluate(() => window.desktop.connection.switchMode())
   if (declined.switched || await app.evaluate(() => globalThis.confirmationCalls) !== 1) {
-    throw new Error('unowned loopback switch bypassed native confirmation')
+    throw new Error('unowned loopback switch bypassed client-owned confirmation')
   }
-  await app.evaluate(({ dialog }) => {
-    dialog.showMessageBox = async () => { globalThis.confirmationCalls++; return { response: 1, checkboxChecked: false } }
-  })
+  await respondToConfirmations(app, 1)
   const toSmart = await window.evaluate(() => window.desktop.connection.switchMode())
   if (!toSmart.switched || toSmart.mode !== 'smart') throw new Error('failed to switch to Smart mode: ' + JSON.stringify(toSmart))
   ({ window } = await waitForStatus(app, status => status.selectedMode === 'smart' && status.targetUrl !== ''))
