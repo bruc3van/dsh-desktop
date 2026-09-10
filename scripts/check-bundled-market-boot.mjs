@@ -1,8 +1,8 @@
 /** Test the shipped DSH resolver and the actual managed launcher, in disposable homes. */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, writeFile, rm, cp, symlink, copyFile, chmod } from 'node:fs/promises'
+import { existsSync, realpathSync } from 'node:fs'
+import { mkdtemp, mkdir, readFile, writeFile, rm, cp, symlink, copyFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
@@ -47,7 +47,7 @@ try {
   console.log('✓ cold profile uses official defaults; patch and module come from its owned package with runtime peers')
 
   // User payloads are deliberately different, so a stale in-box patch cannot pass.
-  for (const version of ['0.1.0', '99.0.0']) {
+  for (const version of [pinned, '99.0.0']) {
     const userHome = join(temp, 'user-' + version)
     const userProfile = join(userHome, 'profiles/web')
     const userPackage = join(userProfile, 'node_modules', name)
@@ -69,7 +69,88 @@ try {
     await prepareBundledMarket(entry, { ...request, home: userHome, mode: 'disabled' })
     assert.ok(existsSync(join(userPackage, 'index.js')))
   }
-  console.log('✓ official resolver uses user patch AND module for older and newer overlays; disable preserves them')
+  console.log('✓ official resolver preserves same/newer user patch and module; disable preserves them')
+
+  const upgradeHome = join(temp, 'upgrade-user')
+  const upgradeProfile = join(upgradeHome, 'profiles/web')
+  const upgradePackage = join(upgradeProfile, 'node_modules', name)
+  await cp(payload, upgradePackage, { recursive: true })
+  const oldMarket = JSON.parse(await readFile(join(upgradePackage, 'package.json')))
+  oldMarket.version = '0.4.3'
+  await writeFile(join(upgradePackage, 'package.json'), JSON.stringify(oldMarket))
+  await writeFile(join(upgradeProfile, 'package.json'), JSON.stringify({ dependencies: { [name]: '0.4.3' }, dsh: { profile: { bundles: [name] } } }))
+  await prepareBundledMarket(entry, { ...request, home: upgradeHome })
+  assert.equal(JSON.parse(await readFile(join(upgradePackage, 'package.json'))).version, pinned)
+  assert.equal(JSON.parse(await readFile(join(upgradeProfile, 'package.json'))).dependencies[name], undefined)
+  const upgradedProfile = loadProfileDirectory('dsh', upgradeProfile, anchor)
+  assert.equal(resolve(upgradedProfile.layers[0].packageDir), resolve(upgradePackage))
+  assert.deepEqual(marketPeerIssues(upgradeHome), [])
+  await prepareBundledMarket(entry, { ...request, home: upgradeHome })
+  assert.equal(JSON.parse(await readFile(join(upgradePackage, 'package.json'))).version, pinned)
+  console.log('✓ older installed market migrates to bundled payload and resolves with runtime peers on repeated boots')
+
+  const cycleHome = join(temp, 'self-uninstall-cycle')
+  const cycleProfile = join(cycleHome, 'profiles/web')
+  const cyclePackage = join(cycleProfile, 'node_modules', name)
+  const cycleRequest = { ...request, home: cycleHome }
+  const selfUninstall = async (retainFiles = false) => {
+    // The published market's in-box self-uninstall removes the bundle entry
+    // and its owned directory; Windows file handles can leave that directory.
+    const manifest = JSON.parse(await readFile(join(cycleProfile, 'package.json')))
+    manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(value => value !== name)
+    await writeFile(join(cycleProfile, 'package.json'), JSON.stringify(manifest))
+    if (!retainFiles) await rm(cyclePackage, { recursive: true, force: true })
+  }
+  await prepareBundledMarket(entry, cycleRequest)
+  await selfUninstall()
+  await prepareBundledMarket(entry, { ...cycleRequest, mode: 'disabled' })
+  assert.equal(existsSync(cyclePackage), false)
+  await prepareBundledMarket(entry, cycleRequest)
+  assert.equal(JSON.parse(await readFile(join(cyclePackage, 'package.json'))).version, pinned)
+  for (const retainFiles of [false, true]) {
+    await selfUninstall(retainFiles)
+    await prepareBundledMarket(entry, cycleRequest)
+    const loaded = loadProfileDirectory('dsh', cycleProfile, anchor)
+    assert.ok(loaded.layers.some(layer => layer.packageName === name))
+    assert.equal(JSON.parse(await readFile(join(cyclePackage, 'package.json'))).version, pinned)
+  }
+  await prepareBundledMarket(entry, { ...cycleRequest, mode: 'disabled' })
+  assert.equal(existsSync(cyclePackage), false)
+  console.log('✓ self-uninstall filesystem outcomes restore when enabled, stay absent when disabled, and recover after re-enabling')
+
+  // Reproduce an old shared npx peer that is optional and absent from the
+  // current production runtime. It must not withdraw the bundled market.
+  const staleHome = join(temp, 'stale-shared')
+  const peerName = '@deepseek-ai/dsh-client-ui-slots'
+  const staleTarget = join(temp, 'stale-npx/node_modules', peerName)
+  await mkdir(staleTarget, { recursive: true })
+  await writeFile(join(staleTarget, 'package.json'), JSON.stringify({ name: peerName, version: '0.1.0-rc.7' }))
+  const sharedLink = join(staleHome, 'profiles/node_modules', peerName)
+  await mkdir(dirname(sharedLink), { recursive: true })
+  await symlink(staleTarget, sharedLink, process.platform === 'win32' ? 'junction' : 'dir')
+  for (let boot = 0; boot < 2; boot++) {
+    await prepareBundledMarket(entry, { ...request, home: staleHome })
+    const staleProfile = join(staleHome, 'profiles/web')
+    assert.ok(JSON.parse(await readFile(join(staleProfile, 'package.json'))).dsh.profile.bundles.includes(name))
+    const loaded = loadProfileDirectory('dsh', staleProfile, anchor)
+    await healProfilesModuleFallback({ installAnchor: anchor, profile: loaded, home: staleHome })
+    assert.ok(marketPeerIssues(staleHome).some(issue => issue.includes(peerName)))
+    assert.deepEqual(marketPeerIssues(staleHome, anchor), [])
+    assert.equal(realpathSync(sharedLink), realpathSync(staleTarget))
+  }
+  const staleProfileFile = join(staleHome, 'profiles/web/package.json')
+  const explicitManifest = JSON.parse(await readFile(staleProfileFile))
+  explicitManifest.dependencies[peerName] = '0.1.0-rc.7'
+  await writeFile(staleProfileFile, JSON.stringify(explicitManifest))
+  assert.ok(marketPeerIssues(staleHome, anchor).some(issue => issue.includes(peerName)), 'explicit optional peers still need compatibility checks')
+  Reflect.deleteProperty(explicitManifest.dependencies, peerName)
+  await writeFile(staleProfileFile, JSON.stringify(explicitManifest))
+  const installedMarketFile = join(staleHome, 'profiles/web/node_modules', name, 'package.json')
+  const requiredManifest = JSON.parse(await readFile(installedMarketFile))
+  requiredManifest.peerDependenciesMeta[peerName].optional = false
+  await writeFile(installedMarketFile, JSON.stringify(requiredManifest))
+  assert.ok(marketPeerIssues(staleHome, anchor).some(issue => issue.includes(peerName)), 'required peers are never ignored')
+  console.log('✓ stale optional peers absent from the production runtime do not withdraw the market or mutate shared links')
 
   await prepareBundledMarket(entry, { ...request, mode: 'disabled' })
   assert.equal(existsSync(marketDir), false)
@@ -105,12 +186,12 @@ try {
   await cp(payload, driftMarket, { recursive: true })
   const driftManifest = JSON.stringify({ dependencies: { [name]: '0.5.0' }, dsh: { profile: { bundles: [name] } } })
   await writeFile(join(driftProfile, 'package.json'), driftManifest)
-  const slots = join(driftProfile, 'node_modules/@deepseek-ai/dsh-client-ui-slots')
-  const staleSlots = join(temp, 'old-npx/node_modules/@deepseek-ai/dsh-client-ui-slots')
-  await mkdir(staleSlots, { recursive: true })
-  await mkdir(dirname(slots), { recursive: true })
-  await symlink(staleSlots, slots, process.platform === 'win32' ? 'junction' : 'dir')
-  await writeFile(join(staleSlots, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-slots', version: '0.1.0-rc.7' }))
+  const settingsPeer = join(driftProfile, 'node_modules/@deepseek-ai/dsh-settings')
+  const staleSettings = join(temp, 'old-npx/node_modules/@deepseek-ai/dsh-settings')
+  await mkdir(staleSettings, { recursive: true })
+  await mkdir(dirname(settingsPeer), { recursive: true })
+  await symlink(staleSettings, settingsPeer, process.platform === 'win32' ? 'junction' : 'dir')
+  await writeFile(join(staleSettings, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-settings', version: '0.1.0-rc.7' }))
   const warnings = []
   const warn = console.warn
   try {
@@ -119,14 +200,26 @@ try {
   } finally { console.warn = warn }
   assert.ok(warnings.some(text => text.includes('market dependency drift') && text.includes('0.1.0-rc.7')))
   assert.equal(await readFile(join(driftProfile, 'package.json'), 'utf8'), driftManifest)
-  assert.ok(marketPeerIssues(driftHome).some(text => text.includes('dsh-client-ui-slots')))
+  assert.ok(marketPeerIssues(driftHome).some(text => text.includes('dsh-settings')))
+  const oldDriftMarket = JSON.parse(await readFile(join(driftMarket, 'package.json')))
+  oldDriftMarket.version = '0.4.3'
+  await writeFile(join(driftMarket, 'package.json'), JSON.stringify(oldDriftMarket))
+  const driftLock = 'lockfileVersion: \'9.0\'\nimporters:\n  .:\n    dependencies:\n      dsh-desktop-safe-market:\n        specifier: 0.4.3\n        version: 0.4.3\n'
+  await writeFile(join(driftProfile, 'pnpm-lock.yaml'), driftLock)
+  for (let boot = 0; boot < 2; boot++) {
+    await prepareBundledMarket(entry, { ...request, home: driftHome })
+    assert.equal(JSON.parse(await readFile(join(driftMarket, 'package.json'))).version, '0.4.3')
+    assert.equal(await readFile(join(driftProfile, 'package.json'), 'utf8'), driftManifest)
+    assert.equal(await readFile(join(driftProfile, 'pnpm-lock.yaml'), 'utf8'), driftLock)
+    assert.equal(existsSync(join(driftMarket, '.dsh-desktop-seat.json')), false)
+  }
   const ownedDrift = join(temp, 'drift-owned')
-  const ownedSlots = join(ownedDrift, 'profiles/web/node_modules/@deepseek-ai/dsh-client-ui-slots')
-  await mkdir(ownedSlots, { recursive: true })
-  await cp(join(slots, 'package.json'), join(ownedSlots, 'package.json'))
+  const ownedSettings = join(ownedDrift, 'profiles/web/node_modules/@deepseek-ai/dsh-settings')
+  await mkdir(ownedSettings, { recursive: true })
+  await cp(join(settingsPeer, 'package.json'), join(ownedSettings, 'package.json'))
   await prepareBundledMarket(entry, { ...request, home: ownedDrift })
   assert.equal(JSON.parse(await readFile(join(ownedDrift, 'profiles/web/package.json'))).dsh.profile.bundles.includes(name), false)
-  assert.ok(existsSync(join(ownedSlots, 'package.json')))
+  assert.ok(existsSync(join(ownedSettings, 'package.json')))
   console.log('✓ actual profile peer drift warns for user installs and withdraws only owned registration')
 
   // Exercise real discovery and launcher invocation for both preferred sources.
@@ -143,12 +236,14 @@ try {
     const bin = join(temp, 'path-bin')
     await mkdir(join(bin, 'node_modules/@deepseek-ai'), { recursive: true })
     await symlink(dirname(anchor), join(bin, 'node_modules/@deepseek-ai/dsh'), process.platform === 'win32' ? 'junction' : 'dir')
-    await copyFile(process.execPath, join(bin, process.platform === 'win32' ? 'node.exe' : 'node'))
     if (process.platform === 'win32') {
+      await copyFile(process.execPath, join(bin, 'node.exe'))
       await writeFile(join(bin, 'dsh.cmd'), '@echo off\r\n"%~dp0node.exe" "%~dp0/node_modules/@deepseek-ai/dsh/lib/bin.js" %*\r\n')
     } else {
       await symlink(entry, join(bin, 'dsh'))
-      await chmod(join(bin, 'node'), 0o755)
+      // Homebrew Node resolves libnode relative to its executable location.
+      // A symlink exercises PATH selection without breaking that installation.
+      await symlink(process.execPath, join(bin, 'node'))
     }
     const cache = join(temp, 'npm-cache')
     const cachedScope = join(cache, '_npx/fixture/node_modules/@deepseek-ai')

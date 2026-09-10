@@ -59,7 +59,7 @@ import { existsSync,readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import {join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { abandonBundledPlugin,BUNDLED_PLUGIN_NAME,inspectBundledPlugin,withdrawBundledPlugin } from './bundled-plugin.ts'
+import { abandonBundledPlugin,BUNDLED_PLUGIN_NAME,inspectBundledPlugin,inspectMarketInstallation,withdrawBundledPlugin } from './bundled-plugin.ts'
 import { MARKET_BOOT_VARIABLE, type MarketBootRequest } from './bundled-market-boot.ts'
 import {
 dshHomeForMode,
@@ -1044,6 +1044,7 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     desktopVersion: desktopClientVersion(),
     settingsIntegration: settingsIntegrationStatus,
     bundledMarketEnabled: settings.bundledMarketDisabled !== true,
+    bundledMarketInstallation: includeLocalDetail ? inspectMarketInstallation(childHome()) : undefined,
     dshVersion: bundledDshVersion(),
     // NOT gated by includeLocalDetail: in Connect mode the saved address IS
     // the caller's own origin (targetUrl is not redacted either), so hiding

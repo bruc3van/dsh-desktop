@@ -1,6 +1,6 @@
 /**
- * Offline, client-owned market copy for the web profile. User dependencies
- * and profile-local installs remain owned by their package manager. Only a
+ * Offline, client-owned market copy for the web profile. Older registry
+ * installs migrate to the client copy; custom and newer installs stay put. Only a
  * managed launch may edit the profile; adopting a server is read-only.
  * The packaged market lives outside the DSH installation so its bundle patch
  * and Loader entry resolve from the same profile package.
@@ -10,6 +10,16 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import satisfies from 'semver/functions/satisfies.js'
+import valid from 'semver/functions/valid.js'
+import gt from 'semver/functions/gt.js'
+import validRange from 'semver/ranges/valid.js'
+import { load, dump } from 'js-yaml'
+
+/** Only release tags from our exact upstream repository are upgradeable URLs. */
+function officialMarketTag(source: string): boolean {
+  const match = /^https:\/\/github\.com\/bruc3van\/dsh-desktop-safe-market\/archive\/refs\/tags\/v([^/?#]+)\.tar\.gz$/.exec(source)
+  return match?.[1] !== undefined && valid(match[1]) !== null
+}
 
 /** The plugin this client ships. */
 export const BUNDLED_PLUGIN_NAME = 'dsh-desktop-safe-market'
@@ -19,7 +29,16 @@ export const WEB_PROFILE = 'web'
 
 interface ProfileManifest {
   dependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
   dsh?: { profile?: { bundles?: string[] } }
+}
+
+const dependencySections = ['dependencies', 'optionalDependencies', 'devDependencies', 'peerDependencies'] as const
+
+function declaresMarket(manifest: ProfileManifest): boolean {
+  return dependencySections.some(section => Object.hasOwn(manifest[section] ?? {}, BUNDLED_PLUGIN_NAME))
 }
 
 /** Evidence supplied by the managed launcher, never inferred from a live URL. */
@@ -30,6 +49,8 @@ export interface SeatRuntime {
   readonly serving?: boolean
   /** Each actual peer package was verified by the managed launcher. */
   readonly peersVerified?: boolean
+  /** Check the replacement at its actual location before committing a takeover. */
+  readonly validateTakeover?: () => void
 }
 
 export function runtimeRefusal(runtime: SeatRuntime): string | undefined {
@@ -142,7 +163,7 @@ function userOwned(manifest: ProfileManifest, dshHome: string): boolean {
   try {
     if (lstatSync(seatPath(dshHome)).isSymbolicLink()) return true
   } catch { /* no local installation */ }
-  return Object.hasOwn(manifest.dependencies ?? {}, BUNDLED_PLUGIN_NAME)
+  return declaresMarket(manifest)
     || (existsSync(join(seatPath(dshHome), 'package.json')) && readSeatMarker(seatPath(dshHome)) === undefined)
 }
 
@@ -153,6 +174,32 @@ export function inspectBundledPlugin(dshHome: string): SeatResult {
   const owned = manifest !== undefined && !userOwned(manifest, dshHome)
     && (readSeatMarker(seatPath(dshHome)) !== undefined || readSeatMarker(legacySeatPath(dshHome)) !== undefined)
   return { seated: listed, added: false, owned: listed && owned }
+}
+
+/** Disk facts only: an installed bundle is not proof of activation in a live server. */
+export function inspectMarketInstallation(dshHome: string): {
+  state: 'unknown' | 'missing' | 'incomplete' | 'registered' | 'unregistered'
+  version?: string
+  owned: boolean
+} {
+  const manifest = readManifest(dshHome)
+  if (manifest === undefined) {
+    return { state: existsSync(manifestPath(dshHome)) ? 'unknown' : 'missing', owned: false }
+  }
+  const listed = manifest.dsh?.profile?.bundles?.includes(BUNDLED_PLUGIN_NAME) === true
+  const declared = declaresMarket(manifest)
+  // An incomplete nearer package must not be hidden by a shared fallback.
+  let dir = seatPath(dshHome)
+  try { lstatSync(dir) } catch { dir = legacySeatPath(dshHome) }
+  const version = readPackageVersion(dir)
+  let exists = false
+  try { lstatSync(dir); exists = true } catch { /* absent */ }
+  return {
+    state: version === undefined ? (exists || declared || listed ? 'incomplete' : 'missing')
+      : listed ? 'registered' : 'unregistered',
+    version,
+    owned: !declared && readSeatMarker(dir) !== undefined,
+  }
 }
 
 /**
@@ -203,7 +250,7 @@ function readPackageVersion(dir: string): string | undefined {
  * that catches this client mid-write must never find a half-written package
  * behind a name the profile lists.
  */
-function ensureSeatCopy(dshHome: string, pluginDir: string, version: string): void {
+function ensureSeatCopy(dshHome: string, pluginDir: string, version: string, takeover?: () => void): void {
   const seat = seatPath(dshHome)
   let existing: ReturnType<typeof lstatSync> | undefined
   try {
@@ -213,7 +260,7 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string): vo
   }
   if (existing !== undefined) {
     // Only a legacy link to this exact payload is demonstrably ours.
-    if (existing.isSymbolicLink() && realpathSync(seat) !== realpathSync(pluginDir)) {
+    if (!takeover && existing.isSymbolicLink() && realpathSync(seat) !== realpathSync(pluginDir)) {
       throw new Error(seat + ' is a foreign link')
     }
     if (!existing.isSymbolicLink()) {
@@ -221,10 +268,12 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string): vo
       // A directory with no marker of ours belongs to something else. Leave
       // it — and do not report the seat as ready, or `loadProfile` will load
       // whatever that tree is under this plugin's name.
-      if (marker === undefined) throw new Error(seat + ' exists and was not created by this client')
+      if (marker === undefined && !takeover) throw new Error(seat + ' exists and was not created by this client')
       // The version alone is not proof the copy is intact: a marker survives
       // a tree something else emptied. One stat is cheap next to a re-copy.
-      if (marker.version === version && readPackageVersion(seat) === version) return
+      if (!takeover && marker?.version === version && readPackageVersion(seat) === version) return
+      const installed = readPackageVersion(seat)
+      if (!takeover && marker?.version === installed && installed && valid(installed) && valid(version) && gt(installed, version)) return
     }
   }
   const staging = seat + '.' + String(process.pid) + '.tmp'
@@ -257,8 +306,10 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string): vo
       renameSync(seat, retired)
     }
     renameSync(staging, seat)
+    takeover?.()
   } catch (error) {
     rmSync(staging, { recursive: true, force: true })
+    if (takeover && retired !== undefined && existsSync(retired)) rmSync(seat, { recursive: true, force: true })
     // Put the old seat back rather than leaving the name empty.
     if (retired !== undefined && existsSync(retired) && !existsSync(seat)) renameSync(retired, seat)
     throw error
@@ -273,6 +324,72 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string): vo
       // Swept on the next copy; `sweepStagingDirs` knows this name.
     }
   }
+}
+
+function writeAtomicText(file: string, text: string): void {
+  const temporary = file + '.' + String(process.pid) + '.tmp'
+  try {
+    writeFileSync(temporary, text, { mode: 0o600 })
+    renameSync(temporary, file)
+  } finally {
+    rmSync(temporary, { force: true })
+  }
+}
+
+/** Migrate an older registry installation to the offline client-owned copy. */
+function upgradeUserSeat(pluginDir: string, dshHome: string, runtime: SeatRuntime): boolean {
+  const file = manifestPath(dshHome)
+  const original = readFileSync(file, 'utf8')
+  const manifest = JSON.parse(original) as ProfileManifest
+  const declarations = dependencySections.filter(section => Object.hasOwn(manifest[section] ?? {}, BUNDLED_PLUGIN_NAME))
+    .map(section => manifest[section]?.[BUNDLED_PLUGIN_NAME])
+  const installed = readPackageVersion(seatPath(dshHome))
+  const bundled = readPackageVersion(pluginDir)
+  if (declarations.length === 0 && lstatSync(seatPath(dshHome)).isSymbolicLink()) return false
+  // Custom sources (file/link/git/tags), disabled registrations, and missing
+  // packages do not provide enough evidence to take ownership.
+  if (!manifest.dsh?.profile?.bundles?.includes(BUNDLED_PLUGIN_NAME)
+    || declarations.some(source => typeof source !== 'string' || !source.trim() || (validRange(source) === null && !officialMarketTag(source)))
+    || !installed || !bundled || !valid(installed) || !valid(bundled)
+    || (!gt(bundled, installed) && !(bundled === installed && declarations.length > 0
+      && readSeatMarker(seatPath(dshHome))?.version === installed)) || runtimeRefusal(runtime) !== undefined) return false
+  const dir = profileDir(dshHome)
+  // Other package managers need their own migration; never leave a stale pin.
+  if (['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock'].some(name => existsSync(join(dir, name)))) return false
+  const lockFile = join(dir, 'pnpm-lock.yaml')
+  const oldLock = existsSync(lockFile) ? readFileSync(lockFile, 'utf8') : undefined
+  let nextLock = oldLock
+  if (oldLock !== undefined) {
+    const lock = load(oldLock) as { lockfileVersion?: unknown; importers?: Record<string, Partial<Record<typeof dependencySections[number], Record<string, unknown>>>> } | undefined
+    if (!lock || String(lock.lockfileVersion) !== '9.0' || !lock.importers?.['.']) return false
+    // Unreferenced package snapshots are valid in pnpm lockfiles. Preserve all
+    // snapshots and other importers so unrelated dependencies are untouched.
+    for (const section of dependencySections) {
+      const dependencies = lock.importers['.'][section]
+      if (dependencies) Reflect.deleteProperty(dependencies, BUNDLED_PLUGIN_NAME)
+    }
+    nextLock = dump(lock, { lineWidth: -1, noRefs: true })
+  }
+  for (const section of dependencySections) {
+    if (manifest[section]) Reflect.deleteProperty(manifest[section], BUNDLED_PLUGIN_NAME)
+  }
+  ensureSeatCopy(dshHome, pluginDir, bundled, () => {
+    runtime.validateTakeover?.()
+    if (readFileSync(file, 'utf8') !== original
+      || (existsSync(lockFile) ? readFileSync(lockFile, 'utf8') : undefined) !== oldLock) {
+      throw new Error('the web profile changed during market upgrade; retry on next launch')
+    }
+    try {
+      if (nextLock !== undefined && nextLock !== oldLock) writeAtomicText(lockFile, nextLock)
+      writeManifest(dshHome, manifest)
+    } catch (error) {
+      writeFileSync(file, original)
+      if (oldLock !== undefined) writeFileSync(lockFile, oldLock)
+      throw error
+    }
+  })
+  console.log('[desktop] bundled market upgraded: ' + installed + ' -> ' + bundled)
+  return true
 }
 
 /** Remove staging and retired seat trees any earlier run left behind. */
@@ -379,6 +496,11 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
   const manifest = readManifest(dshHome)
   if (manifest === undefined) return { seated: false, added: false, error: 'the web profile does not exist yet' }
   if (userOwned(manifest, dshHome)) {
+    try {
+      upgradeUserSeat(pluginDir, dshHome, runtime)
+    } catch (error) {
+      return { ...inspectBundledPlugin(dshHome), error: error instanceof Error ? error.message : String(error) }
+    }
     removeLegacySeatAfterUserInstall(dshHome, pluginDir)
     return inspectBundledPlugin(dshHome)
   }

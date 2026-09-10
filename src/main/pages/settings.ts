@@ -147,9 +147,10 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + '</div>'
     + '<hr class="divider">'
     // The native settings window remains complete when official DOM integration is unavailable.
-    + '<div class="section"><div class="section-title"><span id="market-label">' + h('安全市场', 'Safe marketplace') + '</span>'
+    + '<div class="section"><div class="section-title"><span id="market-label">' + h('启动时接入内置安全市场', 'Load bundled marketplace on startup') + '</span>'
     + '<div class="actions"><button id="market-toggle" type="button" role="switch" aria-checked="false" aria-labelledby="market-label" disabled>'
     + '</button></div></div>'
+    + '<p class="status-text" id="market-status" aria-live="polite"></p>'
     + '<p class="status-text" id="market-note" aria-live="polite"></p></div><hr class="divider">'
     // Update section
     + '<div class="section">'
