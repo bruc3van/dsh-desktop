@@ -4,10 +4,10 @@ import { app } from 'electron'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { devFlag, devOverride } from './development-options.ts'
-import { officialDshPackageVersion } from './official-dsh-bin.ts'
+import { officialDshEntry, officialDshPackageVersion } from './official-dsh-bin.ts'
 import { killProcessTree } from './process-tree.ts'
 import { executableCandidates, isSameDirectory, normalizePathEntry, npxCacheRoot, parseVersionOutput, spawnTargetFor } from './runtime-resolution.ts'
 import { BundledRuntimeMissingError, NoEnabledSmartRuntimeError, type DshCommand } from './runtime-types.ts'
@@ -18,12 +18,14 @@ const SPAWN_NO_WINDOW = { windowsHide: true } as const
 /**
  * A dsh the user installed themselves (npm/pnpm global, a version manager, a
  * source checkout on PATH). Preferred over the bundled runtime when present:
- * it runs on a real system Node instead of Electron's Node mode, so none of
- * the launcher's spawn rewriting or `--expose-internals` scaffolding applies,
+ * it runs on a real system Node instead of Electron's Node mode. Recognized
+ * official entries use the launcher for profile preparation, without Electron
+ * spawn rewriting or `--expose-internals` scaffolding,
  * and the user's own `dsh` upgrades reach the desktop client without waiting
  * for a client release. The bundled runtime stays the fallback.
  */
 interface InstalledDsh {
+  entry?: string
   /** Spawn shape, already resolved for this platform. */
   command: string
   args: string[]
@@ -194,6 +196,12 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions) {
       console.warn('[desktop] a dsh on PATH did not report a version; ignoring it: ' + found)
       return undefined
     }
+    const entry = officialDshEntry(found)
+    const adjacentNode = join(dirname(found), process.platform === 'win32' ? 'node.exe' : 'node')
+    const node = existsSync(adjacentNode) ? adjacentNode : findOnPath('node')
+    if (entry !== undefined && node !== undefined && officialDshPackageVersion(entry) === version) {
+      return { command: node, args: [runtimeLauncher()], entry, shell: false, path: found, version, source: 'installed' }
+    }
     return { command: target.command, args: [], shell: target.shell, path: found, version, source: 'installed' }
   }
 
@@ -262,7 +270,9 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions) {
       }
     }
     if (best === undefined) return undefined
-    return { command: node, args: [best.bin], shell: false, path: best.bin, version: best.version, source: 'npx' }
+    const entry = officialDshEntry(best.bin)
+    return { command: node, args: [entry === undefined ? best.bin : runtimeLauncher()], entry,
+      shell: false, path: best.bin, version: best.version, source: 'npx' }
   }
 
   function detectInstalledDsh(): Promise<void> {
@@ -341,6 +351,8 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions) {
         label: installed.path + ' (v' + installed.version + ')',
         source: installed.source,
         version: installed.version,
+        entry: installed.entry,
+        binPath: installed.entry,
       }
     }
     if (smartRuntimeEnabled(enabled, 'bundled')) {

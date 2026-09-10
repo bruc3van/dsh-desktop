@@ -18,6 +18,8 @@ files:
   - "!node_modules/**/*"
 
 extraResources:
+  - from: .runtime/bundled-plugins
+    to: bundled-plugins
   - from: .runtime/node_modules
     to: dsh-runtime/node_modules
   # The runtime child reads this as an ordinary file, outside app.asar, the

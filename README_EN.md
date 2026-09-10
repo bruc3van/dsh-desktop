@@ -140,9 +140,9 @@ See [Desktop client architecture](docs/desktop-client-architecture.md) and the [
 
 ## Bundled Safe Market
 
-The [Safe Market](https://github.com/bruc3van/dsh-desktop-safe-market) ships with the installer. It works with client-started runtimes and can also be added when the client reuses a local instance. Custom addresses do not receive the marketplace.
+The [Safe Market](https://github.com/bruc3van/dsh-desktop-safe-market) ships with the installer. It is prepared offline before the first client-managed runtime starts, after checking its peer dependencies. Reusing a running local instance or connecting to a custom address does not modify its plugin configuration. User-installed marketplace versions remain user-managed, including older versions.
 
-The marketplace is off by default. Enabling it downloads the catalog and caches the last successful result. Turning it off removes the marketplace plugin and prevents it from returning on the next launch.
+The marketplace is off by default. Enabling it downloads the catalog and caches the last successful result. Turning off the client’s bundled-market switch removes the client-owned registration on the next managed runtime launch. The switch does not manage a marketplace installed by the user.
 
 ![Safe Market](docs/images/marketplace.png)
 

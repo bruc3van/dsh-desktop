@@ -266,7 +266,7 @@ jobs:
         run: pnpm run build
 
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
-        run: pnpm run prepare:runtime
+        run: pnpm run prepare:runtime && pnpm run check:market-boot
         env:
           # node-pty ships every platform's prebuilds in one tarball; keep only
           # the matrix entry's own target (see scripts/prepare-runtime.mjs).

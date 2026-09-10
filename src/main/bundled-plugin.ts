@@ -1,50 +1,15 @@
 /**
- * The bundled plugin seat: how the client's own runtime closure offers a
- * plugin to the profile it boots, the way the official in-box bundles do.
- *
- * `dsh.profile.bundles` entries are resolved from the dsh INSTALLATION first
- * and the profile second, and `dsh plugin` never touches a name that is not a
- * profile dependency ("in-box bundles from the profile template are not
- * dependencies and are never touched"). So a plugin shipped inside this
- * client's runtime closure needs no install, no lockfile, and no network — it
- * needs two things:
- *
- *  1. a copy of the package where the profile's module resolution reaches it.
- *     Loader entries are imported from the profile directory, and the
- *     installation's own packages reach it through
- *     `<DSH_HOME>/profiles/node_modules`, which the harness heals on every
- *     boot by symlinking the SERVING installation's dependency graph there.
- *     That healing only ever ADDS entries, so one more, owned by this client,
- *     survives alongside them.
- *  2. the package name in the profile's `dsh.profile.bundles`.
- *
- * Both are reversible in one step, which is what makes the seat safe to take
- * automatically: a plugin that throws while loading fails the WHOLE plugin
- * tree, so the client must be able to give the seat back (see `withdraw`).
- * A missing closure copy drops the entry (and the copy) rather than leaving a
- * name official `loadProfile` will throw on. A user-installed overlay that
- * is older than the closure is lifted: the dependency and the nearer
- * profile install go away so the in-box seat is what loads; a newer or
- * equal overlay is left entirely alone.
- *
- * A COPY rather than a link, and that is what opens the seat to runtimes
- * other than this client's own. Node resolves a package's imports from its
- * realpath, so a link into the closure made the plugin's live
- * `@deepseek-ai/*` imports resolve INSIDE the closure — handing whichever
- * runtime was serving a second copy of the Service classes it already ran,
- * which is why the seat used to be refused to every runtime but the bundled
- * one. A real directory resolves upward instead, through the graph the
- * harness heals for the installation that is actually serving. Every runtime
- * this client STARTS is therefore a candidate, gated on version alone (see
- * `runtimeRefusal`). A runtime it did not start is released by the caller
- * when it is a pinned address, and re-seated conservatively — name only,
- * never a tree swap — when it is a local instance already serving (`serving`).
+ * Offline, client-owned market copy for the web profile. User dependencies
+ * and profile-local installs remain owned by their package manager. Only a
+ * managed launch may edit the profile; adopting a server is read-only.
+ * The packaged market lives outside the DSH installation so its bundle patch
+ * and Loader entry resolve from the same profile package.
  * @module dsh-desktop/bundled-plugin
  */
 
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join } from 'node:path'
+import satisfies from 'semver/functions/satisfies.js'
 
 /** The plugin this client ships. */
 export const BUNDLED_PLUGIN_NAME = 'dsh-desktop-safe-market'
@@ -57,75 +22,25 @@ interface ProfileManifest {
   dsh?: { profile?: { bundles?: string[] } }
 }
 
-/** Which dsh is about to serve the profile, as far as the client knows it. */
+/** Evidence supplied by the managed launcher, never inferred from a live URL. */
 export interface SeatRuntime {
-  /**
-   * The version of the runtime that will serve. `undefined` when this client
-   * could not read one — an override command, say — which is refused rather
-   * than guessed: the whole point of the gate is not to seat into a runtime
-   * whose shape is unknown.
-   */
   readonly version?: string
-  /**
-   * The dsh version this client ships, and therefore the one the bundled
-   * plugin was built and tested against. `undefined` disables the gate, for
-   * a build carrying no runtime of its own to compare with.
-   */
   readonly builtAgainst?: string
-  /**
-   * A local instance the client did not start is answering on this machine's
-   * conventional origin, and is ASSUMED — not proven — to be serving this
-   * home's profile (the probe reads an official API descriptor but keeps only the origin:
-   * the describe value's version is validated, not carried here, and the
-   * home is not in it at all). An instance that boots a dsh profile and
-   * answers is the compatibility evidence the gate exists to establish, so
-   * the gate is skipped; the seat is then restored conservatively (name
-   * only, see `seatBundledPlugin`) so a wrong assumption costs one manifest
-   * entry, never a tree swap under a live process.
-   */
+  readonly peerRanges?: readonly string[]
   readonly serving?: boolean
+  /** Each actual peer package was verified by the managed launcher. */
+  readonly peersVerified?: boolean
 }
 
-/**
- * Why this runtime does not get the seat, or `undefined` when it does.
- *
- * The seat used to be refused to every runtime but this client's own, for a
- * real reason: a symlinked plugin resolved its imports inside the closure and
- * handed the serving runtime a second copy of the Service classes. A copied
- * plugin resolves them from the serving installation instead, so that reason
- * is gone and the market can run anywhere — which leaves a different question
- * to answer, this one.
- *
- * The plugin is built against the runtime this client ships. An OLDER runtime
- * may not export what it imports, and a module missing at import time fails
- * the whole plugin tree, not just the market. The plugin guards itself now
- * (its entry reaches the body through a guarded dynamic import), but this
- * client should not knowingly walk into it: the guard is for the case nobody
- * is watching, not a licence to stop looking.
- *
- * Newer runtimes are allowed. Refusing them would freeze the market out of
- * every future dsh, and "newer than what we tested" is the ordinary condition
- * of a plugin, not a fault.
- *
- * A runtime already SERVING this profile is allowed without a version to
- * compare: it demonstrably boots the profile, the plugin's entry guards its
- * own import for the case the evidence misleads (the guard covers the module
- * import, not the loader's resolution of the entry's inject names — a
- * pre-guard failure needs a dsh old enough to miss one of those services),
- * and the entry only takes effect at the next boot of whatever consumes the
- * profile — the client's own spawns re-run this gate with a real version then.
- */
 export function runtimeRefusal(runtime: SeatRuntime): string | undefined {
-  if (runtime.serving === true) return undefined
-  if (runtime.builtAgainst === undefined) return undefined
+  if (runtime.serving === true) return 'an adopted runtime is read-only'
+  if (runtime.peersVerified === true) return undefined
   if (runtime.version === undefined) return 'the version of the runtime about to serve is unknown'
-  const order = compareVersions(runtime.version, runtime.builtAgainst)
-  if (order === undefined) {
-    return 'the runtime version ' + runtime.version + ' cannot be compared with the bundled ' + runtime.builtAgainst
-  }
-  if (order < 0) {
-    return 'the runtime is dsh ' + runtime.version + ', older than the bundled ' + runtime.builtAgainst
-      + ' the plugin is built against'
+  const version = runtime.version
+  const ranges = runtime.peerRanges ?? (runtime.builtAgainst === undefined ? [] : ['^' + runtime.builtAgainst])
+  if (ranges.length === 0) return 'the bundled plugin compatibility range is unknown'
+  if (!ranges.every(range => satisfies(version, range))) {
+    return 'the runtime ' + runtime.version + ' does not satisfy the bundled plugin peer ranges: ' + ranges.join(', ')
   }
   return undefined
 }
@@ -135,12 +50,8 @@ export interface SeatResult {
   seated: boolean
   /** This call added the bundle entry, so this boot is the first to load it. */
   added: boolean
-  /**
-   * This call replaced a user-installed overlay that was older than the
-   * closure copy. The dependency and the nearer profile install are gone;
-   * the in-box seat is what loads.
-   */
-  lifted?: boolean
+  /** True only for the copy this client owns, never a user dependency. */
+  owned?: boolean
   /** Why the seat could not be taken, when it could not. */
   error?: string
 }
@@ -154,12 +65,14 @@ function manifestPath(dshHome: string): string {
 }
 
 /**
- * Where the client puts its copy of the plugin: the module directory the
- * harness heals for every profile, one level above any single profile's own
- * `node_modules`. A user's own `dsh plugin add` install lands nearer and
- * therefore still wins.
+ * Client-owned copies belong to web only. Legacy shared copies are migrated
+ * without deleting a copy another profile still references.
  */
 function seatPath(dshHome: string): string {
+  return join(profileDir(dshHome), 'node_modules', BUNDLED_PLUGIN_NAME)
+}
+
+function legacySeatPath(dshHome: string): string {
   return join(dshHome, 'profiles', 'node_modules', BUNDLED_PLUGIN_NAME)
 }
 
@@ -181,17 +94,6 @@ interface SeatMarker {
 
 /** The marker's owner tag; anything else in that file is not ours. */
 const SEAT_OWNER = 'dsh-desktop'
-
-/** An intact copy this client owns at the seat path — any version. */
-function ownedSeatIntact(dshHome: string): boolean {
-  const seat = seatPath(dshHome)
-  try {
-    if (lstatSync(seat).isSymbolicLink()) return false
-  } catch {
-    return false
-  }
-  return readSeatMarker(seat) !== undefined && existsSync(join(seat, 'package.json'))
-}
 
 function readSeatMarker(dir: string): SeatMarker | undefined {
   try {
@@ -235,13 +137,22 @@ function writeManifest(dshHome: string, manifest: ProfileManifest): void {
   }
 }
 
-/**
- * Whether the user installed this plugin themselves. A copy that is newer
- * than or equal to the closure is theirs to upgrade or remove — the client
- * stays out. An older overlay is a stale floor and is lifted on seat.
- */
-function userOwned(manifest: ProfileManifest): boolean {
+/** A declaration or a nearer installed package is never ours to replace. */
+function userOwned(manifest: ProfileManifest, dshHome: string): boolean {
+  try {
+    if (lstatSync(seatPath(dshHome)).isSymbolicLink()) return true
+  } catch { /* no local installation */ }
   return Object.hasOwn(manifest.dependencies ?? {}, BUNDLED_PLUGIN_NAME)
+    || (existsSync(join(seatPath(dshHome), 'package.json')) && readSeatMarker(seatPath(dshHome)) === undefined)
+}
+
+/** Inspect an existing seat without changing a running server's profile. */
+export function inspectBundledPlugin(dshHome: string): SeatResult {
+  const manifest = readManifest(dshHome)
+  const listed = manifest?.dsh?.profile?.bundles?.includes(BUNDLED_PLUGIN_NAME) === true
+  const owned = manifest !== undefined && !userOwned(manifest, dshHome)
+    && (readSeatMarker(seatPath(dshHome)) !== undefined || readSeatMarker(legacySeatPath(dshHome)) !== undefined)
+  return { seated: listed, added: false, owned: listed && owned }
 }
 
 /**
@@ -273,145 +184,6 @@ function readPackageVersion(dir: string): string | undefined {
   }
 }
 
-/** Core `x.y.z` plus optional prerelease; build metadata is ignored. */
-function parseVersion(raw: string): { core: [number, number, number]; pre: string } | undefined {
-  const trimmed = raw.trim()
-  if (trimmed === '') return undefined
-  const plus = trimmed.indexOf('+')
-  const withoutBuild = plus === -1 ? trimmed : trimmed.slice(0, plus)
-  const dash = withoutBuild.indexOf('-')
-  const corePart = dash === -1 ? withoutBuild : withoutBuild.slice(0, dash)
-  const pre = dash === -1 ? '' : withoutBuild.slice(dash + 1)
-  const bits = corePart.split('.')
-  if (bits.length < 1 || bits.length > 3) return undefined
-  const core: [number, number, number] = [0, 0, 0]
-  for (let i = 0; i < bits.length; i++) {
-    const bit = bits[i]
-    if (bit === undefined || !/^\d+$/.test(bit)) return undefined
-    core[i] = Number(bit)
-  }
-  return { core, pre }
-}
-
-/**
- * Semver-ish order: `undefined` when either side is not a version this seat
- * can compare. Uncomparable is NOT stale — the caller keeps such overlays
- * rather than lifting a user's tree on a parse failure.
- */
-function compareVersions(left: string, right: string): number | undefined {
-  const a = parseVersion(left)
-  const b = parseVersion(right)
-  if (a === undefined || b === undefined) return undefined
-  for (let i = 0; i < 3; i++) {
-    const left = a.core[i]
-    const right = b.core[i]
-    if (left === undefined || right === undefined) return undefined
-    if (left !== right) return left - right
-  }
-  if (a.pre === b.pre) return 0
-  if (a.pre === '') return 1
-  if (b.pre === '') return -1
-  return comparePrerelease(a.pre, b.pre)
-}
-
-/**
- * Order two prerelease tags by semver's rule, not by string order.
- *
- * The distinction is not academic here: dsh ships an `rc` sequence, and a
- * plain string comparison puts `rc.10` BEFORE `rc.6` — every release past
- * rc.9 would read as older than the one this client bundles. Two things then
- * go wrong at once. The version gate refuses every newer runtime, freezing
- * the market out of exactly the future versions the gate was written to
- * admit; and `overlayOlderThanClosure` calls the same comparison, so a copy
- * the user installed themselves at `rc.10` looks stale next to a bundled
- * `rc.6` — which does not merely skip the seat, it takes the user's NEWER
- * install away (`liftStaleOverlay` drops the dependency and deletes the tree).
- *
- * Semver §11: compare dot-separated identifiers; numeric ones numerically,
- * numeric sorts below alphanumeric, and when one list runs out first the
- * shorter one is the lower.
- */
-function comparePrerelease(left: string, right: string): number {
-  const a = left.split('.')
-  const b = right.split('.')
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i]
-    const y = b[i]
-    if (x === undefined) return -1
-    if (y === undefined) return 1
-    if (x === y) continue
-    const xNumeric = /^\d+$/.test(x)
-    const yNumeric = /^\d+$/.test(y)
-    if (xNumeric && yNumeric) return Number(x) - Number(y)
-    if (xNumeric !== yNumeric) return xNumeric ? -1 : 1
-    return x < y ? -1 : 1
-  }
-  return 0
-}
-
-function sameDirectory(left: string, right: string): boolean {
-  try {
-    return realpathSync(left) === realpathSync(right)
-  } catch {
-    const a = resolve(left)
-    const b = resolve(right)
-    return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
-  }
-}
-
-/** The user's installed copy, resolved the way the profile itself would. */
-function overlayDir(dshHome: string): string | undefined {
-  const anchor = manifestPath(dshHome)
-  try {
-    return dirname(createRequire(anchor).resolve(BUNDLED_PLUGIN_NAME + '/package.json'))
-  } catch {
-    const candidate = join(profileDir(dshHome), 'node_modules', BUNDLED_PLUGIN_NAME)
-    return existsSync(join(candidate, 'package.json')) ? candidate : undefined
-  }
-}
-
-function profileInstallPath(dshHome: string): string {
-  return join(profileDir(dshHome), 'node_modules', BUNDLED_PLUGIN_NAME)
-}
-
-/**
- * An overlay yields to the closure only when it is provably older, or when
- * its directory is missing entirely. An overlay whose VERSION cannot be
- * parsed is the user's own tree under a spelling this seat cannot compare —
- * it is kept, never lifted on a parse failure. A newer or equal overlay, or
- * an overlay that *is* the closure, keeps ownership. The closure's own
- * version must be readable or we do not lift.
- */
-function overlayOlderThanClosure(dshHome: string, pluginDir: string): boolean {
-  const bundled = readPackageVersion(pluginDir)
-  if (bundled === undefined) return false
-  const overlay = overlayDir(dshHome)
-  if (overlay === undefined) return true
-  if (sameDirectory(overlay, pluginDir)) return false
-  const theirs = readPackageVersion(overlay)
-  // Only a version that is provably older is lifted. Unparseable is NOT
-  // stale: it is the user's own tree under a spelling this seat cannot
-  // compare (a git tarball's `1.2.3.4`, a hand-edited `v9.9.9`), and
-  // deleting user data on a parse failure is the one wrong answer here.
-  if (theirs === undefined) return false
-  const order = compareVersions(theirs, bundled)
-  return order !== undefined && order < 0
-}
-
-/** Drop the stale overlay's dependency and its nearer profile install. */
-function liftStaleOverlay(dshHome: string): void {
-  commitProfileManifest(dshHome, (fresh) => {
-    if (fresh.dependencies === undefined) return false
-    const kept = Object.fromEntries(
-      Object.entries(fresh.dependencies).filter(([name]) => name !== BUNDLED_PLUGIN_NAME),
-    )
-    if (Object.keys(kept).length === Object.keys(fresh.dependencies).length) return false
-    fresh.dependencies = kept
-    return true
-  })
-  rmSync(profileInstallPath(dshHome), { recursive: true, force: true })
-}
-
 /**
  * Put this client's copy of the plugin where the profile resolves modules,
  * replacing an out-of-date copy and the symlink older clients left.
@@ -440,8 +212,10 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string): vo
     existing = undefined
   }
   if (existing !== undefined) {
-    // A link is either this client's own from a version that seated one, or
-    // something pointing at the closure; both are ours to replace.
+    // Only a legacy link to this exact payload is demonstrably ours.
+    if (existing.isSymbolicLink() && realpathSync(seat) !== realpathSync(pluginDir)) {
+      throw new Error(seat + ' is a foreign link')
+    }
     if (!existing.isSymbolicLink()) {
       const marker = readSeatMarker(seat)
       // A directory with no marker of ours belongs to something else. Leave
@@ -450,7 +224,7 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string): vo
       if (marker === undefined) throw new Error(seat + ' exists and was not created by this client')
       // The version alone is not proof the copy is intact: a marker survives
       // a tree something else emptied. One stat is cheap next to a re-copy.
-      if (marker.version === version && existsSync(join(seat, 'package.json'))) return
+      if (marker.version === version && readPackageVersion(seat) === version) return
     }
   }
   const staging = seat + '.' + String(process.pid) + '.tmp'
@@ -512,8 +286,7 @@ function sweepStagingDirs(seat: string): void {
     return
   }
   for (const name of names) {
-    if (!name.startsWith(prefix)) continue
-    if (!name.endsWith('.tmp') && !name.endsWith('.old')) continue
+    if (!name.startsWith(prefix) || !/^\d+\.(tmp|old)$/.test(name.slice(prefix.length))) continue
     try {
       rmSync(join(parent, name), { recursive: true, force: true })
     } catch {
@@ -524,11 +297,10 @@ function sweepStagingDirs(seat: string): void {
 }
 
 /** Remove the seat this client owns: its copy, or the link older ones left. */
-function removeOwnedSeat(dshHome: string): void {
-  const seat = seatPath(dshHome)
+function removeOwnedSeat(dshHome: string, seat = seatPath(dshHome)): void {
   try {
     if (lstatSync(seat).isSymbolicLink()) {
-      rmSync(seat, { force: true })
+      // Without the payload anchor, a legacy link cannot be proved ours.
       return
     }
   } catch {
@@ -551,6 +323,51 @@ function removeOwnedSeat(dshHome: string): void {
   }
 }
 
+function isKnownLegacyLink(dshHome: string, pluginDir?: string): boolean {
+  if (pluginDir === undefined) return false
+  try {
+    const legacy = legacySeatPath(dshHome)
+    return lstatSync(legacy).isSymbolicLink() && realpathSync(legacy) === realpathSync(pluginDir)
+  } catch { return false }
+}
+
+/** Legacy shared copies may be used by another profile; retain them in that case. */
+function removeUnusedLegacySeat(dshHome: string, pluginDir?: string): void {
+  const profiles = join(dshHome, 'profiles')
+  if (!existsSync(profiles)) return
+  let names: string[]
+  try { names = readdirSync(profiles) } catch { return }
+  for (const name of names) {
+    if (name === WEB_PROFILE || name === 'node_modules') continue
+    const manifest = join(profiles, name, 'package.json')
+    if (!existsSync(manifest)) continue
+    try {
+      const other = JSON.parse(readFileSync(manifest, 'utf8')) as ProfileManifest
+      if (other.dsh?.profile?.bundles?.includes(BUNDLED_PLUGIN_NAME)
+        || Object.hasOwn(other.dependencies ?? {}, BUNDLED_PLUGIN_NAME)) return
+    } catch { return }
+  }
+  const legacy = legacySeatPath(dshHome)
+  try {
+    if (lstatSync(legacy).isSymbolicLink()) {
+      // A dead or foreign link is not ownership evidence. Unlink only a known payload.
+      if (isKnownLegacyLink(dshHome, pluginDir)) rmSync(legacy)
+      return
+    }
+  } catch { return }
+  removeOwnedSeat(dshHome, legacy)
+}
+
+/** Only retire fallback when a complete independent user package takes its place. */
+function removeLegacySeatAfterUserInstall(dshHome: string, pluginDir?: string): void {
+  try {
+    const local = realpathSync(seatPath(dshHome))
+    let shared: string | undefined
+    try { shared = realpathSync(legacySeatPath(dshHome)) } catch { /* absent */ }
+    if (existsSync(join(local, 'package.json')) && local !== shared) removeUnusedLegacySeat(dshHome, pluginDir)
+  } catch { /* incomplete user install: preserve fallback */ }
+}
+
 /**
  * Offer the bundled plugin to the profile.
  * @param pluginDir - the plugin's directory inside this client's runtime closure.
@@ -558,90 +375,40 @@ function removeOwnedSeat(dshHome: string): void {
  * @returns whether the seat is in place, and whether this call created it.
  */
 export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: SeatRuntime): SeatResult {
-  if (!existsSync(join(pluginDir, 'package.json'))) {
-    abandonBundledPlugin(dshHome)
-    return { seated: false, added: false, error: 'the runtime closure carries no bundled plugin' }
+  if (runtime.serving === true) return inspectBundledPlugin(dshHome)
+  const manifest = readManifest(dshHome)
+  if (manifest === undefined) return { seated: false, added: false, error: 'the web profile does not exist yet' }
+  if (userOwned(manifest, dshHome)) {
+    removeLegacySeatAfterUserInstall(dshHome, pluginDir)
+    return inspectBundledPlugin(dshHome)
   }
   const version = readPackageVersion(pluginDir)
   if (version === undefined) {
     abandonBundledPlugin(dshHome)
-    return { seated: false, added: false, error: 'the bundled plugin declares no version' }
-  }
-  const manifest = readManifest(dshHome)
-  // A first-ever run has no profile until the harness creates one during
-  // boot. Nothing is broken; the seat is taken on the next start.
-  if (manifest === undefined) return { seated: false, added: false, error: 'the web profile does not exist yet' }
-  // Ahead of the version gate on purpose. When the user owns a copy this
-  // client is not going to touch it either way, and the gate's answer would
-  // be a statement about a seat nobody is taking — reported by the caller as
-  // "not seated: the runtime is older than…", which reads as the market
-  // being unavailable when it is in fact loading from the user's own install.
-  if (userOwned(manifest) && !overlayOlderThanClosure(dshHome, pluginDir)) {
-    return { seated: true, added: false }
-  }
-  // A stale user overlay is normally lifted, but never under a runtime that
-  // is already serving: the lift deletes a tree that live process may still
-  // read from. Their copy keeps loading; the next spawn lifts it.
-  if (runtime.serving === true && userOwned(manifest)) {
-    return { seated: true, added: false }
+    return { seated: false, added: false, error: 'the runtime closure carries no readable bundled plugin' }
   }
   const refusal = runtimeRefusal(runtime)
   if (refusal !== undefined) {
-    // Not a failure and not an error: this runtime is simply outside what
-    // this client vouches for. The entry goes, the copy stays — the next
-    // boot on a runtime we do know re-seats without copying anything.
     withdrawBundledPlugin(dshHome)
     return { seated: false, added: false, error: refusal }
   }
-
-  // The bundles array is checked before anything is copied or lifted: a
-  // profile that declares no bundle list gets an error, not a deleted user
-  // overlay or a tree copy nobody will load.
-  const bundles = manifest.dsh?.profile?.bundles
-  if (!Array.isArray(bundles)) {
+  if (!Array.isArray(manifest.dsh?.profile?.bundles)) {
     return { seated: false, added: false, error: 'the web profile declares no bundle list' }
   }
   try {
-    let lifted = false
-    // Under a serving runtime, an owned copy already in place — any version —
-    // is restored by NAME alone. Replacing the tree retires a directory the
-    // live process may hold open; on Windows that rename can fail EBUSY, the
-    // catch below would withdraw the entry, and the upgrade path would re-dig
-    // the exact hole this seat exists to close. An out-of-date copy is
-    // upgraded by the client's next spawn, behind the real version gate.
-    if (runtime.serving !== true || !ownedSeatIntact(dshHome)) {
-      // The copy must be in place before a stale overlay is taken away: a
-      // foreign directory at the seat path cannot be replaced, and the user's
-      // older copy is then still the one that loads.
-      ensureSeatCopy(dshHome, pluginDir, version)
-      if (userOwned(manifest)) {
-        liftStaleOverlay(dshHome)
-        lifted = true
-      }
-    }
-    if (bundles.includes(BUNDLED_PLUGIN_NAME)) return { seated: true, added: false, lifted }
-    // Committed against a fresh read (see commitProfileManifest): whatever
-    // the user's CLI wrote while the copy ran is preserved beside our entry.
-    const added = commitProfileManifest(dshHome, (fresh) => {
+    ensureSeatCopy(dshHome, pluginDir, version)
+    const added = commitProfileManifest(dshHome, fresh => {
+      // A package-manager install that arrived during the copy keeps ownership.
+      if (userOwned(fresh, dshHome)) return false
       const list = fresh.dsh?.profile?.bundles
       if (!Array.isArray(list) || list.includes(BUNDLED_PLUGIN_NAME)) return false
       list.push(BUNDLED_PLUGIN_NAME)
       return true
     })
-    if (added) return { seated: true, added: true, lifted }
-    // The commit no-oped because the fresh document changed under us: either
-    // a concurrent writer already seated the name, or the bundle list went
-    // away. "Seated" must mean the entry is actually listed — check the fresh
-    // document rather than reporting the stale in-hand one.
-    const fresh = readManifest(dshHome)
-    const freshBundles = fresh?.dsh?.profile?.bundles
-    if (Array.isArray(freshBundles) && freshBundles.includes(BUNDLED_PLUGIN_NAME)) {
-      return { seated: true, added: false, lifted }
-    }
-    return { seated: false, added: false, lifted, error: 'the web profile declares no bundle list' }
+    const result = inspectBundledPlugin(dshHome)
+    if (result.owned) removeUnusedLegacySeat(dshHome, pluginDir)
+    return { ...result, added }
   } catch (error) {
-    // The name must not stay listed if this client cannot actually offer the
-    // package — official `loadProfile` throws on an unresolvable bundle.
     withdrawBundledPlugin(dshHome)
     return { seated: false, added: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -656,15 +423,16 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
  * @param dshHome - the harness home whose `web` profile is being booted.
  * @returns whether an entry was removed.
  */
-export function withdrawBundledPlugin(dshHome: string): boolean {
+export function withdrawBundledPlugin(dshHome: string, pluginDir?: string): boolean {
   const manifest = readManifest(dshHome)
-  if (manifest === undefined || userOwned(manifest)) return false
+  if (manifest === undefined || userOwned(manifest, dshHome)) return false
+  if (readSeatMarker(seatPath(dshHome)) === undefined && readSeatMarker(legacySeatPath(dshHome)) === undefined && !isKnownLegacyLink(dshHome, pluginDir)) return false
   if (!Array.isArray(manifest.dsh?.profile?.bundles)) return false
   try {
     return commitProfileManifest(dshHome, (fresh) => {
       // Re-checked on the fresh read: the user may have installed their own
       // copy between the two reads, and that copy is never withdrawn.
-      if (userOwned(fresh)) return false
+      if (userOwned(fresh, dshHome)) return false
       const bundles = fresh.dsh?.profile?.bundles
       if (!Array.isArray(bundles)) return false
       const next = bundles.filter(entry => entry !== BUNDLED_PLUGIN_NAME)
@@ -684,8 +452,14 @@ export function withdrawBundledPlugin(dshHome: string): boolean {
  * closure no longer carries the plugin, so a leftover name cannot take
  * down every consumer of the shared profile.
  */
-export function abandonBundledPlugin(dshHome: string): boolean {
-  const withdrawn = withdrawBundledPlugin(dshHome)
+export function abandonBundledPlugin(dshHome: string, pluginDir?: string): boolean {
+  const withdrawn = withdrawBundledPlugin(dshHome, pluginDir)
+  const manifest = readManifest(dshHome)
+  if (manifest !== undefined && userOwned(manifest, dshHome)) {
+    removeLegacySeatAfterUserInstall(dshHome, pluginDir)
+    return withdrawn
+  }
   removeOwnedSeat(dshHome)
+  removeUnusedLegacySeat(dshHome, pluginDir)
   return withdrawn
 }

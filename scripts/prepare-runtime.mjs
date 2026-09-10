@@ -7,7 +7,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertNoTsEntryPoints } from './ts-entry-guard.mjs'
@@ -173,6 +173,13 @@ if (!existsSync(pnpmBin)) {
 // runtime; this invariant fails the release job with the offending package
 // name if a future dependency starts shipping one. See ts-entry-guard.mjs.
 await assertNoTsEntryPoints(runtimeModules)
+// The market must resolve only from the profile, for both its bundle patch
+// and Loader module. Leaving it beside DSH makes installation-first bundle
+// resolution disagree with a user's profile-local upgrade.
+const bundledPlugins = join(destination, 'bundled-plugins')
+await mkdir(bundledPlugins, { recursive: true })
+await rename(join(runtimeModules, 'dsh-desktop-safe-market'), join(bundledPlugins, 'dsh-desktop-safe-market'))
+console.log('[runtime] market payload isolated from DSH installation module lookup')
 console.log('[runtime] no manifest resolves to a pruned .ts entry point')
 
 /**

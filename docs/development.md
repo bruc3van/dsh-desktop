@@ -12,7 +12,7 @@ Source development requires Node.js `^22.19.0 || >=24.0.0` and [pnpm](https://pn
 git clone https://github.com/bruc3van/dsh-desktop.git
 cd dsh-desktop
 pnpm install
-pnpm run dev
+pnpm run dev          # builds and prepares the separated offline runtime payload
 ```
 
 On launch, **Smart mode** picks a runtime in this order:
@@ -26,7 +26,7 @@ Each of those four sources can be turned off independently in Connection setting
 
 Steps 2 and 3 run on **your own Node** and use only packages that are **already present** — nothing is downloaded, and Node.js is never installed for you; an empty cache is simply skipped. The client reads the cached package's `package.json` to confirm it really is `@deepseek-ai/dsh` and to report its true version, so nothing else sitting at that path can be launched by mistake. The npx cache never updates itself: when the cached version is older than the bundled runtime the client still prefers your cache, but says so in the connection settings — re-running `npx @deepseek-ai/dsh web` once refreshes the cache to the latest release.
 
-What gets started is always a plain background service (automatic mode tries port 3080, then 13080, then `dsh web --port 0`; Connection settings can instead pin a port) — rc.8 and newer get `--no-open`, so not a browser window — and the client shuts it down when you quit. If the chosen runtime fails to start, the client walks the remaining enabled sources (the bundled runtime last, when it is still enabled). A pinned port that is already taken is not replaced, and the source ladder is not walked against the same dead bind. Connection settings show which runtime is in use (installed / npx cache / bundled) and its version. The bundled safe marketplace is seated into whichever runtime the client starts (a reused instance and a pinned address are the exceptions — the client does not start those); see [Development and verification](#development-and-verification) and the README's [bundled safe marketplace](../README_EN.md#the-bundled-safe-marketplace) section.
+What gets started is always a plain background service (automatic mode tries port 3080, then 13080, then `dsh web --port 0`; Connection settings can instead pin a port) — rc.8 and newer get `--no-open`, so not a browser window — and the client shuts it down when you quit. If the chosen runtime fails to start, the client walks the remaining enabled sources (the bundled runtime last, when it is still enabled). A pinned port that is already taken is not replaced, and the source ladder is not walked against the same dead bind. Connection settings show which runtime is in use (installed / npx cache / bundled) and its version. The bundled safe marketplace is offered when the client starts a verifiable official CLI with compatible dependencies, including recognized PATH and npx installations (reused instances and pinned addresses are read-only); see [Development and verification](#development-and-verification) and the README's [bundled safe marketplace](../README_EN.md#the-bundled-safe-marketplace) section.
 
 If the bundled runtime cannot start, or you want to use another instance, open **Settings → Desktop settings**. If the page cannot load at all, the startup surface offers **Web UI connection…**.
 
@@ -59,12 +59,20 @@ In addition, `scripts/` contains a family of regression checks for connection an
 
 ### The bundled safe marketplace (development)
 
-- The market's version is pinned by the exact `dsh-desktop-safe-market` npm dependency in `dsh-runtime/package.json`; it shares the release closure with the official runtime and ships in the installer, so bumping that dependency is how the client's bundled market is upgraded. The package is published from a tagged upstream release with npm provenance; because a release-day version is younger than pnpm's minimum release age, each bump also adds that exact version to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` — one version at a time, never a wildcard.
-- The client seats the market into every runtime it **starts** — the bundled one, a `dsh` on PATH, an npx-cached one alike: the plugin is **copied** into `<DSH_HOME>/profiles/node_modules` and its name goes into the profile's `dsh.profile.bundles`. Copying rather than linking is what makes that work across runtimes — Node resolves from the realpath, so a link sent the plugin's `@deepseek-ai/*` imports back into the client's closure and handed the serving runtime a second copy of the Service classes. The copy carries a `.dsh-desktop-seat.json` ownership marker; a link left by an older client is replaced by a copy.
-- The gate is a version check (`runtimeRefusal()`): the plugin is built against the dsh this client ships, so an older runtime — which may not export what it imports — is refused, a newer one is allowed, and an unreadable version is refused rather than guessed. A reused instance or a pinned address still releases the seat, because the client does not control their boot. The add / already-present / user-owned / stale-overlay-lifted / withdraw / abandon / foreign-directory / missing-plugin / no-profile / upgrade-re-copies / older-client-link-replaced / version-gate contracts are pinned by `check:bundled-plugin`.
-- There are two removal paths, covering different moments: the seating switch in the client's connection settings (turning it off withdraws the entry and deletes the copy, and the choice is durable in `~/.bruc3van-dsh-desktop/settings.json` — the seat is re-offered on every start, so an unrecorded removal would undo itself); and the market's own installed panel, which lists a seat carrying `.dsh-desktop-seat.json` and can uninstall it — the only door left once the client is gone.
-- To pin a source run to the bundled closure rather than your own dsh: `DSH_DESKTOP_SKIP_INSTALLED_DSH=1 pnpm run dev`. The market itself no longer needs that switch.
-- The market's catalog pipeline (daily collection plus manual curation), the review-before-install prompt, and its security boundaries live in the market's repository; the seat implementation is `src/main/bundled-plugin.ts`.
+- Update the exact market version, lockfile and release-age exemption together. `prepare:runtime` places the payload in `.runtime/bundled-plugins`, packaged as `resources/bundled-plugins`, outside installation-first DSH lookup.
+- The managed launcher checks each installed peer package against its own range, calls that version's official `initProfile()`, then registers the market before the first profile load. Missing optional peers are allowed; incompatible present peers are rejected. Raw CLIs without a verifiable package anchor receive no injected market.
+- Only marked copies in `<DSH_HOME>/profiles/web/node_modules` are upgraded. All user dependencies, local installs and lockfiles remain untouched. Legacy shared copies migrate to web; copies referenced by other profiles remain.
+- Adopting a running server or connecting to a pinned address does not edit profiles. Disabling the client switch removes owned state on the next managed launch, preserving user installs. The market's installed panel can still remove its marked copy after the client is uninstalled.
+- `check:bundled-plugin` covers ownership/migration/disable; `check:market-boot` exercises the actual official loader and launcher, cold startup, peers and patch/module identity; `smoke:package` starts the packaged application from an empty home and calls market APIs. CI and release gates include these checks.
+- The market repository owns its catalog and review prompts. This repository owns distribution and profile preparation; see `src/main/bundled-market-boot.ts` and `src/main/bundled-plugin.ts`.
+
+### Legacy market migration and dependency diagnostics
+
+Recognized official PATH shims/symlinks and npx entries run the launcher on the user's Node. `pnpm run dev` prepares the separated runtime and market payload before starting Electron.
+
+A valid user installation allows cleanup of an unused shared copy marked as client-owned. Other profiles, incomplete user installations, foreign links and links with unknown targets are preserved. A legacy link can be removed when its target is the current payload; its target is never deleted.
+
+After official fallback preparation, peer checks start from the market's real directory. User dependency drift is reported in startup logs without changing user packages or lockfiles. Drift in a client-owned market withdraws only its registration.
 
 ## Releasing a version
 

@@ -13,7 +13,7 @@ export function renderSettingsPageScript(chinese: boolean): string {
     + 'if(!r.ok)throw new Error(j.error||' + t('保存失败', 'Save failed') + ');paintMarket(j.enabled);'
     + '$("market-note").textContent=j.enabled?'
     + t('已开启，重启客户端后接入安全市场。', 'Enabled. Restart the client to load the safe marketplace.') + ':'
-    + t('已关闭并从 profile 中移除，重启客户端后生效。', 'Disabled and removed from the profile. Restart the client to unload it.') + ';'
+    + t('已关闭，下次由客户端启动运行时时移除内置市场；用户自行安装的市场不受影响。', 'Disabled. The next client-managed runtime launch removes the bundled market; user-installed versions are preserved.') + ';'
     + '}catch(e){$("market-note").textContent=' + t('保存失败：', 'Save failed: ') + '+e.message}'
     + 'finally{marketSaving=false;button.disabled=false}};'
 

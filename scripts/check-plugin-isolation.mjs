@@ -361,9 +361,8 @@ process.exit(1)
   }
   console.log('✓ an npx-only plugin failure isolates before its diagnostic can be overwritten')
 
-  // A failure while the client-owned market is seated gets one same-source
-  // retry after that seat is withdrawn. It must not isolate the user's whole
-  // profile unless the runtime still reports a plugin failure afterwards.
+  // A raw external CLI has no verifiable package anchor. It must start once
+  // without injecting the market, despite advertising a high version.
   const seatHome = join(work, 'bundled-seat')
   const seatDshHome = join(seatHome, '.dsh')
   const seatClientHome = join(seatHome, '.bruc3van-dsh-desktop')
@@ -451,11 +450,11 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
   const installedStarts = seatLog.match(/dsh runtime: installed/g)?.length ?? 0
   if (seatSettings.dshDataMode === 'isolated'
     || manifestAfterRetry.dsh.profile.bundles.includes('dsh-desktop-safe-market')
-    || installedStarts < 2
-    || !seatLog.includes('retrying the same dsh runtime without the bundled plugin seat')) {
-    throw new Error('the bundled plugin seat did not get one clean same-source retry\n' + seatLog)
+    || installedStarts != 1
+    || seatLog.includes('retrying the same dsh runtime without the bundled plugin seat')) {
+    throw new Error('the unverified external runtime received a bundled market seat\n' + seatLog)
   }
-  console.log('✓ a client-owned plugin failure withdraws its seat and retries the same runtime once')
+  console.log('✓ an unverified external runtime starts once without injecting the bundled market')
   await app.close()
   app = undefined
 } finally {

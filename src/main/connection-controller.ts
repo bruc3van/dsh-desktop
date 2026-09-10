@@ -407,10 +407,8 @@ export function createConnectionController(options: ConnectionOptions) {
   function resolveRuntime(force = false): void {
     const generation = ++connectionGeneration
     resetRuntimeRecoveryBudget()
-    // Drop the seat until this process knows who will serve. A spawn re-seats
-    // behind the version gate; adopting a running local instance re-seats on
-    // the strength of it already serving this profile (`reseatForAdoptedRuntime`);
-    // only a pinned address leaves the seat released.
+    // Clear only this connection's bookkeeping. A profile is prepared by the
+    // managed child after occupancy checks, never while adopting a server.
     releaseBundledPluginSeat('resolving which runtime will serve')
     const startLocal = async (): Promise<void> => {
       if (!runtimeCatalog.detectionStarted) updateLoadingStatus('正在检查本机 dsh 运行时…', 'Looking for a dsh runtime on this machine…')

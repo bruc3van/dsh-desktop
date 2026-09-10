@@ -11,11 +11,27 @@
  * @module dsh-desktop/official-dsh-bin
  */
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 
 const OFFICIAL_BIN = /(?:^|[/\\])lib[/\\]bin\.js$/i
 const OFFICIAL_PACKAGE = '@deepseek-ai/dsh'
+
+/** Recognize direct entries, POSIX links and npm/pnpm's relative bin shims. */
+export function officialDshEntry(command: string): string | undefined {
+  try {
+    const direct = realpathSync(command)
+    if (officialDshPackageVersion(direct) !== undefined) return direct
+    const body = readFileSync(command, 'utf8')
+    // Match the actual shim target, never assume an adjacent package is invoked.
+    const targets = [...body.matchAll(/(?:%dp0%|%~dp0|\$basedir)[/\\]([^"\r\n]*?[/\\]lib[/\\]bin\.js)/g)]
+    const entries = new Set(targets.flatMap(match => match[1] === undefined ? [] : [resolve(dirname(command), match[1])]))
+    if (entries.size !== 1) return undefined
+    const entry = [...entries][0]
+    if (entry !== undefined && existsSync(entry) && officialDshPackageVersion(entry) !== undefined) return realpathSync(entry)
+  } catch { /* executable or unrecognized wrapper stays on its original path */ }
+  return undefined
+}
 
 export function officialDshPackageVersion(bin: string): string | undefined {
   if (!OFFICIAL_BIN.test(bin)) return undefined

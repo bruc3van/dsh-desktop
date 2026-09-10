@@ -56,11 +56,11 @@ import { parseSettingsIntegrationStatus,type SettingsIntegrationStatus } from '.
 import { app,BrowserWindow,dialog,ipcMain,Menu,nativeImage,nativeTheme,powerMonitor,screen,session,shell,Tray } from 'electron'
 import { spawnSync } from 'node:child_process'
 import { existsSync,readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { dirname,join } from 'node:path'
+import {join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { abandonBundledPlugin,BUNDLED_PLUGIN_NAME,seatBundledPlugin,withdrawBundledPlugin } from './bundled-plugin.ts'
+import { abandonBundledPlugin,BUNDLED_PLUGIN_NAME,inspectBundledPlugin,withdrawBundledPlugin } from './bundled-plugin.ts'
+import { MARKET_BOOT_VARIABLE, type MarketBootRequest } from './bundled-market-boot.ts'
 import {
 dshHomeForMode,
 migrateLegacyClientHome,
@@ -184,131 +184,49 @@ let bundledPluginSeatInUse = false
  */
 let bundledPluginSuppressed = false
 
-/**
- * The bundled plugin's directory inside the client's runtime closure.
- *
- * Resolved the same way `resolveBundledDsh` resolves the runtime itself, and
- * deliberately NOT by walking up from the runtime's bin path: a packaged
- * closure is hoisted (the plugin sits beside `@deepseek-ai`), while a source
- * checkout keeps pnpm's symlinked layout (the same arithmetic lands inside
- * `.pnpm/@deepseek-ai+dsh@…/node_modules`, where the plugin is not). Asking
- * the resolver instead makes the seat work in both.
- * @returns the plugin directory, or undefined when this build carries none.
- */
+/** Offline payload outside the deployed DSH dependency tree; dev prepares it too. */
 function bundledPluginDir(): string | undefined {
   try {
     if (app.isPackaged) {
-      const dir = join(process.resourcesPath, 'dsh-runtime', 'node_modules', BUNDLED_PLUGIN_NAME)
+      const dir = join(process.resourcesPath, 'bundled-plugins', BUNDLED_PLUGIN_NAME)
       return existsSync(join(dir, 'package.json')) ? dir : undefined
     }
-    const anchor = join(APP_DIR, 'dsh-runtime', 'package.json')
-    return dirname(createRequire(anchor).resolve(BUNDLED_PLUGIN_NAME + '/package.json'))
+    const dir = join(APP_DIR, '.runtime', 'bundled-plugins', BUNDLED_PLUGIN_NAME)
+    return existsSync(join(dir, 'package.json')) ? dir : undefined
   } catch {
     return undefined
   }
 }
 
-/**
- * Offer — or stop offering — the bundled plugin to the profile about to boot.
- *
- * Every runtime this client STARTS is a candidate, not just its own. The
- * plugin is copied into `profiles/node_modules` rather than linked into the
- * closure, so its `@deepseek-ai/*` imports resolve through the graph the
- * harness heals there for whichever installation is serving — the same way a
- * plugin installed with `dsh plugin add` resolves. What used to make the seat
- * unsafe elsewhere (a second copy of the Service classes, reached through the
- * link's realpath) is therefore gone.
- *
- * What replaces it is a version gate: the plugin is built against the runtime
- * this client ships, so an older one is refused rather than risked. See
- * `runtimeRefusal`.
- *
- * A pinned address still releases the seat: it may not even be this machine,
- * and the client cannot know when a change to a profile it is not booting
- * would take effect. A LOCAL instance the client adopts (probe, survivor) is
- * different — it serves this very profile, and releasing the seat under it
- * left the market unable to see itself in the profile it manages; that path
- * re-seats instead (see `reseatForAdoptedRuntime`).
- * @param dsh - the resolved command this spawn is about to run.
- */
-function applyBundledPluginSeat(dsh: DshCommand): void {
-  if (loadSettings().bundledMarketDisabled === true) {
-    // The user's own answer, and it outranks every other reason to seat. The
-    // copy goes too: withdrawing the entry alone would leave a plugin tree in
-    // their profile that nothing loads and nothing ever cleans up.
-    if (abandonBundledPlugin(childHome())) {
-      console.log('[desktop] bundled plugin removed: turned off in connection settings')
-    }
-    bundledPluginSeatInUse = false
-    return
+/** Only a managed launcher may prepare a profile, after occupancy checks. */
+function marketBootRequest(dsh: DshCommand): string | undefined {
+  bundledPluginSeatInUse = false
+  const mode = loadSettings().bundledMarketDisabled === true ? 'disabled'
+    : bundledPluginSuppressed ? 'suppressed' : 'offer'
+  if (dsh.entry === undefined) {
+    // A raw executable has no verifiable package anchor. This is a confirmed
+    // managed spawn, so withdraw our entry before it can boot an unknown ABI.
+    if (mode === 'disabled') abandonBundledPlugin(childHome(), bundledPluginDir())
+    else withdrawBundledPlugin(childHome())
+    return undefined
   }
-  if (bundledPluginSuppressed) {
-    releaseBundledPluginSeat('suppressed after a failed boot this session')
-    return
-  }
-  offerBundledPluginSeat(dsh)
+  const request: MarketBootRequest = { home: childHome(), pluginDir: bundledPluginDir(), mode }
+  // A startup failure can withdraw only an actually listed, client-owned seat.
+  bundledPluginSeatInUse = mode === 'offer'
+  return JSON.stringify(request)
 }
 
-function releaseBundledPluginSeat(reason: string): void {
-  if (withdrawBundledPlugin(childHome())) {
-    console.log('[desktop] bundled plugin seat withdrawn: ' + reason)
-  }
+/** Resolving or connecting to another server must not mutate a local profile. */
+function releaseBundledPluginSeat(_reason: string): void {
   bundledPluginSeatInUse = false
 }
 
-/**
- * Put the seat back when adopting a runtime that is already serving this
- * profile (a probed instance the user started, a surviving child).
- * `resolveRuntime` released the seat before it knew who would serve; leaving
- * it released here strands the running market outside the manifest its
- * installed panel reads — it cannot see, disable, or uninstall itself. The
- * version gate does not run against an adopted instance — host.describe
- * carries a version, but this adoption path keeps only the origin — so the
- * seat rides on `serving`: the instance demonstrably boots this profile,
- * and the client's own spawns re-gate with the real version.
- */
 function reseatForAdoptedRuntime(): void {
-  if (loadSettings().bundledMarketDisabled === true || bundledPluginSuppressed) return
-  const pluginDir = bundledPluginDir()
-  if (pluginDir === undefined) return
-  const result = seatBundledPlugin(pluginDir, childHome(), {
-    serving: true,
-    builtAgainst: bundledDshVersion() ?? undefined,
-  })
-  bundledPluginSeatInUse = result.seated
-  if (result.added) console.log('[desktop] bundled plugin re-seated under the adopted runtime: ' + BUNDLED_PLUGIN_NAME)
-  else if (!result.seated && result.error !== undefined) {
-    console.log('[desktop] bundled plugin not seated: ' + result.error)
-  }
+  bundledPluginSeatInUse = false
 }
 
-function offerBundledPluginSeat(dsh: DshCommand): void {
-  const home = childHome()
-  const pluginDir = bundledPluginDir()
-  if (pluginDir === undefined) {
-    if (abandonBundledPlugin(home)) {
-      console.log('[desktop] bundled plugin seat withdrawn: the runtime closure carries no bundled plugin')
-    }
-    bundledPluginSeatInUse = false
-    return
-  }
-  const result = seatBundledPlugin(pluginDir, home, {
-    version: dsh.source === 'bundled' ? (bundledDshVersion() ?? undefined) : dsh.version,
-    builtAgainst: bundledDshVersion() ?? undefined,
-  })
-  bundledPluginSeatInUse = result.seated
-  if (result.lifted) {
-    console.log('[desktop] bundled plugin overlay was older than the closure; using ' + BUNDLED_PLUGIN_NAME
-      + ' from the runtime closure')
-  }
-  if (result.added) console.log('[desktop] bundled plugin seated: ' + BUNDLED_PLUGIN_NAME)
-  else if (!result.seated && result.error !== undefined) {
-    console.log('[desktop] bundled plugin not seated: ' + result.error)
-  }
-}
-
-function onManagedReady(command: DshCommand | undefined): void {
-  if (command !== undefined && !bundledPluginSeatInUse && !bundledPluginSuppressed) offerBundledPluginSeat(command)
+function onManagedReady(_command: DshCommand | undefined): void {
+  bundledPluginSeatInUse = inspectBundledPlugin(childHome()).owned === true
   pluginRecovery.promptPluginCompatibilityFallback()
 }
 
@@ -1027,8 +945,8 @@ function trayImage(): Electron.NativeImage {
 async function setBundledMarketEnabled(enabled: unknown, remoteCaller: boolean): Promise<{ enabled: boolean }> {
   if (typeof enabled !== 'boolean') return { enabled: loadSettings().bundledMarketDisabled !== true }
   // A state change asked for by a REMOTE origin gets the same native
-  // confirmation an address change does. Turning the seat off deletes a
-  // directory inside the user's own `~/.dsh`; a page served from
+  // confirmation an address change does. Turning the seat off schedules removal of
+  // the client-owned copy at the next managed launch; a page served from
   // somewhere else must not be able to do that quietly just because the
   // window happens to be pointed at it.
   if (remoteCaller) {
@@ -1036,18 +954,13 @@ async function setBundledMarketEnabled(enabled: unknown, remoteCaller: boolean):
       enabled ? '接入内置安全市场？' : '移除内置安全市场？',
       enabled
         ? '当前页面来自远端来源，它请求让本客户端在下次启动时接入内置安全市场。'
-        : '当前页面来自远端来源，它请求移除内置安全市场：本机 profile 中的插件条目与复制的插件目录都会被删除。',
+        : '当前页面来自远端来源，它请求停用客户端内置市场；下次由客户端启动运行时时会移除客户端拥有的副本，用户自行安装的市场不受影响。',
     )
     if (!confirmed) return { enabled: loadSettings().bundledMarketDisabled !== true }
   }
   patchSettings({ bundledMarketDisabled: !enabled })
   if (!enabled) {
-    // Do it now rather than at the next spawn: the user just asked for it
-    // to be gone, and a profile that still lists it until the next start
-    // is the same "it will not go away" the durable flag exists to avoid.
-    if (abandonBundledPlugin(childHome())) {
-      console.log('[desktop] bundled plugin removed: turned off in connection settings')
-    }
+    // Never swap/delete files underneath a live or adopted runtime.
     bundledPluginSeatInUse = false
   }
   return { enabled }
@@ -1593,7 +1506,7 @@ function boot(): void {
     home: childHome,
     resolveCommand: resolveDshCommand,
     prepareCommand(dsh) {
-      applyBundledPluginSeat(dsh)
+      const marketBoot = marketBootRequest(dsh)
       const pnpm = bundledPnpmEntry()
       const version = dsh.version ?? (dsh.source === 'bundled' ? bundledDshVersion() ?? undefined : undefined)
       return {
@@ -1601,6 +1514,7 @@ function boot(): void {
         env: {
           ...process.env,
           DSH_HOME: childHome(),
+          [MARKET_BOOT_VARIABLE]: marketBoot,
           PATH: childPath(),
           ...dsh.entry !== undefined && { DSH_DESKTOP_RUNTIME_ENTRY: dsh.entry },
           ...pnpm !== undefined && { [PNPM_ENTRY_VARIABLE]: pnpm },

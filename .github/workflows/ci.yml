@@ -115,7 +115,7 @@ jobs:
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
         id: runtime
         if: ${{ !cancelled() && runner.os != 'Linux' && steps.build.outcome == 'success' }}
-        run: pnpm run prepare:runtime
+        run: pnpm run prepare:runtime && pnpm run check:market-boot
         env:
           DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
@@ -235,7 +235,7 @@ jobs:
         run: pnpm run build
 
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
-        run: pnpm run prepare:runtime
+        run: pnpm run prepare:runtime && pnpm run check:market-boot
         env:
           DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
@@ -306,7 +306,7 @@ jobs:
         run: pnpm run build
 
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
-        run: pnpm run prepare:runtime
+        run: pnpm run prepare:runtime && pnpm run check:market-boot
         env:
           DSH_RUNTIME_TARGET: win32-x64
 

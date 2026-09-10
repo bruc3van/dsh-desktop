@@ -187,20 +187,14 @@ for (const [key, value] of Object.entries(process.env)) {
   if (upper === 'PATH' || upper === 'ELECTRON_RUN_AS_NODE' || upper.startsWith('DSH_DESKTOP_')) continue
   childEnv[key] = value
 }
-// Initialize a default profile through the real CLI, without starting a server.
-// Desktop seats the bundled market before boot only when this manifest exists;
-// a first-ever GUI boot intentionally seats it for the following startup.
+// Start with no profile: the managed launcher must initialize and seat the
+// market before DSH composes its first plugin tree.
 const resources = packagedResourcesDir(executable)
-const initialized = spawnSync(executable, [join(resources, 'runtime-launcher.mjs'), 'web', '--dump-default-config'], {
-  env: { ...childEnv, PATH: emptyPath, ELECTRON_RUN_AS_NODE: '1',
-    DSH_HOME: join(smokeHome, 'dsh'),
-    DSH_DESKTOP_RUNTIME_ENTRY: join(resources, 'dsh-runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js') },
-  encoding: 'utf8', windowsHide: true, timeout: READY_TIMEOUT_MS,
-})
-if (initialized.status !== 0) throw new Error('packaged CLI could not initialize a default profile: '
-  + initialized.stderr + String(initialized.error ?? ''))
-const webManifest = join(smokeHome, 'dsh', 'profiles', 'web', 'package.json')
-if (!existsSync(webManifest)) throw new Error('packaged CLI did not create the web profile manifest: ' + webManifest)
+const packagedMarket = join(resources, 'bundled-plugins', 'dsh-desktop-safe-market')
+if (!existsSync(join(packagedMarket, 'package.json'))) throw new Error('packaged market payload missing')
+if (existsSync(join(resources, 'dsh-runtime', 'node_modules', 'dsh-desktop-safe-market'))) {
+  throw new Error('market payload must not be visible from the DSH installation anchor')
+}
 // This is the one caller that runs a PACKAGED build, where every DSH_* override
 // is ignored by design — the whole point of that gate is that a stray variable
 // cannot move a real user's data home or skip their probe. The sandboxed homes
@@ -380,7 +374,7 @@ try {
       throw new Error('packaged safe-market ' + method + ' failed: ' + JSON.stringify(marketBody))
     }
     if (method === 'describe' && marketBody.result.value?.version !== JSON.parse(
-      await readFile(join(packagedResourcesDir(executable), 'dsh-runtime', 'node_modules', 'dsh-desktop-safe-market', 'package.json'), 'utf8'),
+      await readFile(join(packagedMarket, 'package.json'), 'utf8'),
     ).version) throw new Error('packaged market version differs from the running service')
   }
   console.log('✓ bundled safe-market describe / settings / installed APIs loaded on the new runtime')
