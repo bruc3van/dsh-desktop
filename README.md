@@ -142,6 +142,10 @@ macOS 可在应用目录可写时自动替换并重启应用。更新失败时�
 
 市场默认关闭。开启后才会读取目录，并缓存上一次成功获取的数据。关闭客户端的内置市场开关后，下次由客户端启动运行时时会移除客户端拥有的市场配置；用户自行安装的市场不受该开关管理。
 
+从开始页打开「安全市场」，可在右侧浏览插件目录，按名称或分类筛选，并查看已安装插件。
+
+![从开始页打开内置安全市场并浏览插件](docs/images/marketplace-start-view.png)
+
 ![安全市场](docs/images/marketplace.png)
 
 市场目录来自 [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin)：

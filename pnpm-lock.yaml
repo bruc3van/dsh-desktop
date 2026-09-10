@@ -61,8 +61,8 @@ importers:
         specifier: 0.1.5-rc.1
         version: 0.1.5-rc.1(7bc6189d41981c381f0c223356c884d2)
       dsh-desktop-safe-market:
-        specifier: 0.5.0
-        version: 0.5.0(a8cb9f77948d7bb1924b58ccef06a422)
+        specifier: 0.5.1
+        version: 0.5.1(a8cb9f77948d7bb1924b58ccef06a422)
       pnpm:
         specifier: 11.16.0
         version: 11.16.0
@@ -3477,8 +3477,8 @@ packages:
     resolution: {integrity: sha512-ZmdL2rui+eB2YwhsWzjInR8LldtZHGDoQ1ugH85ppHKwpUHL7j7rN0Ti9NCnGiQbhaZ11FpR+7ao1dNsmduNUg==}
     engines: {node: '>=12'}
 
-  dsh-desktop-safe-market@0.5.0:
-    resolution: {integrity: sha512-dUFyJ+/11iPkcuKoOPS8E72BNxpkMKjlaAGQhk+Ob3z9w/twz6tayrO759VH8KEIbtrePfgCpg+alKU9s1o0Rw==}
+  dsh-desktop-safe-market@0.5.1:
+    resolution: {integrity: sha512-RVzwFXOrA9Ug1cI2McozuFQ1lRhHUuBavhEwP7mcL6GNDFUoxEjiwQ12rTvkOhJsTegvhdGrk7hqXbkwl+/SNQ==}
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
       '@deepseek-ai/cordis-plugin-loader': '>=1.0.0'
@@ -8585,7 +8585,7 @@ snapshots:
 
   dotenv@16.4.5: {}
 
-  dsh-desktop-safe-market@0.5.0(a8cb9f77948d7bb1924b58ccef06a422):
+  dsh-desktop-safe-market@0.5.1(a8cb9f77948d7bb1924b58ccef06a422):
     dependencies:
       yaml: 2.9.0
       zod: 4.4.3

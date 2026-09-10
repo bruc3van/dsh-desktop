@@ -144,6 +144,10 @@ The [Safe Market](https://github.com/bruc3van/dsh-desktop-safe-market) ships wit
 
 The marketplace is off by default. Enabling it downloads the catalog and caches the last successful result. Turning off the client’s bundled-market switch removes the client-owned registration on the next managed runtime launch. The switch does not manage a marketplace installed by the user.
 
+Open **Safe Market** from the start page to browse the plugin catalog in the right pane, filter by name or category, and view installed plugins.
+
+![Opening the bundled Safe Market from the start page to browse plugins](docs/images/marketplace-start-view.png)
+
 ![Safe Market](docs/images/marketplace.png)
 
 Catalog data comes from [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin):
