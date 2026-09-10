@@ -1,9 +1,9 @@
 /**
  * Runtime-launcher contract: the packaged client boots the official CLI on
  * Electron's Node, and `ELECTRON_RUN_AS_NODE` must not travel from there into
- * the Agent's execution environment — while the two runtime paths that respawn
+ * the Agent's execution environment — while runtime helpers that respawn
  * `process.execPath` (the native directory picker, the Windows ACL sandbox
- * runner) must still receive it. Runs the built launcher against a fixture
+ * runner, and subprocess containment runner) must still receive it. Runs the built launcher against a fixture
  * entry that reports what its own children see.
  *
  * With no argument the launcher runs on this Node, which covers the patching
@@ -85,12 +85,12 @@ console.log('RESULT ' + JSON.stringify({
 let fixtureRun = 0
 
 /** Run a built entry (launcher or gateway) with the fixture as its CLI target. */
-async function runEntry(entry, args, nodeMode) {
+async function runEntry(entry, args, nodeMode, runtimeEntry = fixture) {
   fixtureRun += 1
   const marker = join(workDir, 'imported-' + String(fixtureRun) + '.marker')
   const env = {
     ...process.env,
-    DSH_DESKTOP_RUNTIME_ENTRY: fixture,
+    DSH_DESKTOP_RUNTIME_ENTRY: runtimeEntry,
     DSH_DESKTOP_PNPM_ENTRY: pnpmFixture,
     DSH_DESKTOP_FIXTURE_MARKER: marker,
   }
@@ -156,6 +156,22 @@ const AUDITED_INDIRECT = new Map([
     {
       label: 'source Windows ACL runner argv',
       context: 'return [\n\t\t\tprocess.execPath,\n\t\t\t"--import",',
+      expected: 1,
+    },
+  ]],
+  // The built/source/pkg invocation arrays feed spawn() in subprocess-local's
+  // Linux scope and Windows Job launchers. The actual Electron runner path is
+  // exercised by check:win32-console; do not allow the whole chunk wholesale.
+  ['@deepseek-ai/dsh-subprocess-local/lib/runner-launch-COYGu0Dl.js', [
+    { label: 'pkg subprocess runner argv', context: 'if ("pkg" in process) return [process.execPath];', expected: 1 },
+    {
+      label: 'built subprocess runner argv',
+      context: 'if (extname(fileURLToPath(import.meta.url)) !== ".ts") return [process.execPath, fileURLToPath(import.meta.resolve("@deepseek-ai/dsh-subprocess-local/runner"))];',
+      expected: 1,
+    },
+    {
+      label: 'source subprocess runner argv',
+      context: 'return [\n\t\tprocess.execPath,\n\t\t"--import",',
       expected: 1,
     },
   ]],
@@ -234,6 +250,22 @@ check('duplicating an audited execPath context is rejected',
   auditExecPathSource(fsSearchAuditPath,
     fsSearchExpectedContext + '\n' + fsSearchExpectedContext).offenders.length === 2)
 
+// Exercise every approved context, including the version-bound runner chunk.
+for (const [path, rules] of AUDITED_INDIRECT) {
+  const source = rules.map(rule => rule.context).join('\n')
+  check('audited contexts accepted: ' + path, auditExecPathSource(path, source).offenders.length === 0)
+  check('extra execFile rejected: ' + path,
+    auditExecPathSource(path, source + '\nexecFile(process.execPath, []);').offenders.length === 1)
+  check('duplicated contexts rejected: ' + path,
+    auditExecPathSource(path, source + '\n' + source).offenders.length === rules.length)
+}
+
+function missingAuditFiles(seen) {
+  return [...AUDITED_INDIRECT.keys()].filter(path => !seen.has(path))
+}
+check('missing audited runtime files fail closed',
+  missingAuditFiles(new Set()).length === AUDITED_INDIRECT.size)
+
 async function scanRuntimeExecPathSites(runtimeModules) {
   const offenders = []
   let sites = 0
@@ -263,13 +295,31 @@ async function scanRuntimeExecPathSites(runtimeModules) {
       }
     }
   }
-  for (const relative of AUDITED_INDIRECT.keys()) {
-    if (!auditedFilesSeen.has(relative)) offenders.push(relative + ' — audited runtime file is missing')
-  }
+  for (const relative of missingAuditFiles(auditedFilesSeen)) offenders.push(relative + ' — audited runtime file is missing')
   return { offenders, sites }
 }
 
 try {
+  const explicitEntry = join(workDir, 'explicit-cli.mjs')
+  await writeFile(explicitEntry, `
+    let calls = 0;
+    export async function runCli() {
+      calls += 1;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      console.log('RESULT ' + JSON.stringify({ calls, argv: process.argv.slice(2),
+        ambient: process.env.ELECTRON_RUN_AS_NODE ?? null }));
+    }
+    if (import.meta.main) await runCli();
+  `)
+  const explicitRun = await runEntry(LAUNCHER, ['web', '--port', '0'], '1', explicitEntry)
+  check('DSH explicit runCli is awaited exactly once after clearing Node mode',
+    explicitRun.code === 0 && explicitRun.result?.calls === 1 && explicitRun.result?.ambient === null
+      && JSON.stringify(explicitRun.result?.argv) === JSON.stringify(['web', '--port', '0']))
+  await writeFile(explicitEntry, 'export async function runCli() { throw new Error("explicit-cli-failed") }')
+  const failedRun = await runEntry(LAUNCHER, [], '1', explicitEntry)
+  check('DSH explicit runCli rejection fails the launcher', failedRun.code !== 0
+    && failedRun.stderr.includes('explicit-cli-failed'))
+
   const packagedLike = await runLauncher('1')
   check('harness argv unchanged', JSON.stringify(packagedLike.argv) === JSON.stringify(['web', '--port', '0']),
     JSON.stringify(packagedLike.argv))

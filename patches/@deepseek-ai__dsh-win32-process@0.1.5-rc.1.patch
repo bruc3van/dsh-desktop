@@ -1,0 +1,14 @@
+diff --git a/lib/index.js b/lib/index.js
+index 697e5e4ae54d5c2faf49d696b9d7911056ec6976..2ed6450b13aec0ee9d29a40c53d1ecc1321b3221 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -612,7 +612,8 @@ function spawnInheritedJobProcess(api, options) {
+ function spawnCurrentTokenJobProcess(api, options) {
+ 	const commandLine = buildCommandLine(options.command, options.args);
+ 	const environment = encodeWindowsEnvironment(options.env);
+-	return spawnJobProcess(api, options, () => targetCarrierHandles(api, options.stdio), "CreateProcessW", (startupInfo, processInfo) => api.createProcessW(options.applicationName, commandLine, null, null, 1, 1028, environment, options.cwd, startupInfo, processInfo));
++	// CREATE_NO_WINDOW is safe for current-token targets; keep restricted-token creation unchanged.
++	return spawnJobProcess(api, options, () => targetCarrierHandles(api, options.stdio), "CreateProcessW", (startupInfo, processInfo) => api.createProcessW(options.applicationName, commandLine, null, null, 1, 1028 | 0x08000000, environment, options.cwd, startupInfo, processInfo));
+ }
+ /**
+ * Verify that an unnamed kill-on-close Job can be created and released now.

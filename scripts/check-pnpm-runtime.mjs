@@ -216,7 +216,9 @@ try {
     throw new Error('dsh plugin lifecycle install failed (code=' + String(pluginRun.code) + ')\n'
       + pluginRun.stdout + pluginRun.stderr)
   }
-  const built = await readFile(join(profileDir, 'node_modules', FIXTURE_NAME, 'built.txt'), 'utf8')
+  const built = await readFile(join(profileDir, 'node_modules', FIXTURE_NAME, 'built.txt'), 'utf8').catch(error => {
+    throw new Error('plugin lifecycle marker missing\n' + pluginRun.stdout + pluginRun.stderr, { cause: error })
+  })
   if (built.trim() !== 'built') throw new Error('plugin lifecycle script did not produce its marker')
   const profile = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'))
   if (!profile.dsh.profile.bundles.includes(FIXTURE_NAME)) throw new Error('dsh did not register the installed bundle')

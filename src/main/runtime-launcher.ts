@@ -10,10 +10,10 @@
  * implementation detail of how this client launches Node; it must not travel
  * into the Agent's execution environment.
  *
- * It cannot simply be dropped: two runtime paths spawn `process.execPath`
+ * It cannot simply be dropped: runtime helpers spawn `process.execPath`
  * expecting Node semantics — the native directory-picker worker (the "add a
  * project folder" dialog on macOS and Windows) and the Windows ACL sandbox
- * runner. So the variable is removed from the ambient environment and
+ * runner, plus the subprocess containment runner. So the variable is removed from the ambient environment and
  * re-attached at the spawn boundary, for children that are the Electron binary
  * itself. Every other child — the Agent's shells and their descendants — sees
  * the environment a normally installed `dsh` would give them.
@@ -68,4 +68,8 @@ if (nodeMode !== undefined && nodeMode !== '') {
   patchRuntimeSpawns(childProcess, nodeMode, process.execPath, process.platform, process.env, pnpmEntry, fileURLToPath(import.meta.url))
 }
 
-await import(pathToFileURL(entry).href)
+const runtime = await import(pathToFileURL(entry).href)
+// DSH 0.1.5 only auto-runs when import.meta.main is true. Our launcher imports
+// the CLI after installing the Electron spawn boundary, so invoke its public
+// entry explicitly. Older DSH and pnpm still execute during import.
+if (typeof runtime.runCli === 'function') await runtime.runCli()

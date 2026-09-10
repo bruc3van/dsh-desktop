@@ -5,8 +5,8 @@
   "description": "Pinned dsh runtime closure for the release matrix: macOS Apple Silicon, macOS Intel, and Windows x64. Linux native packages are retained for source builds and future release re-enablement.",
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "1.0.2",
-    "@deepseek-ai/dsh": "0.1.2-rc.1",
-    "dsh-desktop-safe-market": "0.4.3",
+    "@deepseek-ai/dsh": "0.1.5-rc.1",
+    "dsh-desktop-safe-market": "0.5.0",
     "pnpm": "11.16.0"
   },
   "optionalDependencies": {

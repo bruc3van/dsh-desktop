@@ -1,17 +1,7 @@
 /**
- * Verify the client-owned Win32 directory-picker compatibility patch.
- *
- * The official picker reads a COM-owned UTF-16 pointer through koffi.view().
- * That works under ordinary Node but aborts Electron's embedded Node inside
- * N-API. The release keeps the official package version pinned and patches
- * only its built worker to copy the exact string through Win32 instead.
- *
- * This check first proves the deployed closure contains that exact patch. On
- * Windows it then independently runs the same pointer conversion under
- * Electron's own Node, against a real Unicode filesystem path, without opening
- * a dialog. The published worker does not export this helper, so the marker
- * check binds the deployed code while the probe proves its native technique;
- * keep both halves synchronized when the patch changes.
+ * Verify the official 0.1.5 picker under Electron's embedded Node.
+ * Extract the deployed UTF-16 helper and exercise it against a real COM-owned
+ * Unicode path, guarding the upstream fix without maintaining a duplicate.
  * @module desktop/scripts/check-win32-picker
  */
 
@@ -29,7 +19,7 @@ const PICKER_DIR = join(RUNTIME_DIR, '@deepseek-ai', 'dsh-host-directory-picker-
 const PICKER_PACKAGE_FILE = join(PICKER_DIR, 'package.json')
 const WORKER_FILE = join(PICKER_DIR, 'lib', 'worker.cjs')
 const KOFFI_NATIVE_FILE = join(RUNTIME_DIR, '@koromix', 'koffi-win32-x64', 'win32_x64', 'koffi.node')
-const EXPECTED_VERSION = '0.1.2-rc.1'
+const EXPECTED_VERSION = '0.1.5-rc.1'
 
 if (!existsSync(PICKER_PACKAGE_FILE) || !existsSync(WORKER_FILE)) {
   throw new Error('deployed dsh runtime is missing; run `pnpm run prepare:runtime` before `pnpm run check:picker`')
@@ -42,13 +32,14 @@ if (pickerPackage.version !== EXPECTED_VERSION) {
 }
 
 const workerSource = await readFile(WORKER_FILE, 'utf8')
-for (const marker of ['lstrlenW', 'RtlMoveMemory', 'copyMemory(bytes, address, byteLength)']) {
-  if (!workerSource.includes(marker)) throw new Error('deployed picker worker is missing patch marker: ' + marker)
+const readUtf16Source = /function readUtf16\(koffi, address, pointerSize\) \{[\s\S]*?\n\}/.exec(workerSource)?.[0]
+if (readUtf16Source === undefined
+  || !readUtf16Source.includes('koffi.decode(pointer.subarray(0, pointerSize), "str16")')
+  || !workerSource.includes('readUtf16(koffi, nameOut[0], pointerSize)')
+  || workerSource.includes('koffi.view(')) {
+  throw new Error('deployed picker no longer matches the audited Electron-safe UTF-16 implementation')
 }
-if (workerSource.includes('Buffer.from(koffi.view(address, 32768))')) {
-  throw new Error('deployed picker worker still contains the Electron-crashing koffi.view path')
-}
-console.log('✓ deployed Win32 picker worker contains the Electron compatibility patch')
+console.log('deployed Win32 picker contains the upstream Electron-safe UTF-16 reader')
 
 if (process.platform !== 'win32') process.exit(0)
 
@@ -124,13 +115,11 @@ function guidBytes(text) {
 
 const ole32 = koffi.load('ole32.dll')
 const shell32 = koffi.load('shell32.dll')
-const kernel32 = koffi.load('kernel32.dll')
 const coInitializeEx = ole32.func('__stdcall', 'CoInitializeEx', 'int32', ['void *', 'uint32'])
 const coUninitialize = ole32.func('__stdcall', 'CoUninitialize', 'void', [])
 const coTaskMemFree = ole32.func('__stdcall', 'CoTaskMemFree', 'void', ['void *'])
 const createItem = shell32.func('__stdcall', 'SHCreateItemFromParsingName', 'int32', ['str16', 'void *', 'void *', 'void *'])
-const lstrlenW = kernel32.func('__stdcall', 'lstrlenW', 'int', ['void *'])
-const copyMemory = kernel32.func('__stdcall', 'RtlMoveMemory', 'void', ['void *', 'void *', 'uintptr'])
+${readUtf16Source}
 const pointerSize = koffi.sizeof('void *')
 const itemOut = Buffer.alloc(pointerSize)
 const initialized = coInitializeEx(null, 2)
@@ -150,10 +139,7 @@ try {
     const gotName = koffi.call(getNamePointer, getName, item, 0x80058000 | 0, nameOut)
     if (gotName < 0) throw new Error('IShellItem::GetDisplayName failed: ' + gotName)
     try {
-      const byteLength = lstrlenW(nameOut[0]) * 2
-      const bytes = Buffer.alloc(byteLength)
-      if (byteLength > 0) copyMemory(bytes, nameOut[0], byteLength)
-      console.log(JSON.stringify({ path: bytes.toString('utf16le') }))
+      console.log(JSON.stringify({ path: readUtf16(koffi, nameOut[0], pointerSize) }))
     } finally {
       coTaskMemFree(nameOut[0])
     }

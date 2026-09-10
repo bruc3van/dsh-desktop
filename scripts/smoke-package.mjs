@@ -187,6 +187,20 @@ for (const [key, value] of Object.entries(process.env)) {
   if (upper === 'PATH' || upper === 'ELECTRON_RUN_AS_NODE' || upper.startsWith('DSH_DESKTOP_')) continue
   childEnv[key] = value
 }
+// Initialize a default profile through the real CLI, without starting a server.
+// Desktop seats the bundled market before boot only when this manifest exists;
+// a first-ever GUI boot intentionally seats it for the following startup.
+const resources = packagedResourcesDir(executable)
+const initialized = spawnSync(executable, [join(resources, 'runtime-launcher.mjs'), 'web', '--dump-default-config'], {
+  env: { ...childEnv, PATH: emptyPath, ELECTRON_RUN_AS_NODE: '1',
+    DSH_HOME: join(smokeHome, 'dsh'),
+    DSH_DESKTOP_RUNTIME_ENTRY: join(resources, 'dsh-runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js') },
+  encoding: 'utf8', windowsHide: true, timeout: READY_TIMEOUT_MS,
+})
+if (initialized.status !== 0) throw new Error('packaged CLI could not initialize a default profile: '
+  + initialized.stderr + String(initialized.error ?? ''))
+const webManifest = join(smokeHome, 'dsh', 'profiles', 'web', 'package.json')
+if (!existsSync(webManifest)) throw new Error('packaged CLI did not create the web profile manifest: ' + webManifest)
 // This is the one caller that runs a PACKAGED build, where every DSH_* override
 // is ignored by design — the whole point of that gate is that a stray variable
 // cannot move a real user's data home or skip their probe. The sandboxed homes
@@ -338,6 +352,38 @@ try {
       && typeof descriptor?.hasDocument === 'boolean'
       && Array.isArray(descriptor?.namespaces)
   if (!response.ok || body?.result?.ok !== true || !valid) throw new Error('packaged Web UI probe failed')
+  // A healthy settings endpoint does not prove the bundled market loaded:
+  // its guarded entry deliberately lets the Web UI survive an incompatible API.
+  if (cookie === undefined) throw new Error('bundled runtime must support browser-session authentication')
+  for (const method of ['describe', 'getSettings', 'listInstalled']) {
+    const route = 'safeMarket/' + method
+    const request = () => fetch(url + '/api/' + route, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cookie.header },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'market-smoke-' + method,
+        method: route, payload: { args: {} } }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    // The market's guarded body imports asynchronously during profile startup.
+    let marketResponse = await request()
+    const deadline = Date.now() + 30_000
+    while (marketResponse.status === 404 && Date.now() < deadline) {
+      await marketResponse.text()
+      await new Promise(resolveWait => setTimeout(resolveWait, 500))
+      marketResponse = await request()
+    }
+    const marketText = await marketResponse.text()
+    if (!marketResponse.ok) throw new Error('packaged safe-market ' + method + ' HTTP '
+      + marketResponse.status + ': ' + marketText)
+    const marketBody = JSON.parse(marketText)
+    if (!marketResponse.ok || marketBody?.result?.ok !== true) {
+      throw new Error('packaged safe-market ' + method + ' failed: ' + JSON.stringify(marketBody))
+    }
+    if (method === 'describe' && marketBody.result.value?.version !== JSON.parse(
+      await readFile(join(packagedResourcesDir(executable), 'dsh-runtime', 'node_modules', 'dsh-desktop-safe-market', 'package.json'), 'utf8'),
+    ).version) throw new Error('packaged market version differs from the running service')
+  }
+  console.log('✓ bundled safe-market describe / settings / installed APIs loaded on the new runtime')
   console.log('✓ packaged app selected its bundled @deepseek-ai/dsh runtime')
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
   console.log('✓ packaged resources include dsh-cli.mjs')

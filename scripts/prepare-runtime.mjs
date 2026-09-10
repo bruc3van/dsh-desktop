@@ -7,7 +7,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readdir, rm, stat } from 'node:fs/promises'
+import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertNoTsEntryPoints } from './ts-entry-guard.mjs'
@@ -91,6 +91,20 @@ async function prune(directory) {
 }
 
 const runtimeModules = join(destination, 'node_modules')
+// A successful peer resolution can still retain older DSH packages for the
+// bundled market. Reject that mixed graph before it reaches an installer.
+const runtimeManifest = JSON.parse(await readFile(join(APP_DIR, 'dsh-runtime', 'package.json'), 'utf8'))
+const expectedDshVersion = runtimeManifest.dependencies['@deepseek-ai/dsh']
+let dshPackages = 0
+for (const name of await readdir(join(runtimeModules, '@deepseek-ai'))) {
+  if (name !== 'dsh' && !name.startsWith('dsh-')) continue
+  const manifest = JSON.parse(await readFile(join(runtimeModules, '@deepseek-ai', name, 'package.json'), 'utf8'))
+  if (manifest.version !== expectedDshVersion) {
+    throw new Error('mixed DSH runtime: ' + manifest.name + '@' + manifest.version + ', expected ' + expectedDshVersion)
+  }
+  dshPackages += 1
+}
+console.log('[runtime] ' + dshPackages + ' official DSH packages aligned to ' + expectedDshVersion)
 await prune(runtimeModules)
 console.log('[runtime] pruned ' + prunedFiles + ' development entries ('
   + (prunedBytes / 1e6).toFixed(1) + ' MB) from ' + relative(APP_DIR, runtimeModules))

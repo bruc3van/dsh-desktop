@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,11 +12,16 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const modules = join(root, '.runtime', 'node_modules')
 const acl = join(modules, '@deepseek-ai', 'dsh-sandbox-windows-acl')
 const subprocess = join(modules, '@deepseek-ai', 'dsh-subprocess-local')
-for (const directory of [acl, subprocess]) {
+const win32Process = join(modules, '@deepseek-ai', 'dsh-win32-process')
+const launcher = join(root, '.build', 'runtime-launcher.mjs')
+if (process.platform === 'win32' && !existsSync(launcher)) {
+  throw new Error('runtime launcher is missing; run `pnpm run build` before `pnpm run check:win32-console`')
+}
+for (const directory of [acl, subprocess, win32Process]) {
   if (!existsSync(join(directory, 'package.json'))) {
     throw new Error('deployed dsh runtime is missing; run `pnpm run prepare:runtime` before `pnpm run check:win32-console`')
   }
-  assert.equal(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')).version, '0.1.2-rc.1',
+  assert.equal(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')).version, '0.1.5-rc.1',
     'Reconcile the console patches when upgrading the runtime')
 }
 const { prepareRunnerConsole } = await import(pathToFileURL(join(acl, 'lib', 'types-desktop-console.js')).href)
@@ -75,19 +80,37 @@ assert.deepEqual([...failedHide.handles.values()], [101n, 102n, 103n], 'Restore 
 assert.throws(() => prepareRunnerConsole(fixture({ handler: 0 }).api), /SetConsoleCtrlHandler failed/)
 
 // Execute the deployed spawn options, not a second copy of the implementation.
-const source = await readFile(join(subprocess, 'lib', 'index.js'), 'utf8')
+const chunks = (await readdir(join(subprocess, 'lib'))).filter(name => /^runner-launch-.*\.js$/.test(name))
+assert.equal(chunks.length, 1, 'Expected one deployed subprocess runner launch chunk')
+const source = await readFile(join(subprocess, 'lib', chunks[0]), 'utf8')
 const spawnBody = source.slice(source.indexOf('function spawnSubprocess('))
-const options = /const child = spawn\(program, args, (\{[\s\S]*?\n\t\})\);/.exec(spawnBody)?.[1]
+const options = /const child = \(internals.spawn \?\? spawn\)\(program, args, (\{[\s\S]*?\n\t\})\);/.exec(spawnBody)?.[1]
 assert.ok(options, 'Cannot locate deployed subprocess spawn options')
-const readOptions = new Function('platform', 'spec', 'env', 'stdinMode', 'outMode', 'errMode', `return (${options})`)
+const readOptions = new Function('platform', 'spec', 'childEnv', `return (${options})`)
 for (const platform of ['win32', 'darwin', 'linux']) {
-  const actual = readOptions(platform, { cwd: '/fixture' }, { FIXTURE: '1' }, 'pipe', 'pipe', 'inherit')
+  const actual = readOptions(platform, {
+    cwd: '/fixture', env: { FIXTURE: '1' },
+    stdio: { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' },
+  }, env => env)
   assert.equal(actual.windowsHide, platform === 'win32')
   assert.equal(actual.detached, platform !== 'win32')
   assert.deepEqual(actual.stdio, ['pipe', 'pipe', 'inherit'])
   assert.deepEqual(actual.env, { FIXTURE: '1' })
 }
-console.log('✓ deployed console patches preserve console ownership, stdio, handler order and spawn options')
+const jobSource = await readFile(join(subprocess, 'lib', 'index.js'), 'utf8')
+const jobBody = jobSource.slice(jobSource.indexOf('function launchWindowsJob('))
+const jobOptions = /env: runnerEnvironment\(WINDOWS_RUNNER_SELECTION, invocation\),([\s\S]*?)stdio:/.exec(jobBody)?.[1]
+assert.ok(jobOptions, 'Cannot locate deployed Windows Job helper spawn options')
+assert.equal(new Function(`return ({${jobOptions}})`)().windowsHide, true)
+const processSource = await readFile(join(win32Process, 'lib', 'index.js'), 'utf8')
+const currentTokenBody = processSource.slice(processSource.indexOf('function spawnCurrentTokenJobProcess('))
+const flags = /api\.createProcessW\(options.applicationName, commandLine, null, null, 1, ([\d\sxXa-fA-F|]+), environment,/.exec(currentTokenBody)?.[1]
+assert.ok(flags, 'Cannot locate deployed current-token CreateProcessW flags')
+assert.equal(new Function(`return (${flags})`)(), 1028 | 0x08000000,
+  'Ordinary Job targets must use CREATE_NO_WINDOW while retaining suspended creation and Unicode environment')
+assert.match(processSource, /createRestrictedProcess\(api, options, commandLine, 4, startupInfo, processInfo\)/,
+  'Restricted-token creation must retain its existing console contract')
+console.log('✓ deployed console patches preserve console ownership, stdio, handler order and fallback / Job spawn options')
 
 if (process.platform !== 'win32') {
   console.log('Windows native console / sandbox smoke skipped on ' + process.platform)
@@ -101,9 +124,9 @@ const temp = join(home, 'temp')
 await mkdir(workspace)
 await mkdir(temp)
 
-async function run(args, input = '') {
+async function run(args, input = '', environment = {}) {
   const child = spawn(electron, args, {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...process.env, ...environment, ELECTRON_RUN_AS_NODE: '1' },
     cwd: workspace,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -123,6 +146,54 @@ async function run(args, input = '') {
 }
 
 try {
+  // Exercise the new official Windows Job runner through our actual launcher.
+  // Its target environment must not inherit Electron's bootstrap variable.
+  const entry = join(home, 'subprocess-probe.mjs')
+  await writeFile(entry, `
+    import assert from 'node:assert/strict';
+    import { Context } from ${JSON.stringify(pathToFileURL(join(modules, '@deepseek-ai/cordis/lib/index.js')).href)};
+    import LocalSubprocessRuntime from ${JSON.stringify(pathToFileURL(join(subprocess, 'lib/index.js')).href)};
+    const ctx = new Context();
+    const fiber = await ctx.plugin(LocalSubprocessRuntime);
+    try {
+      assert.equal(process.env.ELECTRON_RUN_AS_NODE, undefined);
+      assert.equal(ctx.subprocess.selectContainmentMode('ordinary'), 'windows-job');
+      const handle = ctx.subprocess.spawn({
+        argv: [process.env.ComSpec || 'cmd.exe', '/d', '/v:on', '/c',
+          'set /p INPUT=& echo !INPUT!& echo stderr-ok 1>&2& if defined ELECTRON_RUN_AS_NODE (exit /b 99) else (exit /b 7)'],
+        cwd: process.cwd(), graceMs: 200,
+        stdio: { stdin: 'pipe', stdout: { maxBytes: 64000 }, stderr: { maxBytes: 64000 } },
+      });
+      handle.stdin.end('runner-stdin-ok\\r\\n');
+      assert.equal((await handle.done).exitCode, 7);
+      assert.equal(await handle.waitForExit(), true);
+      assert.match(handle.collected.stdout.readFrom(0).text, /runner-stdin-ok/);
+      assert.match(handle.collected.stderr.readFrom(0).text, /stderr-ok/);
+      // A real console-subsystem target checks the Job creation flags under Electron.
+      const consoleProbe = ctx.subprocess.spawn({
+        argv: [${JSON.stringify(process.execPath)}, '-e', ${JSON.stringify(`
+          const { createRequire } = require('node:module');
+          const koffi = createRequire(${JSON.stringify(join(win32Process, 'package.json'))})('koffi');
+          const getConsoleWindow = koffi.load('kernel32.dll').func('__stdcall', 'GetConsoleWindow', 'void *', []);
+          if (getConsoleWindow()) throw Error('Ordinary Job target unexpectedly owns a console');
+          console.log('no-console-ok');
+        `)}],
+        cwd: process.cwd(), graceMs: 200,
+        stdio: { stdin: 'ignore', stdout: { maxBytes: 64000 }, stderr: { maxBytes: 64000 } },
+      });
+      assert.equal((await consoleProbe.done).exitCode, 0, consoleProbe.collected.stderr.readFrom(0).text);
+      assert.equal(await consoleProbe.waitForExit(), true);
+      assert.match(consoleProbe.collected.stdout.readFrom(0).text, /no-console-ok/);
+      console.log('subprocess-runner-ok');
+    } finally { await fiber.dispose(); }
+  `)
+  const subprocessResult = await run([launcher], '', {
+    DSH_DESKTOP_RUNTIME_ENTRY: entry,
+  })
+  assert.equal(subprocessResult.code, 0, JSON.stringify(subprocessResult))
+  assert.match(subprocessResult.stdout, /subprocess-runner-ok/)
+  console.log('✓ Electron Windows Job runner preserves target environment, stdio and exit code; target has no console')
+
   // Exercise the actual Koffi bindings under Electron, with original pipe handles.
   const probe = `
     const { createRequire } = require('node:module');
