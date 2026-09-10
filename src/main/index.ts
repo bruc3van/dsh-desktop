@@ -7,6 +7,7 @@ import { createLocaleController } from './locale-controller.ts'
 import { createMainWindowFactory } from './main-window.ts'
 import { buildApplicationMenu,buildTrayMenu } from './native-menus.ts'
 import { createPluginRecoveryController } from './plugin-recovery-controller.ts'
+import { showConfirmationDialog } from './plugin-recovery-dialog.ts'
 import { createSettingsCommands } from './settings-commands.ts'
 import { createSettingsServer } from './settings-server.ts'
 import { createUpdateController } from './update-controller.ts'
@@ -1262,9 +1263,8 @@ function localeChinese(): boolean {
 
 
 /**
- * A native confirmation for an action a page asked for. Native on purpose: the
- * requesting document can neither draw this over its own UI, nor dismiss it,
- * nor pre-click it.
+ * A client-owned confirmation for an action a page asked for. Its isolated
+ * window has no preload; the requesting document cannot dismiss or accept it.
  */
 async function confirmSensitiveAction(message: string, detail: string): Promise<boolean> {
   const chinese = localeChinese()
@@ -1277,10 +1277,10 @@ async function confirmSensitiveAction(message: string, detail: string): Promise<
     defaultId: 0,
     cancelId: 0,
   }
-  const owner = mainWindow
-  const { response } = owner === null || owner.isDestroyed()
-    ? await dialog.showMessageBox(options)
-    : await dialog.showMessageBox(owner, options)
+  const response = await showConfirmationDialog(mainWindow, options, chinese, {
+    icon: WINDOW_ICON_PNG,
+    backgroundColor: windowBackgroundColor(),
+  })
   return response === 1
 }
 let clientNoticeWindow: BrowserWindow | null = null

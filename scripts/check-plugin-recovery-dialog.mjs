@@ -11,9 +11,17 @@ let app
 try {
   await build({ entryPoints: ['src/main/plugin-recovery-dialog.ts'], outfile: join(work, 'dialog.mjs'), bundle: true, platform: 'node', format: 'esm', external: ['electron'] })
   writeFileSync(join(work, 'main.mjs'), `import { app } from 'electron';
-    import { showPluginRecoveryDialog } from './dialog.mjs';
+    import { showPluginRecoveryDialog, showConfirmationDialog } from './dialog.mjs';
     app.on('window-all-closed', () => {});
     void app.whenReady().then(() => {
+    globalThis.openConfirmation = () => {
+      globalThis.answer = undefined;
+      void showConfirmationDialog(null, {
+        message: '当前页面请求更改智能连接来源',
+        detail: '这会决定智能模式下尝试哪些来源（本机已运行、本机已安装、npx 缓存、客户端内置）。请求来自：http://127.0.0.1:3080',
+        buttons: ['取消', '继续'], defaultId: 0, cancelId: 0,
+      }, true).then(value => { globalThis.answer = value });
+    };
     globalThis.openRecovery = (chinese, count, canRemove = true) => {
       const buttons = chinese ? ['卸载全部并重试', '使用独立环境', '取消'] : ['Remove all and retry', 'Use isolated environment', 'Cancel'];
       if (!canRemove) buttons.shift();
@@ -67,6 +75,35 @@ try {
     for (let attempt = 0; attempt < 50 && await app.evaluate(() => globalThis.answer) === undefined; attempt++) await new Promise(resolve => setTimeout(resolve, 100))
     assert.equal(await app.evaluate(() => globalThis.answer), answer)
     console.log('✓', chinese ? 'Chinese' : 'English', count, 'plugins: bounded layout and action', answer)
+  }
+  for (const [theme, action, expected] of [['light', 'Enter', 0], ['dark', 'Escape', 0], ['light', 'Continue', 1], ['dark', 'Close', 0]]) {
+    await app.evaluate(({ nativeTheme }, theme) => { nativeTheme.themeSource = theme; globalThis.openConfirmation() }, theme)
+    const page = await app.firstWindow()
+    await page.waitForFunction(() => document.activeElement?.id === 'default-action')
+    for (let attempt = 0; attempt < 50 && !await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible()); attempt++) await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible()), true)
+    await page.emulateMedia({ colorScheme: theme })
+    await page.waitForFunction(theme => matchMedia('(prefers-color-scheme: dark)').matches === (theme === 'dark'), theme, { timeout: 5000 })
+    assert.equal(await page.locator('#default-action').innerText(), '取消')
+    assert.equal(await page.locator('.primary').innerText(), '继续')
+    const layout = await page.evaluate(() => {
+      const footer = document.querySelector('footer').getBoundingClientRect()
+      return { overflow: document.documentElement.scrollWidth > innerWidth, footerVisible: footer.bottom <= innerHeight, textVisible: document.querySelector('.content').scrollHeight <= document.querySelector('.content').clientHeight }
+    })
+    assert.deepEqual(layout, { overflow: false, footerVisible: true, textVisible: true })
+    await page.screenshot({ path: join(tmpdir(), 'dsh-confirmation-' + theme + '.png') })
+    if (action === 'Continue') await page.locator('.primary').click()
+    else await app.evaluate(({ BrowserWindow }, action) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      if (action === 'Close') window.close()
+      else {
+        window.webContents.sendInputEvent({ type: 'keyDown', keyCode: action })
+        if (!window.isDestroyed()) window.webContents.sendInputEvent({ type: 'keyUp', keyCode: action })
+      }
+    }, action)
+    for (let attempt = 0; attempt < 50 && await app.evaluate(() => globalThis.answer) === undefined; attempt++) await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(await app.evaluate(() => globalThis.answer), expected)
+    console.log('✓ confirmation', theme, action, 'layout and response', expected)
   }
 } finally {
   await app?.close()

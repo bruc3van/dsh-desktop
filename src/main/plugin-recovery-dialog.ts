@@ -4,7 +4,7 @@ const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, char => 
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 })[char] ?? char)
 
-export function pluginRecoveryPage(options: MessageBoxOptions, plugins: string[], chinese: boolean): string {
+export function pluginRecoveryPage(options: MessageBoxOptions, plugins: string[], chinese: boolean, confirmation = false): string {
   const label = chinese ? `涉及插件（${plugins.length}）` : `Affected plugins (${plugins.length})`
   return '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
     + '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">'
@@ -21,27 +21,38 @@ export function pluginRecoveryPage(options: MessageBoxOptions, plugins: string[]
     + 'a:hover{background:#ebeef2}a.primary{background:#0f1115;color:#fff;border-color:#0f1115}'
     + ':focus-visible{outline:2px solid #528bff;outline-offset:2px}'
     + '@media(prefers-color-scheme:dark){body{background:#17181a;color:#f4f5f6}p{color:#aeb3bb}ul,a{border-color:#3a3d42}a:hover{background:#232529}a.primary{background:#f4f5f6;color:#17181a}}'
-    + '</style></head><body><main><div class="content"><h1>' + escapeHtml(options.message) + '</h1><p>' + escapeHtml(options.detail ?? '') + '</p></div>'
+    + (confirmation ? 'main{padding:28px;gap:20px}.content{max-height:none;flex:1}h1{font-size:18px;font-weight:600;margin-bottom:12px}footer{display:flex;justify-content:flex-end}footer a{min-width:88px}.eyebrow{font-size:11px;letter-spacing:.08em;color:#6e7480;margin-bottom:12px}@media(prefers-color-scheme:dark){.eyebrow{color:#aeb3bb}}' : '')
+    + '</style></head><body><main><div class="content">' + (confirmation ? '<div class="eyebrow">DSH Desktop · ' + (chinese ? '操作确认' : 'Confirmation') + '</div>' : '') + '<h1>' + escapeHtml(options.message) + '</h1><p>' + escapeHtml(options.detail ?? '') + '</p></div>'
     + (plugins.length ? '<section class="plugins" aria-label="' + escapeHtml(label) + '"><div class="label">' + escapeHtml(label) + '</div><ul tabindex="0">' + plugins.map(name => '<li>' + escapeHtml(name) + '</li>').join('') + '</ul></section>' : '')
-    + '<footer>' + (options.buttons ?? []).map((label, index) => '<a href="dsh-plugin-recovery:' + index + '"' + (index === options.defaultId ? ' class="primary" id="default-action"' : '') + '>' + escapeHtml(label) + '</a>').join('')
+    + '<footer>' + (options.buttons ?? []).map((label, index) => '<a role="button" href="dsh-plugin-recovery:' + index + '"' + (index === (confirmation ? 1 : options.defaultId) ? ' class="primary"' : '') + (index === options.defaultId ? ' id="default-action"' : '') + '>' + escapeHtml(label) + '</a>').join('')
     + '</footer></main></body></html>'
 }
 
 /** A bounded modal keeps the complete plugin list separate from the actions. */
 export function showPluginRecoveryDialog(owner: BrowserWindow | null, options: MessageBoxOptions, plugins: string[], chinese: boolean, appearance: Pick<BrowserWindowConstructorOptions, 'icon' | 'backgroundColor'> = {}): Promise<number> {
+  return showClientDialog(owner, options, plugins, chinese, appearance, false)
+}
+
+/** Main-process-owned confirmation: no preload or requesting-page access. */
+export function showConfirmationDialog(owner: BrowserWindow | null, options: MessageBoxOptions, chinese: boolean, appearance: Pick<BrowserWindowConstructorOptions, 'icon' | 'backgroundColor'> = {}): Promise<number> {
+  return showClientDialog(owner, options, [], chinese, appearance, true)
+}
+
+function showClientDialog(owner: BrowserWindow | null, options: MessageBoxOptions, plugins: string[], chinese: boolean, appearance: Pick<BrowserWindowConstructorOptions, 'icon' | 'backgroundColor'>, confirmation: boolean): Promise<number> {
   return new Promise(resolve => {
     const parent = owner !== null && !owner.isDestroyed() ? owner : undefined
     const area = (parent ? screen.getDisplayMatching(parent.getBounds()) : screen.getPrimaryDisplay()).workAreaSize
     const prompt = new BrowserWindow({
       ...appearance,
       width: Math.min(560, area.width),
-      height: Math.min(600, area.height),
-      minWidth: Math.min(320, area.width), minHeight: Math.min(420, area.height),
+      height: Math.min(confirmation ? 320 : 600, area.height),
+      minWidth: Math.min(320, area.width), minHeight: Math.min(confirmation ? 280 : 420, area.height),
       title: options.title ?? 'DSH Desktop',
       parent, modal: parent !== undefined, show: false,
       resizable: true, minimizable: false, maximizable: false,
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
     })
+    prompt.setMenu(null)
     let response = options.cancelId ?? (options.buttons?.length ?? 1) - 1
     const act = (url: string): void => {
       const match = /^dsh-plugin-recovery:(\d+)$/.exec(url)
@@ -57,7 +68,7 @@ export function showPluginRecoveryDialog(owner: BrowserWindow | null, options: M
     prompt.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'Escape') { event.preventDefault(); prompt.close() }
     })
-    void prompt.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(pluginRecoveryPage(options, plugins, chinese)))
+    void prompt.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(pluginRecoveryPage(options, plugins, chinese, confirmation)))
       .then(async () => {
         if (prompt.isDestroyed()) return
         await prompt.webContents.executeJavaScript('document.getElementById("default-action")?.focus()')
