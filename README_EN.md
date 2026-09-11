@@ -9,7 +9,7 @@ DSH Desktop is an independent Electron client for DeepSeek Harness (`dsh`). It l
 > [!IMPORTANT]
 > **This is an unofficial community project.** It is not developed, published, endorsed, or supported by DeepSeek. `DeepSeek`, `DeepSeek Harness`, `dsh`, and related names and marks belong to their respective owners.
 
-Release installers include a pinned version of the official `@deepseek-ai/dsh` runtime. Users do not need to install Node.js, pnpm, or the `dsh` CLI. The desktop client and official runtime have separate version numbers, both shown in Connection settings.
+Release installers include a pinned version of the official `@deepseek-ai/dsh` runtime. Starting the client and using its bundled runtime requires no separate installation of Node.js, pnpm, or the `dsh` CLI. Individual tasks or plugins may still require additional tools. The desktop client and official runtime have separate version numbers, both shown in Connection settings.
 
 ![DSH Desktop home](docs/images/dsh-desktop-home.png)
 
@@ -20,7 +20,7 @@ Release installers include a pinned version of the official `@deepseek-ai/dsh` r
 - Includes the official runtime in the installer.
 - Can reuse a running dsh or use a PATH installation, npx cache, or the bundled runtime.
 - Can share `~/.dsh` with the CLI or use an isolated desktop data environment.
-- Includes a safe marketplace. It is off by default and asks the Agent to review code before installation.
+- Includes a safe marketplace. Its plugin catalog stays offline until enabled by the user; **Safe install** uses a prompt to ask the Agent to review code before installation.
 - Verifies update packages with SHA-256 before installation.
 - Uses Electron sandboxing, context isolation, navigation restrictions, and permission controls.
 
@@ -29,6 +29,8 @@ Release installers include a pinned version of the official `@deepseek-ai/dsh` r
 ### Download a release
 
 Download the installer for your system from [GitHub Releases](https://github.com/bruc3van/dsh-desktop/releases). Release builds already contain the official dsh runtime and do not run npm installation on first launch.
+
+The current release workflow provides installers for macOS Apple Silicon, macOS Intel, and Windows x64. Linux has no prebuilt installer at present; see the development guide to run from source.
 
 Current packages do not yet have full developer signing and notarization, so the operating system may block the first launch.
 
@@ -49,7 +51,7 @@ Current packages do not yet have full developer signing and notarization, so the
 1. Enter an API key on first launch, or choose **Configure later**.
 2. Create a key at <https://platform.deepseek.com/api_keys> if needed. DeepSeek manages the account, balance, and charges.
 3. Choose an Agent preset or model if needed.
-4. Add a project folder when the task needs file access.
+4. Add and select a project folder as the conversation's workspace.
 5. Start a conversation and send the task.
 
 > [!TIP]
@@ -62,11 +64,11 @@ Current packages do not yet have full developer signing and notarization, so the
 | **Smart** (default) | Tries a running official instance, a `dsh` on PATH, an npx-cached package, then the bundled runtime. |
 | **Custom** | Connects to a specified Web UI address without starting a local runtime. |
 
-Smart mode uses only runtimes already on the machine. It does not download or install Node.js. Connection settings can disable individual sources, but at least one must remain. Source changes are staged until **Apply and reconnect** is selected. Unapplied changes can be undone.
+Smart mode uses only runtimes already on the machine. It does not download or install Node.js. Connection settings can disable individual sources, but at least one must remain. The isolated data environment does not reuse running instances from the shared environment, so an installed, npx-cached, or bundled runtime must remain enabled. Source changes are staged until **Apply and reconnect** is selected. Unapplied changes can be undone.
 
 For local services, automatic port selection tries 3080, then 13080, then an OS-assigned port. A fixed port can also be configured. A fixed port does not change automatically when occupied.
 
-If an official local instance is running but the current settings do not allow reuse, the client does not start another process or stop the user-owned process. Stop that instance in the terminal first.
+In the shared data environment, if the client detects a running official instance but the current settings do not allow reuse, it refuses to start another process and does not stop the user-owned process. Stop that instance in the terminal first, or switch to the isolated data environment.
 
 Open **Desktop settings** from the tray menu, the macOS application menu, or with `Cmd+,` on macOS and `Ctrl+,` on Windows/Linux.
 
@@ -82,7 +84,7 @@ Connection status values:
 | Client-started · installed | Uses the `dsh` on PATH |
 | Custom address | Connects to an address without starting a runtime |
 
-Official dsh currently targets local use. It listens on `127.0.0.1` by default and rejects `0.0.0.0`. Remote and container instances are outside official support. If you connect through an SSH tunnel or similar setup, use a trusted network and HTTPS.
+Client-started Web UIs use a loopback address. A Custom address can connect to a Web UI you manage; that deployment must provide authentication and network access. The client saves only the scheme, host, and port, dropping paths, query parameters, and fragments. For connections across machines, consult the [official documentation](https://github.com/deepseek-ai/deepseek-harness) for your runtime version.
 
 See the [development guide](docs/development.md#run-from-source) for runtime selection, port, and authentication details.
 
@@ -100,13 +102,13 @@ When the new directory does not exist, the client migrates legacy `~/.dsh-deskto
 
 Security controls include:
 
-- Uses only the public `dsh web` CLI and `/api` protocol.
+- Starts services through the official `dsh web` CLI and interacts through the Web UI's `/api` interfaces. Preparing the bundled market also calls runtime profile-loading modules and adjusts plugin configuration.
 - Enables Electron sandboxing and context isolation and disables Node integration.
 - Restricts navigation to the current Web UI origin and opens external links in the system browser.
-- Prevents packaged builds from overriding update sources, data directories, or connection probes through environment variables.
+- Ignores environment overrides for update sources, data directories, and connection probes in packaged builds by default, unless unsafe debugging is explicitly enabled.
 - Validates update metadata and installer filenames and verifies installer SHA-256.
-- Applies different permission policies to local and custom remote origins. Cross-origin frames, USB/HID/serial, geolocation, display capture, and storage escalation are denied by default.
-- Keeps Safe Market off and offline until the user enables it.
+- Allows capabilities such as file picking and voice input for client-managed local Web UIs; reused instances and Custom addresses receive more restricted permissions. Cross-origin frames, USB/HID/serial, geolocation, display capture, and storage escalation are denied by default.
+- Keeps Safe Market's plugin catalog offline until the user enables it.
 
 Windows installers support system notifications. Linux uses Chromium notifications. Current macOS packages are not fully signed, so notifications fall back to Dock badges, Dock attention, and in-app notices.
 
@@ -119,7 +121,7 @@ Use of this client remains subject to the terms and privacy policies of DeepSeek
 - A local Web UI that exits unexpectedly receives a limited number of restart attempts.
 - After system resume or a long idle, an invalid page reloads after the service becomes available.
 - If a reused Smart-mode instance disappears, the client can try other enabled sources. A failed Custom address does not switch automatically.
-- The client does not start two writers on the same `DSH_HOME`. If it cannot safely adopt or stop an old process, it refuses to start a new one.
+- Uses runtime locks and local service probes to avoid starting duplicate runtimes on the same `DSH_HOME`. If it cannot safely adopt or stop an old process, it refuses to start a new one. These checks cannot stop users from launching additional instances through other terminals or tools.
 - If plugins prevent Shared from starting, the user can remove the confirmed plugins and retry, or keep them and switch to the isolated environment.
 
 Release builds check GitHub Releases after startup and do not repeat automatic checks within 12 hours. Manual checks are available from settings, the tray, and the macOS application menu.
@@ -130,19 +132,26 @@ On macOS, the client can replace and restart an app installed in a writable dire
 
 ## Bundled runtime environment
 
-- The installer provides `node`, `dsh`, and `pnpm` under `~/.bruc3van-dsh-desktop/bin`. User-installed versions remain first on PATH.
-- This directory does not provide `npm` or `npx`. Install Node.js or connect to a runtime you manage when those commands are required.
-- Internal `ELECTRON_RUN_AS_NODE` settings are not passed to Agent commands.
-- The app does not use the macOS App Sandbox. Agent file access matches the current user process, and macOS may request access to protected folders.
+- When starting a local runtime, release builds generate `node`, `dsh`, and `pnpm` command wrappers under `~/.bruc3van-dsh-desktop/bin` and append that directory to the runtime's PATH, inherited by Agent commands. User tools already on PATH take priority; the client does not modify the system PATH.
+- The `node` command uses Electron's bundled Node.js, and `pnpm` ships with the installer. The client does not bundle `npm` or `npx`. If those commands are needed, install a complete Node.js distribution that includes npm/npx and ensure they are available on the PATH of the client-started runtime.
+- The bundled `dsh` wrapper supports plugin management, version queries, and configuration exports. It rejects commands that start another runtime instance, such as `dsh web`.
+- At runtime startup, the client clears its internal `ELECTRON_RUN_AS_NODE` setting so ordinary Agent shell commands do not accidentally use Electron's Node mode.
+- The app does not use the macOS App Sandbox. Electron's window sandbox is separate from any Agent command sandbox; Agent actions also depend on the runtime's permission policy, sandbox configuration, and operating-system grants.
 - The bundled runtime ships with the client and cannot be upgraded separately.
 
 See [Desktop client architecture](docs/desktop-client-architecture.md) and the [development guide](docs/development.md) for implementation details.
 
 ## Bundled Safe Market
 
-The [Safe Market](https://github.com/bruc3van/dsh-desktop-safe-market) ships with the installer. It is prepared offline before the first client-managed runtime starts, after checking its peer dependencies. Reusing a running local instance or connecting to a custom address does not modify its plugin configuration. User-installed marketplace versions remain user-managed, including older versions.
+The [Safe Market](https://github.com/bruc3van/dsh-desktop-safe-market) ships offline with the installer. The desktop setting to load the bundled market at startup is on by default. The client prepares the plugin for client-started runtimes with compatible dependencies, without an online installation. Reusing a running local instance or connecting to a Custom address does not modify its plugin configuration.
 
-The marketplace is off by default. Enabling it downloads the catalog and caches the last successful result. Turning off the client’s bundled-market switch removes the client-owned registration on the next managed runtime launch. The switch does not manage a marketplace installed by the user.
+The **Enable Safe Market** control inside the market page governs network access to the plugin catalog. It is off by default and independent of the desktop startup setting. Enabling it saves that choice and caches the last successful catalog. Turning off the desktop startup setting removes the client-owned copy and registration on the next client-managed runtime launch. User installations that have not been transferred to client management are unaffected by this switch.
+
+When starting a local runtime, the client can upgrade an older market enabled in the Web profile from a regular package installation or a GitHub release tag from the market's official repository. It replaces that version offline with the bundled copy, takes over management, and removes the old dependency pin and pnpm lockfile entry. Equal or newer versions, other custom sources (such as file/link/git), and unrecognized versions or lockfiles are preserved. Connecting to an existing service does not replace its market. A migrated market follows client updates and the desktop startup setting.
+
+Dependency checks use the runtime selected for this launch. Stale automatic links to optional dependencies in a shared data directory do not block the market when the selected runtime does not provide those dependencies. Required dependencies and explicitly installed user dependencies still undergo compatibility checks.
+
+The desktop startup setting controls the next runtime launch. The adjacent local installation and registration status does not prove the market is loaded in the current session. After the market uninstalls itself, its UI may remain for that session. With the startup setting enabled, the next client-started local service attempts to restore the bundled copy; with it disabled, no restoration is attempted. Any remaining user installation is reported rather than treated as a restored bundled copy.
 
 Open **Safe Market** from the start page to browse the plugin catalog in the right pane, filter by name or category, and view installed plugins.
 
@@ -158,7 +167,7 @@ Catalog data comes from [awesome-dsh-plugin](https://github.com/bruc3van/awesome
 
 **Safe install** does not run an installation command. It fills a new conversation with a security-review prompt but does not send it.
 
-After the user sends the prompt, the Agent checks credential access, data exfiltration, remote code execution, install scripts, obfuscated files, and requested permissions. Installation uses the official command only after review.
+After the user sends the prompt, it asks the Agent to check credential access, data exfiltration, remote code execution, install scripts, obfuscated files, and requested permissions. A passing review can proceed to installation with the official command; suspicious findings or installation approval requirements pause the process for the user. Sending the prompt authorizes this review-and-install flow; a second confirmation after review is not guaranteed.
 
 **Catalog inclusion is not a security endorsement. Review the result before installation.**
 
@@ -182,11 +191,11 @@ The browser workflow normally requires Node.js, a running `dsh web` terminal pro
 
 **Q: How can I use the latest official dsh?**
 
-Smart mode can reuse an updated local instance, or the client can connect to a Web UI you manage. The bundled runtime is fixed at release time and is updated with the desktop client.
+Update the official `dsh` on PATH or the npx-cached runtime and enable that source in Smart mode. You can also reuse an updated local instance or connect to a Web UI you manage through a Custom address. Smart mode follows source order; it does not compare every source and select the newest version. The bundled runtime is fixed at release time and is updated with the desktop client.
 
 **Q: Does Safe Market install plugins automatically?**
 
-No. Safe Market is off by default. **Safe install** only fills a review prompt; it does not send the prompt or install the plugin without user action.
+Clicking **Safe install** only fills a review prompt; it does not send the prompt or install anything. After the user sends it, the Agent follows the prompt to review the artifact and can proceed to installation if it passes. Suspicious findings or approval requirements pause the flow for the user.
 
 ## Related projects
 
