@@ -34,6 +34,18 @@ interface SurvivorOptions {
 }
 export function createRuntimeSurvivor(options: SurvivorOptions) {
   const { childHome, managedPid, enabledSmartRuntimes, probeWebUi, connection } = options
+  /** A restart may replace this runtime; final PID verification still happens at shutdown. */
+  function canAttemptRuntimeRestart(): boolean {
+    if (managedPid() !== undefined) return true
+    const lock = readRuntimeLock(childHome())
+    return restartDisposition({
+      adopted: connection().adopted,
+      targetOrigin: appOrigin(connection().target ?? ''),
+      lock,
+      ownedChildPid: undefined,
+      pidAlive: lock !== undefined && isProcessAlive(lock.childPid),
+    }) === 'verify'
+  }
   async function stopRecordedRuntime(lock: RuntimeLock): Promise<boolean> {
     writeRuntimeLock(childHome(), { ...lock, launchPending: true })
     return await terminateProcessTree(lock.childPid)
@@ -137,6 +149,6 @@ export function createRuntimeSurvivor(options: SurvivorOptions) {
     if (await stopRecordedRuntime(lock)) clearRuntimeLock(home)
   }
 
-  return { adoptOrClearSurvivingRuntime, stopAdoptedRuntimeForRestart }
+  return { adoptOrClearSurvivingRuntime, stopAdoptedRuntimeForRestart, canAttemptRuntimeRestart }
 }
 export type RuntimeSurvivor = ReturnType<typeof createRuntimeSurvivor>

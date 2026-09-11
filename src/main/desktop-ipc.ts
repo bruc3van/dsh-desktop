@@ -5,6 +5,7 @@ import type { SmartRuntimeId } from './smart-runtimes.ts'
 import type { DesktopUpdater, UpdateState } from './updater.ts'
 interface BridgeCaller { trusted: boolean; remote: boolean }
 interface Options {
+  requestRestart: () => { started: boolean; error?: string }
   bridgeCaller: (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) => BridgeCaller
   bridgeDenied: () => Error
   getStatusJson: (includeLocalDetail?: boolean) => Record<string, unknown>
@@ -35,6 +36,15 @@ export function createDesktopIpc(options: Options) {
 
 
   function registerDesktopIpc(): void {
+    ipcMain.handle('desktop:restart', async (event) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) throw bridgeDenied()
+      if (caller.remote && !await confirmSensitiveAction(
+        localeChinese() ? '当前页面请求重启客户端' : 'The current page asked to restart the client',
+        (localeChinese() ? '客户端将关闭并重新打开。请求来自：' : 'The client will close and reopen. Requested by: ') + (currentTarget() ?? ''),
+      )) return { started: false, error: localeChinese() ? '已取消' : 'Cancelled' }
+      return options.requestRestart()
+    })
     // The official page's enhanced-features card bridges through these. Every
     // handler resolves its sender first (see bridgeCaller): the preload rides
     // on whatever the window loads, so "the renderer asked" is not by itself

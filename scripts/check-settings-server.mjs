@@ -15,12 +15,14 @@ try {
   const { createSettingsServer } = await import(pathToFileURL(outfile).href)
   const calls = []
   let updater
+  let restarts = 0
   const save = (name) => async (value, remote) => {
     calls.push({ name, value, remote })
     if (value === 'throw') throw new Error('fixture rejected')
     return { saved: value !== 'invalid' }
   }
   server = createSettingsServer({
+    requestRestart: () => { restarts++; return { started: true } },
     updater: () => updater,
     getStatusJson: () => ({ mode: 'smart' }),
     setBundledMarketEnabled: async (enabled, remote) => { calls.push({ enabled, remote }); return { enabled } },
@@ -61,6 +63,12 @@ try {
   })
   assert.equal(forbiddenStatus, 403)
   assert.equal(calls.length, 0)
+  assert.equal((await request('desktop/restart')).status, 404)
+  assert.equal(restarts, 0)
+  assert.equal((await fetch(new URL('/desktop/restart', server.url), { method: 'POST' })).status, 404)
+  assert.equal(restarts, 0)
+  assert.deepEqual(await (await request('desktop/restart', {})).json(), { started: true })
+  assert.equal(restarts, 1)
   assert.equal((await request('desktop/settings', 'x'.repeat(16385))).status, 413)
   assert.equal((await request('desktop/settings', '{')).status, 400)
   assert.equal(calls.length, 0)

@@ -6,6 +6,7 @@ import type { ClientSettings } from './client-settings.ts'
 type SaveResult = { saved: boolean; error?: string }
 
 export interface SettingsServerOptions {
+  requestRestart: () => { started: boolean; error?: string }
   updater: () => Pick<DesktopUpdater, 'getState' | 'check' | 'resetDismiss' | 'dismiss'> | undefined
   getStatusJson: () => unknown
   setBundledMarketEnabled: (enabled: unknown, remoteCaller: boolean) => Promise<{ enabled: boolean }>
@@ -125,6 +126,11 @@ export function createSettingsServer(options: SettingsServerOptions) {
         return
       }
       const pathname = '/' + url.pathname.slice(settingsServerPath.length)
+      if (pathname === '/desktop/restart' && req.method === 'POST') {
+        const result = options.requestRestart()
+        writeJson(res, result.started ? 200 : 409, result)
+        return
+      }
       if (pathname === '/desktop/status') {
         writeJson(res, 200, getStatusJson())
         return

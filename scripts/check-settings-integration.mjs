@@ -170,15 +170,48 @@ try {
   await settings.waitForFunction(() => /未安装|Not installed/.test(document.getElementById('market-status').textContent))
   assert.equal(await settings.locator('#market-toggle').getAttribute('aria-checked'), 'true', 'automatic-loading preference is distinct from installation')
   assert.match(await settings.locator('#market-label').textContent(), /启动时|on startup/)
+  assert.equal(await settings.locator('#market-restart').isVisible(), false)
   await settings.locator('#market-toggle').click()
   await settings.waitForFunction(() => document.getElementById('market-toggle').getAttribute('aria-checked') === 'false'
     && !document.getElementById('market-toggle').disabled)
   assert.equal(JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8')).bundledMarketDisabled, true)
+  assert.equal(await settings.locator('#market-restart').isVisible(), false, 'connect mode must not offer to apply settings by restart')
+  assert.doesNotMatch(await settings.locator('#market-note').textContent(), /可立即重启|Restart now/)
+  // Electron's intercepted responses report status 0 here. Use explicit Response
+  // fixtures for capability/error states, leaving saves and the real status read intact.
+  await settings.evaluate(() => {
+    const original = window.fetch.bind(window)
+    window.restoreRestartFixture = () => { window.fetch = original }
+    window.restartFixture = { started: false, error: 'fixture busy' }
+    window.fetch = async (url, init) => {
+      if (String(url) === 'desktop/restart') return new Response(JSON.stringify(window.restartFixture), { status: window.restartFixture.started ? 200 : 409 })
+      const response = await original(url, init)
+      if (String(url) !== 'desktop/status') return response
+      return new Response(JSON.stringify({ ...await response.json(), marketRestartAvailable: true }), { status: 200 })
+    }
+    window.dispatchEvent(new Event('focus'))
+  })
+  await settings.locator('#market-restart').waitFor({ state: 'visible' })
+  await settings.locator('#market-restart').click()
+  await settings.waitForFunction(() => document.getElementById('market-note').textContent.includes('fixture busy'))
+  assert.equal(await settings.locator('#market-restart').isEnabled(), true)
+  assert.equal(await settings.locator('#market-toggle').isEnabled(), true)
+  await settings.evaluate(() => { window.restartFixture = { started: false } })
+  await settings.locator('#market-restart').click()
+  await settings.waitForFunction(() => document.getElementById('market-note').textContent === '重启未完成：重启失败')
+  await settings.evaluate(() => { window.restartFixture = { started: true } })
+  await settings.locator('#market-restart').click()
+  await settings.waitForFunction(() => !document.getElementById('market-restart').disabled, null, { timeout: 20_000 })
+  assert.match(await settings.locator('#market-note').textContent(), /尚未确认|not been confirmed/)
   assert.equal(await page.evaluate(async () => (await window.desktop.connection.getMarket()).enabled), false)
   await settings.locator('#market-toggle').click()
   await settings.waitForFunction(() => document.getElementById('market-toggle').getAttribute('aria-checked') === 'true'
     && !document.getElementById('market-toggle').disabled)
   assert.equal(JSON.parse(readFileSync(join(desktopHome, 'settings.json'), 'utf8')).bundledMarketDisabled, false)
+  assert.match(await settings.locator('#market-restart').textContent(), /立即重启|Restart now/)
+  await settings.evaluate(() => window.restoreRestartFixture())
+  await settings.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await settings.locator('#market-restart').waitFor({ state: 'hidden' })
   assert.equal(await page.evaluate(async () => (await window.desktop.connection.getMarket()).enabled), true)
   await settings.screenshot({ path: join(tmpdir(), 'dsh-desktop-settings-integration.png'), fullPage: true })
   await closeSettings(settings)

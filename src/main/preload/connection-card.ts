@@ -1,4 +1,5 @@
 import { choiceControlsCss } from '../choice-controls.ts'
+import { installRestartAction } from '../restart-action.ts'
 import { installRuntimeSelection } from '../runtime-selection.ts'
 import { connection, type ConnectionStatus } from './bridge.ts'
 import { releaseNotesCss } from '../release-notes.ts'
@@ -140,7 +141,8 @@ export function injectEnhance(panel: Element): void {
     + '<button class="dsh-enhance-toggle" id="dsh-enhance-market" type="button" role="switch" aria-checked="false" aria-labelledby="dsh-enhance-marketLabel">'
     + '<span class="dsh-enhance-toggle-thumb"></span></button>'
     + '</div>'
-    + '<p class="dsh-enhance-note" id="dsh-enhance-marketNote"></p>'
+    + '<p class="dsh-enhance-note" id="dsh-enhance-marketNote" role="status" aria-live="polite"></p>'
+    + '<button class="dsh-enhance-button dsh-enhance-switch" style="margin-top:12px" id="dsh-enhance-restart" type="button" hidden>立即重启</button>'
     + '</div>'
     + '<div class="dsh-enhance-dataBlock">'
     + '<div class="dsh-enhance-title">数据环境</div>'
@@ -311,6 +313,14 @@ export function injectEnhance(panel: Element): void {
   })
   const marketEl = block.querySelector('#dsh-enhance-market') as HTMLButtonElement
   const marketNoteEl = block.querySelector('#dsh-enhance-marketNote') as HTMLElement
+  const restartEl = block.querySelector('#dsh-enhance-restart') as HTMLButtonElement
+  installRestartAction({
+    button: restartEl,
+    chinese: true,
+    request: () => connection.restart(),
+    setBusy: busy => { marketEl.disabled = busy },
+    showError: message => { marketNoteEl.textContent = message },
+  })
   const paintMarket = (enabled: boolean): void => {
     marketEl.setAttribute('aria-checked', enabled ? 'true' : 'false')
   }
@@ -322,17 +332,30 @@ export function injectEnhance(panel: Element): void {
   marketEl.addEventListener('click', async () => {
     const wanted = marketEl.getAttribute('aria-checked') !== 'true'
     marketEl.disabled = true
+    restartEl.disabled = true
     try {
       const result = await connection.setMarket(wanted)
       paintMarket(result.enabled)
-      marketNoteEl.textContent = result.enabled
-        ? '已开启。重启客户端后，安全市场会接入当前运行时。'
-        : '已关闭并从 profile 中移除。当前会话里它仍然加载着，重启后消失。'
+      if (result.enabled !== wanted) {
+        marketNoteEl.textContent = '已取消更改。'
+      } else {
+        marketNoteEl.textContent = (result.enabled ? '已开启。' : '已关闭。')
+          + '下次由客户端启动本地服务时生效。'
+        restartEl.hidden = true
+        restartEl.textContent = '立即重启'
+        // Read fresh ownership after saving; an unknown status must not promise application.
+        const status = await connection.getStatus().catch(() => undefined)
+        if (status?.marketRestartAvailable === true) {
+          marketNoteEl.textContent += '可立即重启，尝试应用更改。'
+          restartEl.hidden = false
+        }
+      }
     } catch (error) {
       paintMarket(!wanted)
       marketNoteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
     } finally {
       marketEl.disabled = false
+      restartEl.disabled = false
     }
   })
   const runtimeEditor = installRuntimeSelection({

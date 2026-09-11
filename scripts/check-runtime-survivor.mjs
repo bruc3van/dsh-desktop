@@ -38,6 +38,7 @@ server.listen(0, '127.0.0.1', () => process.send({ url: 'http://127.0.0.1:' + se
   })
   await survivor.stopAdoptedRuntimeForRestart()
   assert.equal(isProcessAlive(child.pid), true, 'a serving process with no ownership record must be left alone')
+  assert.equal(survivor.canAttemptRuntimeRestart(), false, 'ordinary probe must not offer runtime restart')
 
   writeRuntimeLock(home, { childPid: child.pid, desktopPid: process.pid, startedAt: startedAt - 3_600_000, source: 'bundled' })
   assert.equal((await survivor.adoptOrClearSurvivingRuntime()).kind, 'spawn')
@@ -45,12 +46,14 @@ server.listen(0, '127.0.0.1', () => process.send({ url: 'http://127.0.0.1:' + se
   assert.equal(readRuntimeLock(home), undefined)
 
   writeRuntimeLock(home, { childPid: child.pid, desktopPid: process.pid, startedAt, processIdentity: await readProcessIdentity(child.pid), source: 'bundled', url })
+  assert.equal(survivor.canAttemptRuntimeRestart(), true, 'recorded adopted runtime may offer an attempt')
   assert.deepEqual(await survivor.adoptOrClearSurvivingRuntime(), { kind: 'adopt', url })
   assert.equal(isProcessAlive(child.pid), true)
   await survivor.stopAdoptedRuntimeForRestart()
   await exited
   assert.equal(isProcessAlive(child.pid), false, 'restart must stop the verified adopted child')
   assert.equal(readRuntimeLock(home), undefined)
+  assert.equal(survivor.canAttemptRuntimeRestart(), false)
   console.log('✓ unowned and recycled processes survive; verified leftover is adopted and stopped on restart — ' + url)
 } finally {
   if (child && child.exitCode === null && child.signalCode === null) {

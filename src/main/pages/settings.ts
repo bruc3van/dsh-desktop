@@ -151,7 +151,8 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + '<div class="actions"><button id="market-toggle" type="button" role="switch" aria-checked="false" aria-labelledby="market-label" disabled>'
     + '</button></div></div>'
     + '<p class="status-text" id="market-status" aria-live="polite"></p>'
-    + '<p class="status-text" id="market-note" aria-live="polite"></p></div><hr class="divider">'
+    + '<p class="status-text" id="market-note" aria-live="polite"></p>'
+    + '<button id="market-restart" class="primary" type="button" hidden>' + h('立即重启', 'Restart now') + '</button></div><hr class="divider">'
     // Update section
     + '<div class="section">'
     + '<div class="section-title">' + h('应用更新', 'App updates')

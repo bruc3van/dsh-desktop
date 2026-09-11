@@ -4,6 +4,7 @@ import { installWindowsNotificationActivation } from '../windows-notification-ac
 
 /** Connection facts mirrored from the main process. */
 export interface ConnectionStatus {
+  marketRestartAvailable?: boolean
   mode: 'local' | 'probe' | 'connect'
   targetUrl: string
   desktopVersion: string
@@ -34,6 +35,8 @@ export interface ConnectionStatus {
 
 /** The connection bridge: read/save the Web UI origin through the main process. */
 export const connection = {
+  restart: (): Promise<{ started: boolean; error?: string }> =>
+    ipcRenderer.invoke('desktop:restart') as Promise<{ started: boolean; error?: string }>,
   getStatus: (): Promise<ConnectionStatus> => ipcRenderer.invoke('desktop:connection:status') as Promise<ConnectionStatus>,
   saveServerUrl: (serverUrl: string): Promise<{ saved: boolean; mode?: 'smart' | 'connect'; error?: string }> =>
     ipcRenderer.invoke('desktop:connection:save', serverUrl) as Promise<{

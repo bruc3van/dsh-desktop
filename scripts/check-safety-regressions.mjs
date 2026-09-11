@@ -59,7 +59,7 @@ try {
   const { createDesktopIpc } = load('desktop-ipc', { electron: {
     app: {}, ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} },
   } })
-  let trusted = true, consent = false, confirmations = 0, saves = 0
+  let trusted = true, consent = false, confirmations = 0, saves = 0, restarts = 0, remote = true
   const sharedCommands = createSettingsCommands({
     enabledSmartRuntimes: () => ['bundled'], loadSettings: () => ({ serverUrl: 'https://example.com', connectionMode: 'connect' }),
     getActiveDshDataMode: () => 'shared', selectedDshDataMode: () => 'shared',
@@ -67,7 +67,10 @@ try {
     confirmSensitiveAction: async () => { confirmations++; return consent },
     patchSettings: () => { saves++ }, resetRuntimeFailure() {},
   })
-  createDesktopIpc({ bridgeCaller: () => ({ trusted, remote: true }), bridgeDenied: () => new Error('denied'),
+  createDesktopIpc({ bridgeCaller: () => ({ trusted, remote }), bridgeDenied: () => new Error('denied'),
+    requestRestart: () => { restarts++; return { started: true } },
+    localeChinese: () => true, currentTarget: () => 'https://example.com',
+    confirmSensitiveAction: async () => consent,
     requestSmartRuntimesSave: sharedCommands.requestSmartRuntimesSave,
   }).registerDesktopIpc()
   const saveSources = handlers.get('desktop:connection:smartRuntimes')
@@ -85,6 +88,18 @@ try {
   assert.equal(saves, 2)
   assert.equal(confirmations, 2)
   console.log('✓ IPC and local source saves share validation while preserving trust and remote consent')
+  const restart = handlers.get('desktop:restart')
+  trusted = false
+  await assert.rejects(restart({}), /denied/)
+  trusted = true; consent = false
+  assert.equal((await restart({})).started, false)
+  assert.equal(restarts, 0)
+  consent = true
+  assert.equal((await restart({})).started, true)
+  remote = false; consent = false
+  assert.equal((await restart({})).started, true)
+  assert.equal(restarts, 2)
+  console.log('✓ restart rejects untrusted callers, confirms remote callers and directly restarts for local callers')
 
   const { createWebUiProbe } = load('web-ui-probe', { electron: { app: { isReady: () => false, isPackaged: true }, net: {} } })
   let responseMode = 'silent'

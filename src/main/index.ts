@@ -279,6 +279,7 @@ let loadingHintGeneration = 0
 let errorDocumentActive = false
 let settingsWindow: BrowserWindow | null = null
 const settingsServer = createSettingsServer({
+  requestRestart,
   updater: () => desktopUpdater,
   getStatusJson,
   setBundledMarketEnabled,
@@ -978,6 +979,18 @@ function trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
   return buildTrayMenu({ chinese: localeChinese(), state: desktopUpdater?.getState(), actions: nativeMenuActions })
 }
 
+let restartScheduled = false
+function requestRestart(): { started: boolean; error?: string } {
+  if (quitting || restarting || restartScheduled || isInstallerHandoff()) {
+    return { started: false, error: localeChinese() ? '客户端正在退出、重启或更新，请稍后重试。' : 'The client is quitting, restarting or updating. Try again later.' }
+  }
+  restartScheduled = true
+  // Let HTTP/IPC deliver the acknowledgement before quit closes the transport.
+  // The UI timeout restores controls if a later installer handoff prevents restart.
+  setTimeout(() => { restartScheduled = false; restartApp() }, 150)
+  return { started: true }
+}
+
 /**
  * Restart the whole client. A plugin that only takes effect on a fresh runtime
  * needs the harness replaced, not the page reloaded, and this is the one
@@ -1044,6 +1057,7 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     desktopVersion: desktopClientVersion(),
     settingsIntegration: settingsIntegrationStatus,
     bundledMarketEnabled: settings.bundledMarketDisabled !== true,
+    marketRestartAvailable: !usesConfiguredServer(settings) && runtimeSurvivor.canAttemptRuntimeRestart(),
     bundledMarketInstallation: includeLocalDetail ? inspectMarketInstallation(childHome()) : undefined,
     dshVersion: bundledDshVersion(),
     // NOT gated by includeLocalDetail: in Connect mode the saved address IS
@@ -1592,6 +1606,7 @@ function registerDesktopIpc(): void {
 
 
 const desktopIpc = createDesktopIpc({
+  requestRestart,
   bridgeCaller,
   bridgeDenied,
   getStatusJson,

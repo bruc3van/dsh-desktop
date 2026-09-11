@@ -5,6 +5,7 @@ node_modules/
 dist/
 release/
 shots/
+output/playwright/
 *.log
 .DS_Store
 .mimosa
