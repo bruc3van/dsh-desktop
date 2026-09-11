@@ -13,6 +13,12 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const home = mkdtempSync(join(tmpdir(), 'dsh-settings-integration-'))
 const desktopHome = join(home, 'desktop')
 mkdirSync(desktopHome)
+const locale = process.argv[2]
+if (locale !== undefined) {
+  assert.ok(locale === 'zh' || locale === 'en', 'optional locale must be zh or en')
+  mkdirSync(join(home, 'dsh'))
+  writeFileSync(join(home, 'dsh/settings.yaml'), 'locale:\n  preference: ' + locale + '\n')
+}
 const server = createServer((_req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
   res.end('<!doctype html><meta charset="utf-8"><title>Settings compatibility fixture</title>'
@@ -198,7 +204,8 @@ try {
   assert.equal(await settings.locator('#market-toggle').isEnabled(), true)
   await settings.evaluate(() => { window.restartFixture = { started: false } })
   await settings.locator('#market-restart').click()
-  await settings.waitForFunction(() => document.getElementById('market-note').textContent === '重启未完成：重启失败')
+  await settings.waitForFunction(() => document.getElementById('market-note').textContent ===
+    (document.documentElement.lang === 'zh-CN' ? '重启未完成：重启失败' : 'Restart failed: Restart failed'))
   await settings.evaluate(() => { window.restartFixture = { started: true } })
   await settings.locator('#market-restart').click()
   await settings.waitForFunction(() => !document.getElementById('market-restart').disabled, null, { timeout: 20_000 })
