@@ -193,6 +193,12 @@ macOS 可在应用目录可写时自动替换并重启应用。更新失败时�
 
 点击“安全安装”只填写审查提示词，不自动发送或安装。用户发送后，Agent 会按提示词先审查，审查通过后可继续安装；发现可疑内容或遇到审批要求时会停下询问。
 
+## 微信交流群
+
+欢迎扫码加入项目微信交流群，一起讨论 DSH Desktop 的使用与改进。二维码有效期以图片中的提示为准。
+
+<img src="docs/images/wechat-group.jpg" alt="DSH Desktop 微信交流群二维码" width="360">
+
 ## 相关项目
 
 - [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin)：安全市场的目录数据来源。每日采集插件仓库并维护排除记录。
