@@ -10,11 +10,16 @@ index 452b73c27b4b2aab79e0f9106eb5f7827f2e5ff4..24bc54ba2a04d267b56557cde3b8f12a
  //#region lib/types/runner.js
  /**
  * The windows-acl confinement runner: the argv-prefix wrapper the sandbox
-@@ -118,7 +119,7 @@ async function main() {
+@@ -118,7 +119,12 @@ async function main() {
  	if (parsed.mode === "workspace-write" && parsed.writeSid === void 0 !== (parsed.tempWriteSid === void 0)) fail("workspace-write requires --write-sid and --temp-write-sid together");
  	if (parsed.mode === "workspace-write") assertTempRootOutsideWorkspace(parsed.workspace, parsed.temp);
  	const api = await win32();
 -	if (api.setConsoleCtrlHandler(null, 1) === 0) fail(`SetConsoleCtrlHandler failed (Win32 ${api.getLastError()})`);
++	// Electron Node mode belongs to this bootstrap, never the confined command.
++	if (process.versions.electron) {
++		delete process.env.ELECTRON_RUN_AS_NODE;
++		if (api.setEnvironmentVariableW("ELECTRON_RUN_AS_NODE", null) === 0) fail(`SetEnvironmentVariableW ELECTRON_RUN_AS_NODE failed (Win32 ${api.getLastError()})`);
++	}
 +	prepareRunnerConsole(api);
  	let ownedTempDir;
  	let sandbox;

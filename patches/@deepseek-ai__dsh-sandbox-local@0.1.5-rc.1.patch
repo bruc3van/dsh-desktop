@@ -1,0 +1,42 @@
+diff --git a/lib/index.js b/lib/index.js
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -134,7 +134,8 @@
+ }
+ /**
+ * Functional windows-acl probe: run the runner in read-only mode (zero grants,
+-* no ACL mutation) around `cmd /c exit 0` — exit 0 means the runner created
++* no ACL mutation) around `cmd /c echo dsh-windows-acl-probe-ok` — require exit 0 and the
++* output marker so an Electron GUI bootstrap cannot fake success. This proves the runner created
+ * the restricted token and spawned the child under it. The win32 chain is a
+ * sole candidate, so the product never probes; the probe exists for override
+ * chains and mirrors the other rungs' shape.
+@@ -142,7 +143,7 @@
+ function defaultProbeWindowsAcl(runnerInvocation, timeoutMs) {
+ 	const program = runnerInvocation[0];
+ 	if (program === void 0) return false;
+-	return spawnSync(program, [
++	const result = spawnSync(program, [
+ 		...runnerInvocation.slice(1),
+ 		"--workspace",
+ 		tmpdir(),
+@@ -153,12 +154,15 @@
+ 		"--",
+ 		"cmd",
+ 		"/c",
+-		"exit",
+-		"0"
++		"echo",
++		"dsh-windows-acl-probe-ok"
+ 	], {
+ 		timeout: timeoutMs,
+-		stdio: "ignore"
+-	}).status === 0;
++		windowsHide: true,
++		encoding: "utf8",
++		stdio: ["ignore", "pipe", "pipe"]
++	});
++	return result.status === 0 && result.stdout?.trim() === "dsh-windows-acl-probe-ok";
+ }
+ /**
+ * The runner chain per platform — selection is BY PLATFORM first, probes

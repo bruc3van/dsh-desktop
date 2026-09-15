@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-09-15
+
+### Windows 命令执行
+
+- 修复内置运行时经 Windows Job 启动沙箱命令时丢失 Electron Node 模式的问题，避免 PowerShell 命令未执行却返回成功（#19）。
+- 在沙箱 runner 启动用户命令前清理 Electron Node 模式变量，保持用户命令的环境隔离。
+- 加强多候选沙箱链的 Windows ACL 探测，同时验证退出码和预期输出，避免误判可用。
+- 补充真实命令执行链回归检查，覆盖权限模式、输出和非零退出码、工作区写入限制及 PowerShell 7 / Windows PowerShell 5.1 回退。
+
+### 文档
+
+- README 添加微信交流群入口，更新 Windows 补丁原理与验证范围说明。
+
 ## [0.5.10] - 2026-09-11
 
 ### 内置市场

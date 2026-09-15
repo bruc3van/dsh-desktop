@@ -1,4 +1,4 @@
-/** Verify the deployed Issue #16 patches; Windows also exercises the native runner. */
+/** Verify deployed Issues #16/#19 patches; Windows exercises the composed native chain. */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -13,22 +13,53 @@ const modules = join(root, '.runtime', 'node_modules')
 const acl = join(modules, '@deepseek-ai', 'dsh-sandbox-windows-acl')
 const subprocess = join(modules, '@deepseek-ai', 'dsh-subprocess-local')
 const win32Process = join(modules, '@deepseek-ai', 'dsh-win32-process')
+const sandboxLocal = join(modules, '@deepseek-ai', 'dsh-sandbox-local')
 const launcher = join(root, '.build', 'runtime-launcher.mjs')
 if (process.platform === 'win32' && !existsSync(launcher)) {
   throw new Error('runtime launcher is missing; run `pnpm run build` before `pnpm run check:win32-console`')
 }
-for (const directory of [acl, subprocess, win32Process]) {
+for (const directory of [acl, subprocess, win32Process, sandboxLocal]) {
   if (!existsSync(join(directory, 'package.json'))) {
     throw new Error('deployed dsh runtime is missing; run `pnpm run prepare:runtime` before `pnpm run check:win32-console`')
   }
   assert.equal(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')).version, '0.1.5-rc.1',
     'Reconcile the console patches when upgrading the runtime')
 }
+// The optional multi-candidate probe must reject a GUI process's empty exit 0.
+const sandboxSource = await readFile(join(sandboxLocal, 'lib', 'index.js'), 'utf8')
+const probeSource = sandboxSource.match(/function defaultProbeWindowsAcl\([\s\S]*?\n\}/)?.[0]
+assert.ok(probeSource, 'Reconcile the Windows ACL probe on runtime upgrades')
+const probeFactory = new Function('spawnSync', 'tmpdir', `${probeSource}; return defaultProbeWindowsAcl`)
+for (const [result, expected] of [
+  [{ status: 0, stdout: '' }, false],
+  [{ status: 0, stdout: 'wrong' }, false],
+  [{ status: 1, stdout: 'dsh-windows-acl-probe-ok' }, false],
+  [{ status: null, stdout: null }, false],
+  [{ status: 0, stdout: 'dsh-windows-acl-probe-ok\r\n' }, true],
+]) {
+  const probe = probeFactory((_program, args, options) => {
+    assert.deepEqual(args.slice(-2), ['echo', 'dsh-windows-acl-probe-ok'])
+    assert.equal(options.windowsHide, true)
+    assert.equal(options.timeout, 123)
+    return result
+  }, tmpdir)
+  assert.equal(probe(['electron', 'runner.js'], 123), expected)
+  assert.equal(probe([], 123), false)
+}
 const { prepareRunnerConsole } = await import(pathToFileURL(join(acl, 'lib', 'types-desktop-console.js')).href)
 const runner = await readFile(join(acl, 'lib', 'runner.js'), 'utf8')
 assert.match(runner, /import \{ prepareRunnerConsole \} from "\.\/types-desktop-console\.js"/)
 assert.ok(runner.includes('prepareRunnerConsole(api)'))
 assert.ok(runner.indexOf('prepareRunnerConsole(api)') < runner.indexOf('sandbox = new AclSandbox'))
+// Keep both environment layers clean, including on non-Windows CI.
+for (const cleanup of [
+  'delete process.env.ELECTRON_RUN_AS_NODE;',
+  'api.setEnvironmentVariableW("ELECTRON_RUN_AS_NODE", null)',
+]) {
+  assert.ok(runner.includes(cleanup), `ACL runner must retain ${cleanup}`)
+  assert.ok(runner.indexOf(cleanup) < runner.indexOf('sandbox.spawn('),
+    'Clear bootstrap environment before spawning the confined command')
+}
 
 function fixture({ existing = null, allocation = 1, restoreFailure, handler = 1 } = {}) {
   const calls = []
@@ -83,6 +114,8 @@ assert.throws(() => prepareRunnerConsole(fixture({ handler: 0 }).api), /SetConso
 const chunks = (await readdir(join(subprocess, 'lib'))).filter(name => /^runner-launch-.*\.js$/.test(name))
 assert.equal(chunks.length, 1, 'Expected one deployed subprocess runner launch chunk')
 const source = await readFile(join(subprocess, 'lib', chunks[0]), 'utf8')
+const targetEnvironmentExport = /\btargetEnvironment as (\w+)\b/.exec(source)?.[1]
+assert.ok(targetEnvironmentExport, 'Cannot locate deployed targetEnvironment export; reconcile runtime upgrade')
 const spawnBody = source.slice(source.indexOf('function spawnSubprocess('))
 const options = /const child = \(internals.spawn \?\? spawn\)\(program, args, (\{[\s\S]*?\n\t\})\);/.exec(spawnBody)?.[1]
 assert.ok(options, 'Cannot locate deployed subprocess spawn options')
@@ -117,14 +150,14 @@ if (process.platform !== 'win32') {
   process.exit(0)
 }
 
-const electron = createRequire(import.meta.url)('electron')
+const electron = process.env.DSH_DESKTOP_TEST_ELECTRON ?? createRequire(import.meta.url)('electron')
 const home = await mkdtemp(join(tmpdir(), 'dsh-console-smoke-'))
 const workspace = join(home, 'workspace')
 const temp = join(home, 'temp')
 await mkdir(workspace)
 await mkdir(temp)
 
-async function run(args, input = '', environment = {}) {
+async function run(args, input = '', environment = {}, timeoutMs = 30_000) {
   const child = spawn(electron, args, {
     env: { ...process.env, ...environment, ELECTRON_RUN_AS_NODE: '1' },
     cwd: workspace,
@@ -138,7 +171,7 @@ async function run(args, input = '', environment = {}) {
   child.stdin.on('error', () => { /* early child failure is reported by exit/output assertions */ })
   child.stdin.end(input)
   const code = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { child.kill(); reject(new Error('Console smoke timed out')) }, 30_000)
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`Console smoke timed out after ${timeoutMs}ms`)) }, timeoutMs)
     child.once('error', error => { clearTimeout(timer); reject(error) })
     child.once('close', value => { clearTimeout(timer); resolve(value) })
   })
@@ -193,6 +226,74 @@ try {
   assert.equal(subprocessResult.code, 0, JSON.stringify(subprocessResult))
   assert.match(subprocessResult.stdout, /subprocess-runner-ok/)
   console.log('✓ Electron Windows Job runner preserves target environment, stdio and exit code; target has no console')
+
+  // Issue #19: exercise the composed Job -> Electron ACL runner -> pwsh chain.
+  // Direct ACL smoke below cannot detect a lost target environment over Job IPC.
+  const nestedEntry = join(home, 'nested-acl-probe.mjs')
+  await writeFile(nestedEntry, `
+    import assert from 'node:assert/strict';
+    import { readFile } from 'node:fs/promises';
+    import { isAbsolute } from 'node:path';
+    import { Context } from ${JSON.stringify(pathToFileURL(join(modules, '@deepseek-ai/cordis/lib/index.js')).href)};
+    import LocalSubprocessRuntime from ${JSON.stringify(pathToFileURL(join(subprocess, 'lib/index.js')).href)};
+    import { PwshLocalExecutor, resolvePwshPath } from ${JSON.stringify(pathToFileURL(join(modules, '@deepseek-ai/dsh-pwsh-local/lib/index.js')).href)};
+    import { ${targetEnvironmentExport} as targetEnvironment } from ${JSON.stringify(pathToFileURL(join(subprocess, 'lib', chunks[0])).href)};
+    const ctx = new Context();
+    const fiber = await ctx.plugin(LocalSubprocessRuntime);
+    try {
+      assert.equal(process.env.ELECTRON_RUN_AS_NODE, undefined);
+      assert.equal(ctx.subprocess.selectContainmentMode('ordinary'), 'windows-job');
+      const mixedEnv = { electron_run_as_node: '0' };
+      const selfEnv = targetEnvironment({ argv: [process.execPath.toUpperCase()], cwd: process.cwd(), env: mixedEnv });
+      assert.equal(selfEnv.ELECTRON_RUN_AS_NODE, '1');
+      assert.equal(Object.keys(selfEnv).filter(key => key.toUpperCase() === 'ELECTRON_RUN_AS_NODE').length, 1);
+      assert.deepEqual(mixedEnv, { electron_run_as_node: '0' });
+      const shells = [...new Set([resolvePwshPath(), resolvePwshPath(undefined, {
+        ProgramFiles: ${JSON.stringify(join(home, 'missing-program-files'))}, PATH: '', SystemRoot: process.env.SystemRoot,
+      })])];
+      for (const [shellIndex, shellPath] of shells.entries()) {
+        assert.ok(isAbsolute(shellPath), 'Resolve installed PowerShell without relying on PATH');
+        for (const mode of ['read-only', 'workspace-write', 'danger-full-access']) {
+          const name = 'nested-' + shellIndex + '-' + mode + '.txt';
+          const command = 'Write-Output "nested-stdout"; Write-Error "nested-stderr" -ErrorAction Continue; '
+            + 'if (Test-Path Env:ELECTRON_RUN_AS_NODE) { exit 99 }; '
+            + 'Set-Content -LiteralPath "' + name + '" -Value "write-ok" -Encoding utf8 -ErrorAction Continue; '
+            + 'Set-Content -LiteralPath "../outside-' + name + '" -Value "outside" -Encoding utf8 -ErrorAction Continue; exit 7';
+          const shell = [shellPath, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command];
+          const argv = mode === 'danger-full-access' ? shell : [process.execPath,
+            ${JSON.stringify(join(acl, 'lib', 'runner.js'))}, '--workspace', ${JSON.stringify(workspace)},
+            '--temp', ${JSON.stringify(temp)}, '--mode', mode, '--', ...shell];
+          const spec = PwshLocalExecutor.prototype.spawnSpec.call({ config: { maxSpillBytes: 64000,
+            maxOutputBytes: 64000, graceMs: 200 } }, { workdir: ${JSON.stringify(workspace)} },
+            64000, AbortSignal.timeout(20000), argv);
+          assert.equal(targetEnvironment(spec).ELECTRON_RUN_AS_NODE,
+            mode === 'danger-full-access' ? undefined : '1', 'Job IPC must carry Electron Node mode only for the runner');
+          const handle = ctx.subprocess.spawn(spec);
+          const outcome = await handle.done;
+          assert.equal(await handle.waitForExit(), true);
+          const stdout = handle.collected.stdout.readFrom(0).text;
+          const stderr = handle.collected.stderr.readFrom(0).text;
+          assert.equal(outcome.exitCode, 7, JSON.stringify({ mode, outcome, stdout, stderr }));
+          assert.match(stdout, /nested-stdout/);
+          assert.match(stderr, /nested-stderr/);
+          const target = ${JSON.stringify(workspace)} + '/' + name;
+          const outside = ${JSON.stringify(home)} + '/outside-' + name;
+          if (mode === 'read-only') await assert.rejects(readFile(target), { code: 'ENOENT' });
+          else assert.match(await readFile(target, 'utf8'), /write-ok/);
+          if (mode !== 'danger-full-access') await assert.rejects(readFile(outside), { code: 'ENOENT' });
+          else assert.match(await readFile(outside, 'utf8'), /outside/);
+          console.log('nested-' + mode + '-ok');
+        }
+        console.log('shell-ok: ' + shellPath);
+      }
+    } finally { await fiber.dispose(); }
+  `)
+  // Up to two shells x three modes x 20s deadlines, plus startup/teardown margin.
+  const nestedResult = await run([launcher], '', { DSH_DESKTOP_RUNTIME_ENTRY: nestedEntry }, 150_000)
+  assert.equal(nestedResult.code, 0, JSON.stringify(nestedResult))
+  assert.match(nestedResult.stdout, /nested-workspace-write-ok/)
+  console.log(nestedResult.stdout.trim())
+  console.log('✓ Job -> Electron ACL -> pwsh preserves output, exit code, write boundaries and clean target environment')
 
   // Exercise the actual Koffi bindings under Electron, with original pipe handles.
   const probe = `

@@ -163,6 +163,11 @@ const AUDITED_INDIRECT = new Map([
   // Linux scope and Windows Job launchers. The actual Electron runner path is
   // exercised by check:win32-console; do not allow the whole chunk wholesale.
   ['@deepseek-ai/dsh-subprocess-local/lib/runner-launch-COYGu0Dl.js', [
+    {
+      label: 'Electron target environment across Job IPC',
+      context: 'if (process.versions.electron && process.platform === "win32" && spec.argv[0].toLowerCase() === process.execPath.toLowerCase()) {',
+      expected: 1,
+    },
     { label: 'pkg subprocess runner argv', context: 'if ("pkg" in process) return [process.execPath];', expected: 1 },
     {
       label: 'built subprocess runner argv',

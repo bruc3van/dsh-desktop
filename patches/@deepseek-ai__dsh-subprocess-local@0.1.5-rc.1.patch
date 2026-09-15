@@ -10,3 +10,18 @@ index 8e1b9f91afddbc4bd2211a37e8abbec84823b009..2c6382b5cd3889fbe2ff86f8b91cee35
  			stdio: runnerStdio(spec, true, ignoredStdinFd ?? "pipe")
  		});
  	} finally {
+diff --git a/lib/runner-launch-COYGu0Dl.js b/lib/runner-launch-COYGu0Dl.js
+--- a/lib/runner-launch-COYGu0Dl.js
++++ b/lib/runner-launch-COYGu0Dl.js
+@@ -1613,6 +1613,11 @@
+ 	});
+ 	validateNoNullByte("options.cwd", spec.cwd);
+ 	const env = Object.fromEntries(Object.entries(childEnv(spec.env)).filter((entry) => entry[1] !== void 0));
++	// Desktop #19: target env travels over Job IPC, outside the host spawn patch.
++	if (process.versions.electron && process.platform === "win32" && spec.argv[0].toLowerCase() === process.execPath.toLowerCase()) {
++		for (const key of Object.keys(env)) if (key.toUpperCase() === "ELECTRON_RUN_AS_NODE") delete env[key];
++		env.ELECTRON_RUN_AS_NODE = "1";
++	}
+ 	for (const [key, value] of Object.entries(env)) {
+ 		validateNoNullByte(`options.env['${key}']`, key);
+ 		validateNoNullByte(`options.env['${key}']`, value);
