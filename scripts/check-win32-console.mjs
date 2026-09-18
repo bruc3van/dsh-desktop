@@ -22,7 +22,7 @@ for (const directory of [acl, subprocess, win32Process, sandboxLocal]) {
   if (!existsSync(join(directory, 'package.json'))) {
     throw new Error('deployed dsh runtime is missing; run `pnpm run prepare:runtime` before `pnpm run check:win32-console`')
   }
-  assert.equal(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')).version, '0.1.5-rc.1',
+  assert.equal(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')).version, '0.1.5-rc.2',
     'Reconcile the console patches when upgrading the runtime')
 }
 // The optional multi-candidate probe must reject a GUI process's empty exit 0.

@@ -14,7 +14,7 @@ const temp = await mkdtemp(join(tmpdir(), 'dsh-market-seat-'))
 const output = join(temp, 'seat.mjs')
 await build({ entryPoints: [join(root, 'src/main/bundled-plugin.ts')], bundle: true, platform: 'node', format: 'esm', outfile: output, logLevel: 'silent' })
 const { seatBundledPlugin, withdrawBundledPlugin, abandonBundledPlugin, inspectBundledPlugin, inspectMarketInstallation, runtimeRefusal, BUNDLED_PLUGIN_NAME: name } = await import(pathToFileURL(output))
-const runtime = { version: '0.1.5-rc.1', peerRanges: ['^0.1.5-rc.1'] }
+const runtime = { version: '0.1.5-rc.2', peerRanges: ['^0.1.5-rc.1'] }
 const marker = '.dsh-desktop-seat.json'
 const manifestPath = home => join(home, 'profiles/web/package.json')
 const seat = home => join(home, 'profiles/web/node_modules', name)
@@ -53,6 +53,29 @@ try {
   assert.equal(abandonBundledPlugin(owned), true)
   assert.equal(existsSync(seat(owned)), false)
   console.log('✓ profile-local owned copy upgrades, withdraws and removes without duplicate bundles')
+
+  const blockedStagingHome = home()
+  const leftover = seat(blockedStagingHome) + '.' + process.pid + '.tmp'
+  pkg(leftover, '0.4.0')
+  writeFileSync(join(leftover, 'obsolete.js'), 'stale')
+  const remove = fs.rmSync
+  try {
+    fs.rmSync = (path, options) => {
+      if (path === leftover) throw Object.assign(new Error('held staging directory'), { code: 'EBUSY' })
+      return remove(path, options)
+    }
+    syncBuiltinESMExports()
+    assert.equal(seatBundledPlugin(payload, blockedStagingHome, runtime).error, undefined)
+    assert.equal(read(blockedStagingHome).dsh.profile.bundles.includes(name), true)
+    assert.equal(existsSync(join(seat(blockedStagingHome), 'obsolete.js')), false)
+  } finally {
+    fs.rmSync = remove
+    syncBuiltinESMExports()
+  }
+  assert.equal(existsSync(leftover), true)
+  seatBundledPlugin(updated, blockedStagingHome, runtime)
+  assert.equal(existsSync(leftover), false)
+  console.log('✓ held staging leftovers do not block seating or contaminate the new copy')
 
   for (const linked of [false, true]) {
     const dir = home({ dependencies: { [name]: '0.4.3', other: '1.0.0' }, listed: true })
@@ -294,7 +317,7 @@ try {
   assert.equal(existsSync(seat(unlisted)), false)
   console.log('✓ adopted runtimes are inspected without adding, swapping or withdrawing a seat')
 
-  for (const version of ['0.1.5-rc.1', '0.1.5-rc.10', '0.1.5', '0.1.6']) {
+  for (const version of ['0.1.5-rc.1', '0.1.5-rc.2', '0.1.5-rc.10', '0.1.5', '0.1.6']) {
     assert.equal(runtimeRefusal({ ...runtime, version }), undefined)
   }
   for (const version of [undefined, 'garbage', '0.1.2', '0.1.5-alpha.2', '0.2.0', '0.1.6-rc.1']) {

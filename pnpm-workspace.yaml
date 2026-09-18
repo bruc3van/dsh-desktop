@@ -41,13 +41,13 @@ allowBuilds:
   node-pty: true
   protobufjs: false
 
-# The official 0.1.5-rc.1 picker and fallback spawn include their Electron fixes.
+# The official 0.1.5-rc.2 picker and fallback spawn include their Electron fixes.
 # Issue #16 still needs ACL console preservation plus windowsHide on the Job
 # helper and CREATE_NO_WINDOW on current-token targets (never restricted-token
 # targets). Issue #19 also requires Electron Node mode across Job IPC, cleanup
 # in the ACL runner, and an output-checked probe. Validate with check:win32-console.
 patchedDependencies:
-  '@deepseek-ai/dsh-sandbox-windows-acl@0.1.5-rc.1': patches/@deepseek-ai__dsh-sandbox-windows-acl@0.1.5-rc.1.patch
-  '@deepseek-ai/dsh-subprocess-local@0.1.5-rc.1': patches/@deepseek-ai__dsh-subprocess-local@0.1.5-rc.1.patch
-  '@deepseek-ai/dsh-win32-process@0.1.5-rc.1': patches/@deepseek-ai__dsh-win32-process@0.1.5-rc.1.patch
-  '@deepseek-ai/dsh-sandbox-local@0.1.5-rc.1': patches/@deepseek-ai__dsh-sandbox-local@0.1.5-rc.1.patch
+  '@deepseek-ai/dsh-sandbox-windows-acl@0.1.5-rc.2': patches/@deepseek-ai__dsh-sandbox-windows-acl@0.1.5-rc.2.patch
+  '@deepseek-ai/dsh-subprocess-local@0.1.5-rc.2': patches/@deepseek-ai__dsh-subprocess-local@0.1.5-rc.2.patch
+  '@deepseek-ai/dsh-win32-process@0.1.5-rc.2': patches/@deepseek-ai__dsh-win32-process@0.1.5-rc.2.patch
+  '@deepseek-ai/dsh-sandbox-local@0.1.5-rc.2': patches/@deepseek-ai__dsh-sandbox-local@0.1.5-rc.2.patch

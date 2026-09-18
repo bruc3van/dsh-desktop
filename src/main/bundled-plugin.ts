@@ -7,7 +7,8 @@
  * @module dsh-desktop/bundled-plugin
  */
 
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import satisfies from 'semver/functions/satisfies.js'
 import valid from 'semver/functions/valid.js'
@@ -276,7 +277,8 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string, tak
       if (!takeover && marker?.version === installed && installed && valid(installed) && valid(version) && gt(installed, version)) return
     }
   }
-  const staging = seat + '.' + String(process.pid) + '.tmp'
+  // A held leftover may survive the sweep, including one from this process.
+  const staging = seat + '.' + String(process.pid) + '.' + randomUUID() + '.tmp'
   mkdirSync(dirname(seat), { recursive: true })
   // A crash between the copy and the rename leaves a whole plugin tree
   // behind, under a pid that will never come back to collect it. Sweep them
@@ -285,7 +287,7 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string, tak
   // `dereference` because the closure is pnpm-shaped in a source checkout:
   // the copy must carry files, not links back into a store this profile has
   // no reason to know about.
-  cpSync(pluginDir, staging, { recursive: true, dereference: true })
+  copyMarketTree(pluginDir, staging)
   writeFileSync(join(staging, SEAT_MARKER), JSON.stringify({ owner: SEAT_OWNER, version }, undefined, 2) + '\n')
   // Keep the window where the seat name is empty as small as it can be.
   // `dsh.profile.bundles` lists this package, and a boot landing while the
@@ -323,6 +325,33 @@ function ensureSeatCopy(dshHome: string, pluginDir: string, version: string, tak
     } catch {
       // Swept on the next copy; `sweepStagingDirs` knows this name.
     }
+  }
+}
+
+/**
+ * Electron's Windows fs.cpSync can abort in native basic_string handling when
+ * either path contains non-ASCII characters. Use the Unicode-safe single-file
+ * operations instead. Dereference pnpm links, but reject directory cycles.
+ * The destination is a fresh, client-owned staging directory.
+ */
+function copyMarketTree(source: string, destination: string, ancestors = new Set<string>()): void {
+  const info = statSync(source)
+  if (info.isFile()) {
+    copyFileSync(source, destination)
+    return
+  }
+  if (!info.isDirectory()) throw new Error('Unsupported bundled market file: ' + source)
+  const canonical = realpathSync(source)
+  if (ancestors.has(canonical)) throw new Error('Circular bundled market directory: ' + source)
+  ancestors.add(canonical)
+  try {
+    mkdirSync(destination)
+    for (const name of readdirSync(source)) {
+      copyMarketTree(join(source, name), join(destination, name), ancestors)
+    }
+    chmodSync(destination, info.mode)
+  } finally {
+    ancestors.delete(canonical)
   }
 }
 
@@ -403,7 +432,7 @@ function sweepStagingDirs(seat: string): void {
     return
   }
   for (const name of names) {
-    if (!name.startsWith(prefix) || !/^\d+\.(tmp|old)$/.test(name.slice(prefix.length))) continue
+    if (!name.startsWith(prefix) || !/^\d+\.(?:(?:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.)?tmp|old)$/.test(name.slice(prefix.length))) continue
     try {
       rmSync(join(parent, name), { recursive: true, force: true })
     } catch {

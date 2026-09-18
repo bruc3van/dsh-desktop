@@ -6,10 +6,12 @@ directories:
   output: release
 
 files:
-  - .build/**/*
-  # beforePack records the installer's MAX_PATH budget here for
-  # scripts/smoke-package.mjs to re-check; it is build metadata, not app code.
-  - "!.build/nsis-path-budget.json"
+  # Only ship runtime entry points. Local logs and test artifacts can change
+  # while ASAR is being assembled, invalidating its recorded file offsets.
+  - .build/main.mjs
+  - .build/preload.cjs
+  - .build/runtime-launcher.mjs
+  - .build/dsh-cli.mjs
   - resources/**/*
   # Build-time source for the .icns only; nothing reads it at runtime.
   - "!resources/icon-mac.png"
