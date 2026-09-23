@@ -9,3 +9,4 @@ output/playwright/
 *.log
 .DS_Store
 .mimosa
+.output
