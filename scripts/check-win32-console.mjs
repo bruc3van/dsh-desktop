@@ -22,11 +22,18 @@ for (const directory of [acl, subprocess, win32Process, sandboxLocal]) {
   if (!existsSync(join(directory, 'package.json'))) {
     throw new Error('deployed dsh runtime is missing; run `pnpm run prepare:runtime` before `pnpm run check:win32-console`')
   }
-  assert.equal(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')).version, '0.1.5-rc.2',
+  assert.equal(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')).version, '0.2.0-rc.1',
     'Reconcile the console patches when upgrading the runtime')
 }
 // The optional multi-candidate probe must reject a GUI process's empty exit 0.
 const sandboxSource = await readFile(join(sandboxLocal, 'lib', 'index.js'), 'utf8')
+const win32Bindings = []
+for (const name of (await readdir(join(acl, 'lib'))).filter(name => name.endsWith('.js'))) {
+  const source = await readFile(join(acl, 'lib', name), 'utf8')
+  const exported = source.match(/export \{[^}]*\bwin32 as (\w+)/)
+  if (exported) win32Bindings.push({ path: join(acl, 'lib', name), exported: exported[1] })
+}
+assert.equal(win32Bindings.length, 1, 'locate the native win32 binding by its export, independent of chunk hashes')
 const probeSource = sandboxSource.match(/function defaultProbeWindowsAcl\([\s\S]*?\n\}/)?.[0]
 assert.ok(probeSource, 'Reconcile the Windows ACL probe on runtime upgrades')
 const probeFactory = new Function('spawnSync', 'tmpdir', `${probeSource}; return defaultProbeWindowsAcl`)
@@ -119,12 +126,12 @@ assert.ok(targetEnvironmentExport, 'Cannot locate deployed targetEnvironment exp
 const spawnBody = source.slice(source.indexOf('function spawnSubprocess('))
 const options = /const child = \(internals.spawn \?\? spawn\)\(program, args, (\{[\s\S]*?\n\t\})\);/.exec(spawnBody)?.[1]
 assert.ok(options, 'Cannot locate deployed subprocess spawn options')
-const readOptions = new Function('platform', 'spec', 'childEnv', `return (${options})`)
+const readOptions = new Function('platform', 'spec', 'childEnv', 'controlEnvironment', 'stdio', `return (${options})`)
 for (const platform of ['win32', 'darwin', 'linux']) {
   const actual = readOptions(platform, {
     cwd: '/fixture', env: { FIXTURE: '1' },
     stdio: { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' },
-  }, env => env)
+  }, env => env, env => env, ['pipe', 'pipe', 'inherit'])
   assert.equal(actual.windowsHide, platform === 'win32')
   assert.equal(actual.detached, platform !== 'win32')
   assert.deepEqual(actual.stdio, ['pipe', 'pipe', 'inherit'])
@@ -132,9 +139,9 @@ for (const platform of ['win32', 'darwin', 'linux']) {
 }
 const jobSource = await readFile(join(subprocess, 'lib', 'index.js'), 'utf8')
 const jobBody = jobSource.slice(jobSource.indexOf('function launchWindowsJob('))
-const jobOptions = /env: runnerEnvironment\(WINDOWS_RUNNER_SELECTION, invocation\),([\s\S]*?)stdio:/.exec(jobBody)?.[1]
+const jobOptions = /\], (\{[\s\S]*?\n\t\t\})\);/.exec(jobBody)?.[1]
 assert.ok(jobOptions, 'Cannot locate deployed Windows Job helper spawn options')
-assert.equal(new Function(`return ({${jobOptions}})`)().windowsHide, true)
+assert.equal(new Function('runnerEnvironment', 'WINDOWS_RUNNER_SELECTION', 'invocation', 'runnerStdio', 'spec', 'ignoredStdinFd', `return (${jobOptions})`)(() => ({}), 'fixture', {}, () => [], {}, undefined).windowsHide, true)
 const processSource = await readFile(join(win32Process, 'lib', 'index.js'), 'utf8')
 const currentTokenBody = processSource.slice(processSource.indexOf('function spawnCurrentTokenJobProcess('))
 const flags = /api\.createProcessW\(options.applicationName, commandLine, null, null, 1, ([\d\sxXa-fA-F|]+), environment,/.exec(currentTokenBody)?.[1]
@@ -263,8 +270,8 @@ try {
           const argv = mode === 'danger-full-access' ? shell : [process.execPath,
             ${JSON.stringify(join(acl, 'lib', 'runner.js'))}, '--workspace', ${JSON.stringify(workspace)},
             '--temp', ${JSON.stringify(temp)}, '--mode', mode, '--', ...shell];
-          const spec = PwshLocalExecutor.prototype.spawnSpec.call({ config: { maxSpillBytes: 64000,
-            maxOutputBytes: 64000, graceMs: 200 } }, { workdir: ${JSON.stringify(workspace)} },
+          const spec = PwshLocalExecutor.prototype.spawnSpec.call({ config: { maxSpillBytes: { get: () => 64000 },
+            maxOutputBytes: { get: () => 64000 }, graceMs: { get: () => 200 } } }, { workdir: ${JSON.stringify(workspace)} },
             64000, AbortSignal.timeout(20000), argv);
           assert.equal(targetEnvironment(spec).ELECTRON_RUN_AS_NODE,
             mode === 'danger-full-access' ? undefined : '1', 'Job IPC must carry Electron Node mode only for the runner');
@@ -299,7 +306,7 @@ try {
   const probe = `
     const { createRequire } = require('node:module');
     (async () => {
-      const { o: win32 } = await import(${JSON.stringify(pathToFileURL(join(acl, 'lib', 'types-DuU3lSVe.js')).href)});
+      const { [${JSON.stringify(win32Bindings[0].exported)}]: win32 } = await import(${JSON.stringify(pathToFileURL(win32Bindings[0].path).href)});
       const { prepareRunnerConsole } = await import(${JSON.stringify(pathToFileURL(join(acl, 'lib', 'types-desktop-console.js')).href)});
       const api = await win32();
       const handles = [-10, -11, -12].map(n => api.getStdHandle(n));

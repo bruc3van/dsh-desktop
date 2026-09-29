@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import satisfies from 'semver/functions/satisfies.js'
+import parseVersion from 'semver/functions/parse.js'
 import { abandonBundledPlugin, BUNDLED_PLUGIN_NAME, inspectBundledPlugin, seatBundledPlugin, withdrawBundledPlugin } from './bundled-plugin.ts'
 
 export const MARKET_BOOT_VARIABLE = 'DSH_DESKTOP_BUNDLED_MARKET'
@@ -18,6 +19,14 @@ interface PackageManifest {
   version: string
   peerDependencies?: Record<string, string>
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
+}
+
+/** Accept runtime RCs within a release range, without crossing its stable upper bound. */
+export function compatibleMarketPeer(version: string, range: string): boolean {
+  if (satisfies(version, range)) return true
+  const parsed = parseVersion(version)
+  return parsed !== null && satisfies(version, range, { includePrerelease: true })
+    && satisfies(`${parsed.major}.${parsed.minor}.${parsed.patch}`, range, { includePrerelease: true })
 }
 
 /** Node package lookup without assuming that package.json is an exported subpath. */
@@ -44,7 +53,7 @@ export async function prepareBundledMarket(entry: string, request: MarketBootReq
     for (const [name, range] of peers) {
       const dependency = packageManifest(anchor, name)
       if (dependency === undefined && market.peerDependenciesMeta?.[name]?.optional === true) continue
-      if (dependency === undefined || !satisfies(dependency.version, range)) {
+      if (dependency === undefined || !compatibleMarketPeer(dependency.version, range)) {
         throw new Error('the selected runtime does not provide compatible peer ' + name + '@' + range)
       }
     }
@@ -57,7 +66,8 @@ export async function prepareBundledMarket(entry: string, request: MarketBootReq
     const appBoot = await import(pathToFileURL(appBootPath).href) as {
       initProfile(dir: string, bundles: string[], patchReload: string): void
       loadProfileDirectory(bin: string, dir: string, anchor: string): unknown
-      healProfilesModuleFallback(options: { installAnchor: string; profile: unknown; home: string }): Promise<void>
+      healProfilesModuleFallback?(options: { installAnchor: string; profile: unknown; home: string }): Promise<void>
+      createRuntimeResolution?(options: { installAnchor: string; profile: unknown; home: string }): Promise<unknown>
       PROFILE_TEMPLATES: { web: { bundles: string[]; patchReload: string } }
     }
     const template = appBoot.PROFILE_TEMPLATES.web
@@ -68,7 +78,7 @@ export async function prepareBundledMarket(entry: string, request: MarketBootReq
     if (!inspectBundledPlugin(home).owned
       && existsSync(join(home, 'profiles', 'web', 'node_modules', BUNDLED_PLUGIN_NAME, 'package.json'))) {
       const existingProfile = appBoot.loadProfileDirectory('dsh', join(home, 'profiles', 'web'), anchor)
-      await appBoot.healProfilesModuleFallback({ installAnchor: anchor, profile: existingProfile, home })
+      await appBoot.healProfilesModuleFallback?.({ installAnchor: anchor, profile: existingProfile, home })
     }
     const result = seatBundledPlugin(pluginDir, home, {
       version: runtime.version, peersVerified: true,
@@ -79,7 +89,10 @@ export async function prepareBundledMarket(entry: string, request: MarketBootReq
     })
     if (result.error !== undefined) throw new Error(result.error)
     const profile = appBoot.loadProfileDirectory('dsh', join(home, 'profiles', 'web'), anchor)
-    await appBoot.healProfilesModuleFallback({ installAnchor: anchor, profile, home })
+    // Since 0.2, DSH routes profile peers in memory instead of writing fallback
+    // links. The CLI installs that resolver when it boots the profile.
+    if (appBoot.createRuntimeResolution) await appBoot.createRuntimeResolution({ installAnchor: anchor, profile, home })
+    else await appBoot.healProfilesModuleFallback?.({ installAnchor: anchor, profile, home })
     const issues = marketPeerIssues(home, anchor)
     for (const issue of issues) console.warn('[desktop] market dependency drift: ' + issue)
     if (issues.length > 0 && result.owned) throw new Error('client-owned market has incompatible profile dependencies; repair the profile dependencies before enabling it')
@@ -99,12 +112,18 @@ export function marketPeerIssues(home: string, runtimeAnchor?: string): string[]
   const issues: string[] = []
   for (const [name, range] of Object.entries(market.peerDependencies ?? {})) {
     // Ignore stale automatic fallbacks for optional peers absent from this runtime.
-    const dependency = packageManifest(anchor, name)
+    let dependency = packageManifest(anchor, name)
+    if (runtimeAnchor !== undefined) {
+      const selected = packageManifest(runtimeAnchor, name)
+      // Modern DSH intercepts at profiles/node_modules. Old automatic links
+      // at that layer cannot override the installation's package table.
+      if (dependency === undefined || isLegacyOptionalFallback(home, name, dependency.installationPath)) dependency = selected
+    }
     if (runtimeAnchor !== undefined && market.peerDependenciesMeta?.[name]?.optional === true
       && packageManifest(runtimeAnchor, name) === undefined
       && isLegacyOptionalFallback(home, name, dependency?.installationPath)) continue
     if (dependency === undefined && market.peerDependenciesMeta?.[name]?.optional === true) continue
-    if (dependency === undefined || !satisfies(dependency.version, range)) {
+    if (dependency === undefined || !compatibleMarketPeer(dependency.version, range)) {
       issues.push(name + ': resolved ' + (dependency?.version ?? 'missing') + (dependency?.installationPath === undefined ? '' : ' at ' + dependency.installationPath) + ', expected ' + range + ' (from ' + anchor + '); user packages were preserved')
     }
   }

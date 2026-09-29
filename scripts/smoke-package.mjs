@@ -190,9 +190,9 @@ for (const [key, value] of Object.entries(process.env)) {
 // Start with no profile: the managed launcher must initialize and seat the
 // market before DSH composes its first plugin tree.
 const resources = packagedResourcesDir(executable)
-const packagedMarket = join(resources, 'bundled-plugins', 'dsh-desktop-safe-market')
+const packagedMarket = join(resources, 'bundled-plugins', 'safer-dsh-market')
 if (!existsSync(join(packagedMarket, 'package.json'))) throw new Error('packaged market payload missing')
-if (existsSync(join(resources, 'dsh-runtime', 'node_modules', 'dsh-desktop-safe-market'))) {
+if (existsSync(join(resources, 'dsh-runtime', 'node_modules', 'safer-dsh-market'))) {
   throw new Error('market payload must not be visible from the DSH installation anchor')
 }
 // This is the one caller that runs a PACKAGED build, where every DSH_* override
@@ -350,7 +350,7 @@ try {
   // its guarded entry deliberately lets the Web UI survive an incompatible API.
   if (cookie === undefined) throw new Error('bundled runtime must support browser-session authentication')
   for (const method of ['describe', 'getSettings', 'listInstalled']) {
-    const route = 'safeMarket/' + method
+    const route = 'saferMarket/' + method
     const request = () => fetch(url + '/api/' + route, {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie: cookie.header },
@@ -367,17 +367,17 @@ try {
       marketResponse = await request()
     }
     const marketText = await marketResponse.text()
-    if (!marketResponse.ok) throw new Error('packaged safe-market ' + method + ' HTTP '
+    if (!marketResponse.ok) throw new Error('packaged safer-dsh-market ' + method + ' HTTP '
       + marketResponse.status + ': ' + marketText)
     const marketBody = JSON.parse(marketText)
     if (!marketResponse.ok || marketBody?.result?.ok !== true) {
-      throw new Error('packaged safe-market ' + method + ' failed: ' + JSON.stringify(marketBody))
+      throw new Error('packaged safer-dsh-market ' + method + ' failed: ' + JSON.stringify(marketBody))
     }
     if (method === 'describe' && marketBody.result.value?.version !== JSON.parse(
       await readFile(join(packagedMarket, 'package.json'), 'utf8'),
     ).version) throw new Error('packaged market version differs from the running service')
   }
-  console.log('✓ bundled safe-market describe / settings / installed APIs loaded on the new runtime')
+  console.log('✓ bundled safer-dsh-market describe / settings / installed APIs loaded on the new runtime')
   console.log('✓ packaged app selected its bundled @deepseek-ai/dsh runtime')
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
   console.log('✓ packaged resources include dsh-cli.mjs')

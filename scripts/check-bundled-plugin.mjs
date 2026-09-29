@@ -36,6 +36,70 @@ function home({ dependencies, listed = false } = {}) {
 }
 const payload = pkg(join(temp, 'payload'), '0.5.0')
 try {
+  const previousName = 'dsh-desktop-safe-market'
+  const cleanupFailure = home({ listed: true })
+  pkg(seat(cleanupFailure), '0.5.0', true)
+  pkg(join(cleanupFailure, 'profiles/node_modules', previousName), '0.4.3', true)
+  const originalReaddir = fs.readdirSync
+  try {
+    fs.readdirSync = (path, ...args) => {
+      if (path === join(cleanupFailure, 'profiles')) throw new Error('simulated EACCES')
+      return originalReaddir(path, ...args)
+    }
+    syncBuiltinESMExports()
+    assert.equal(withdrawBundledPlugin(cleanupFailure), true)
+    assert.equal(read(cleanupFailure).dsh.profile.bundles.includes(name), false)
+  } finally {
+    fs.readdirSync = originalReaddir
+    syncBuiltinESMExports()
+  }
+  for (const shared of [false, true]) {
+    const renamed = home()
+    const previous = join(renamed, shared ? 'profiles/node_modules' : 'profiles/web/node_modules', previousName)
+    pkg(previous, '0.4.3', true)
+    const manifest = read(renamed)
+    manifest.dsh.profile.bundles.push(previousName)
+    writeFileSync(manifestPath(renamed), JSON.stringify(manifest))
+    if (shared) {
+      const other = join(renamed, 'profiles/other/package.json')
+      mkdirSync(dirname(other), { recursive: true })
+      writeFileSync(other, JSON.stringify({ dsh: { profile: { bundles: [previousName] } } }))
+    }
+    const before = readFileSync(manifestPath(renamed), 'utf8')
+    seatBundledPlugin(payload, renamed, { serving: true })
+    assert.equal(readFileSync(manifestPath(renamed), 'utf8'), before)
+    assert.equal(seatBundledPlugin(payload, renamed, runtime).owned, true)
+    assert.deepEqual(read(renamed).dsh.profile.bundles, ['@deepseek-ai/dsh-base', name])
+    assert.equal(existsSync(previous), shared, 'a shared copy referenced by another profile survives')
+    assert.equal(seatBundledPlugin(payload, renamed, runtime).added, false)
+  }
+  const oldDisabled = home()
+  const oldDisabledSeat = join(oldDisabled, 'profiles/web/node_modules', previousName)
+  pkg(oldDisabledSeat, '0.4.3', true)
+  const oldDisabledManifest = read(oldDisabled)
+  oldDisabledManifest.dsh.profile.bundles.push(previousName)
+  writeFileSync(manifestPath(oldDisabled), JSON.stringify(oldDisabledManifest))
+  abandonBundledPlugin(oldDisabled)
+  assert.equal(existsSync(oldDisabledSeat), false)
+  assert.equal(read(oldDisabled).dsh.profile.bundles.includes(previousName), false)
+  const oldUser = home({ dependencies: { [previousName]: 'file:custom-market' } })
+  const oldUserSeat = join(oldUser, 'profiles/web/node_modules', previousName)
+  pkg(oldUserSeat, '0.4.3')
+  const oldUserManifest = read(oldUser)
+  oldUserManifest.dsh.profile.bundles.push(previousName)
+  writeFileSync(manifestPath(oldUser), JSON.stringify(oldUserManifest))
+  const oldUserBefore = readFileSync(manifestPath(oldUser), 'utf8')
+  assert.equal(seatBundledPlugin(payload, oldUser, runtime).seated, false)
+  abandonBundledPlugin(oldUser)
+  assert.equal(readFileSync(manifestPath(oldUser), 'utf8'), oldUserBefore)
+  assert.equal(existsSync(oldUserSeat), true)
+  assert.equal(existsSync(seat(oldUser)), false)
+  oldUserManifest.dsh.profile.bundles = ['@deepseek-ai/dsh-base']
+  writeFileSync(manifestPath(oldUser), JSON.stringify(oldUserManifest))
+  assert.equal(seatBundledPlugin(payload, oldUser, runtime).owned, true)
+  assert.equal(read(oldUser).dependencies[previousName], 'file:custom-market')
+  assert.equal(existsSync(oldUserSeat), true, 'disabled user packages remain untouched')
+  console.log('✓ renamed managed markets migrate without duplicate activation; shared, adopted and custom installations survive')
   assert.equal(seatBundledPlugin(payload, join(temp, 'missing'), runtime).seated, false)
   const owned = home()
   assert.deepEqual(seatBundledPlugin(payload, owned, runtime), { seated: true, added: true, owned: true })
@@ -115,14 +179,14 @@ try {
   console.log('✓ older registry installs migrate with lock consistency; pnpm targets, custom sources and newer versions survive')
 
   for (const source of [
-    'https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.4.3.tar.gz',
-    'https://github.com/another/dsh-desktop-safe-market/archive/refs/tags/v0.4.3.tar.gz',
-    'https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/heads/main.tar.gz',
-    'https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.4.3.tar.gz?custom=1',
+    'https://github.com/bruc3van/safer-dsh-market/archive/refs/tags/v0.4.3.tar.gz',
+    'https://github.com/another/safer-dsh-market/archive/refs/tags/v0.4.3.tar.gz',
+    'https://github.com/bruc3van/safer-dsh-market/archive/refs/heads/main.tar.gz',
+    'https://github.com/bruc3van/safer-dsh-market/archive/refs/tags/v0.4.3.tar.gz?custom=1',
   ]) {
     const dir = home({ dependencies: { [name]: source }, listed: true })
     pkg(seat(dir), '0.4.3')
-    const official = source === 'https://github.com/bruc3van/dsh-desktop-safe-market/archive/refs/tags/v0.4.3.tar.gz'
+    const official = source === 'https://github.com/bruc3van/safer-dsh-market/archive/refs/tags/v0.4.3.tar.gz'
     assert.equal(seatBundledPlugin(updated, dir, runtime).owned, official)
     assert.equal(JSON.parse(readFileSync(join(seat(dir), 'package.json'))).version, official ? '0.5.1' : '0.4.3')
   }

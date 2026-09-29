@@ -19,7 +19,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const LAUNCHER = join(APP_DIR, '.build', 'runtime-launcher.mjs')
@@ -41,6 +41,8 @@ const pnpmFixture = join(workDir, 'pnpm.mjs')
 await writeFile(pnpmFixture, `
 process.stdout.write(JSON.stringify({
   marker: 'bundled-pnpm',
+  parentOnly: process.env.DESKTOP_PARENT_ONLY ?? null,
+  explicit: process.env.DESKTOP_EXPLICIT ?? null,
   ci: process.env.CI ?? null,
   argv: process.argv.slice(2),
   nodeMode: process.env.ELECTRON_RUN_AS_NODE ?? null,
@@ -52,6 +54,41 @@ process.stdout.write(JSON.stringify({
 await writeFile(fixture, `
 import { writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import assert from 'node:assert/strict'
+
+const bridgeKey = Symbol.for('dsh-desktop.pnpm')
+const bridge = globalThis[bridgeKey]
+if (bridge) {
+  assert.equal(Reflect.set(globalThis, bridgeKey, {}), false)
+  assert.equal(Reflect.deleteProperty(globalThis, bridgeKey), false)
+  assert.equal(Reflect.set(bridge, 'command', 'other'), false)
+  assert.equal(Reflect.set(bridge.args, '0', 'other'), false)
+  assert.equal(Reflect.set(bridge.env, 'CI', 'false'), false)
+  // The lightweight CI job runs before runtime deployment; package jobs also
+  // exercise the actual execa bridge below once the closure is available.
+  if (${existsSync(join(APP_DIR, '.runtime/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/desktop-pnpm.js'))}) {
+  const helper = ${JSON.stringify(pathToFileURL(join(APP_DIR, '.runtime/node_modules/@deepseek-ai/dsh-plugin-manager/lib/types/desktop-pnpm.js')).href)}
+  const { execa } = await import(helper)
+  if (process.platform === 'win32') {
+    const explicitPnpm = ${JSON.stringify(join(workDir, 'pnpm.cmd'))}
+    writeFileSync(explicitPnpm, '@echo explicit-pnpm-path')
+    assert.equal((await execa(explicitPnpm, [])).stdout.trim(), 'explicit-pnpm-path')
+  }
+  process.env.DESKTOP_PARENT_ONLY = 'must-not-leak'
+  for (const command of ['pnpm', 'pnpm.cmd']) {
+    const child = await execa(command, ['isolated-probe'], {
+      extendEnv: false, env: { DESKTOP_EXPLICIT: 'kept' }, shell: true,
+    })
+    const result = JSON.parse(child.stdout)
+    assert.equal(result.marker, 'bundled-pnpm')
+    assert.equal(result.parentOnly, null)
+    assert.equal(result.explicit, 'kept')
+    assert.equal(result.nodeMode, null)
+    assert.equal(result.entryVariable, null)
+  }
+  delete process.env.DESKTOP_PARENT_ONLY
+  }
+}
 
 if (process.env.DSH_DESKTOP_FIXTURE_MARKER) writeFileSync(process.env.DSH_DESKTOP_FIXTURE_MARKER, 'imported')
 
@@ -162,7 +199,7 @@ const AUDITED_INDIRECT = new Map([
   // The built/source/pkg invocation arrays feed spawn() in subprocess-local's
   // Linux scope and Windows Job launchers. The actual Electron runner path is
   // exercised by check:win32-console; do not allow the whole chunk wholesale.
-  ['@deepseek-ai/dsh-subprocess-local/lib/runner-launch-COYGu0Dl.js', [
+  ['@deepseek-ai/dsh-subprocess-local/lib/runner-launch-B2zsQ1Dz.js', [
     {
       label: 'Electron target environment across Job IPC',
       context: 'if (process.versions.electron && process.platform === "win32" && spec.argv[0].toLowerCase() === process.execPath.toLowerCase()) {',
@@ -179,6 +216,19 @@ const AUDITED_INDIRECT = new Map([
       context: 'return [\n\t\tprocess.execPath,\n\t\t"--import",',
       expected: 1,
     },
+  ]],
+  // SenseVoice explicitly sets Electron Node mode on its subprocess request;
+  // PTC feeds its configured executable through the patched subprocess runtime.
+  ['@deepseek-ai/dsh-experimental-speech-to-text-sensevoice/lib/index.js', [
+    { label: 'speech worker through subprocess', context: 'argv: [\n\t\t\t\t\tprocess.execPath,\n\t\t\t\t\t...runtime.worker', expected: 1 },
+  ]],
+  ['@deepseek-ai/dsh-ptc-runtime-node/lib/index.js', [
+    { label: 'PTC executable default for subprocess', context: 'nodeExecutable: config.nodeExecutable ?? process.execPath', expected: 1 },
+  ]],
+  // This fallback is descriptive skill metadata, guarded by an explicit
+  // Electron/SEA rejection unless the application supplies standalone Node.
+  ['@deepseek-ai/dsh-skill-office/lib/index.js', [
+    { label: 'standalone Office Node metadata', context: 'const node = config.node ?? process.execPath;', expected: 1 },
   ]],
   ['@deepseek-ai/dsh-tool-fs-search/lib/index.js', [
     {

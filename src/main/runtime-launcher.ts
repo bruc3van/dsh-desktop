@@ -68,6 +68,17 @@ if (nodeMode !== undefined && nodeMode !== '') {
   // its ESM facade from the unpatched exports, and the harness's own
   // `import { spawn } from 'node:child_process'` would bind to the originals.
   const childProcess = createRequire(import.meta.url)('node:child_process') as SpawnHost
+  // The bundled plugin-manager patch consumes structured invocation options
+  // before execa performs Windows shell escaping. Keep these coordinates in
+  // memory so they cannot leak into Agent or lifecycle environments.
+  if (pnpmEntry !== undefined) {
+    Object.defineProperty(globalThis, Symbol.for('dsh-desktop.pnpm'), { value: Object.freeze({
+      command: process.execPath,
+      args: Object.freeze([fileURLToPath(import.meta.url)]),
+      env: Object.freeze({ ELECTRON_RUN_AS_NODE: nodeMode, CI: 'true',
+        [ENTRY_VARIABLE]: pnpmEntry, [PNPM_ENTRY_VARIABLE]: pnpmEntry }),
+    }) })
+  }
   patchRuntimeSpawns(childProcess, nodeMode, process.execPath, process.platform, process.env, pnpmEntry, fileURLToPath(import.meta.url))
 }
 

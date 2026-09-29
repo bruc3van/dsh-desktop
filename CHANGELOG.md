@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.5.13] - 2026-09-29
+
+- Electron 固定升级至 `44.0.0`，满足新版 dsh 原生模块的兼容要求；适配新版插件管理器的内置 pnpm 调用。
+- 内置 DSH 升级至 `0.2.0-rc.1`，同步平台依赖、插件依赖解析和 Windows Electron 兼容补丁。
+- Linux Landlock 原生依赖由旧 `node-addon-landlock-run` 切换为上游 `node-addon-system/landlock-run`；该包仅提供 Linux/macOS 组件，Windows 继续使用 ACL 沙箱。
+- 内置市场升级为更名后的 `safer-dsh-market@0.8.3`；启动时迁移客户端管理的旧名称副本，保留用户自装版本及其他 profile 仍在使用的共享副本。
+- 市场安装改用官方插件管理器，AI 审查为安装后的可选操作；旧市场的目录开关需在新版页面重新启用。
+- 修复旧市场清理异常阻止撤销的问题，加固 pnpm 桥接不可变性、peer 缺失诊断和 RC 版本上界检查。
+
 ## [0.5.12] - 2026-09-18
 
 ### 内置运行时

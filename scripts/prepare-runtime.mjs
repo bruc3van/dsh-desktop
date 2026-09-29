@@ -33,13 +33,10 @@ const pnpmArgs = [
   '.runtime',
 ]
 
-// Node 24 no longer launches Windows batch files directly with spawn(). Run
-// pnpm through cmd.exe there; every argument is a fixed project-owned value.
-const command = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'pnpm'
-const args = process.platform === 'win32'
-  ? ['/d', '/s', '/c', ['pnpm', ...pnpmArgs].join(' ')]
-  : pnpmArgs
-const child = spawn(command, args, { cwd: APP_DIR, stdio: 'inherit' })
+// Use the exact runtime dependency, including under Corepack: a newer global
+// pnpm on PATH may reject this project's pinned packageManager version.
+const pnpmEntry = join(APP_DIR, 'dsh-runtime', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
+const child = spawn(process.execPath, [pnpmEntry, ...pnpmArgs], { cwd: APP_DIR, stdio: 'inherit' })
 
 const code = await new Promise((resolve, reject) => {
   child.once('error', reject)
@@ -178,7 +175,7 @@ await assertNoTsEntryPoints(runtimeModules)
 // resolution disagree with a user's profile-local upgrade.
 const bundledPlugins = join(destination, 'bundled-plugins')
 await mkdir(bundledPlugins, { recursive: true })
-await rename(join(runtimeModules, 'dsh-desktop-safe-market'), join(bundledPlugins, 'dsh-desktop-safe-market'))
+await rename(join(runtimeModules, 'safer-dsh-market'), join(bundledPlugins, 'safer-dsh-market'))
 console.log('[runtime] market payload isolated from DSH installation module lookup')
 console.log('[runtime] no manifest resolves to a pruned .ts entry point')
 

@@ -1,0 +1,47 @@
+diff --git a/lib/index.js b/lib/index.js
+index 7ebf353150852b62a67ae9b3a6cdc902a6d86b8d..3f6ab5a640e362e1ab684be13099519c42f3a836 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -9,7 +9,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
+ import { pluginEntryId, readPluginInventory } from "@deepseek-ai/dsh-host-plugin-inventory";
+ import { OPTIONAL_BUNDLES, PROFILE_COMPATIBILITY_FILENAME, bundlePatchPaths, composeEntries, evaluatePluginCompatibility, loadOptionalPatches, loadOverlayPatches, pluginCompatibilityWarning, readPluginMeta, readProfileCompatibility, readProfileManifest, readProfilePatches, readProfileVersionExemptions, reconcileProfilePatches, resolveBundleDir, resolveProfileDir, setProfileVersionExemption } from "@deepseek-ai/dsh-app-boot";
+ import { once } from "node:events";
+-import { execa } from "execa";
++import { execa } from "./types/desktop-pnpm.js";
+ import { scrubbedParentEnv } from "@deepseek-ai/dsh-subprocess";
+ import { isAlias, isMap, isNode, isScalar, isSeq, parseDocument, visit } from "yaml";
+ //#region lib/types/install-spec.js
+diff --git a/lib/types/desktop-pnpm.js b/lib/types/desktop-pnpm.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..b26112cef958a3cb1e6377234b9b1c05752e1be0
+--- /dev/null
++++ b/lib/types/desktop-pnpm.js
+@@ -0,0 +1,15 @@
++import { execa as originalExeca } from "execa";
++// DSH Desktop supplies the bundled package manager before importing the CLI.
++// Rewrite structured argv before execa turns a Windows command into cmd.exe.
++export function execa(command, args, options) {
++  const runtime = globalThis[Symbol.for('dsh-desktop.pnpm')];
++  if (runtime && (command === 'pnpm' || command === 'pnpm.cmd')) {
++    return originalExeca(runtime.command, [...runtime.args, ...args], {
++      ...options,
++      shell: false,
++      windowsHide: process.platform === 'win32',
++      env: { ...options?.env, ...runtime.env },
++    });
++  }
++  return originalExeca(command, args, options);
++}
+diff --git a/lib/types/operations.js b/lib/types/operations.js
+index a0410a5304a0045be515f97cfc20c62213585459..e26b051fc5ef928ed334f0b75c7929a08b4686e9 100644
+--- a/lib/types/operations.js
++++ b/lib/types/operations.js
+@@ -3,7 +3,7 @@ import { once } from 'node:events';
+ import { existsSync, readFileSync } from 'node:fs';
+ import { mkdir, mkdtemp, open, rm } from 'node:fs/promises';
+ import { join, resolve } from 'node:path';
+-import { execa } from 'execa';
++import { execa } from './desktop-pnpm.js';
+ import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
+ import { DEFAULT_PROFILE_BUNDLES, bundlePatchPaths, initProfile, PROFILE_TEMPLATES, readProfileManifest, resolveBundleDir, resolveProfileDir, loadOverlayPatches, composeEntries, readProfileVersionExemptions, evaluatePluginCompatibility, pluginCompatibilityWarning, } from '@deepseek-ai/dsh-app-boot';
+ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess';

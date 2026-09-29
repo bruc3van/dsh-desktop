@@ -165,10 +165,10 @@ try {
   await settings.waitForFunction(() => !document.getElementById('market-toggle').disabled)
   await settings.waitForFunction(() => /未安装|Not installed/.test(document.getElementById('market-status').textContent))
   const marketProfile = join(home, 'dsh/profiles/web')
-  const marketPackage = join(marketProfile, 'node_modules/dsh-desktop-safe-market')
+  const marketPackage = join(marketProfile, 'node_modules/safer-dsh-market')
   mkdirSync(marketPackage, { recursive: true })
-  writeFileSync(join(marketPackage, 'package.json'), JSON.stringify({ name: 'dsh-desktop-safe-market', version: '0.5.1' }))
-  writeFileSync(join(marketProfile, 'package.json'), JSON.stringify({ dsh: { profile: { bundles: ['dsh-desktop-safe-market'] } } }))
+  writeFileSync(join(marketPackage, 'package.json'), JSON.stringify({ name: 'safer-dsh-market', version: '0.5.1' }))
+  writeFileSync(join(marketProfile, 'package.json'), JSON.stringify({ dsh: { profile: { bundles: ['safer-dsh-market'] } } }))
   await settings.waitForFunction(() => document.getElementById('market-status').textContent.includes('0.5.1'))
   // Model self-uninstall's disk changes while the settings panel stays open.
   writeFileSync(join(marketProfile, 'package.json'), JSON.stringify({ dsh: { profile: { bundles: [] } } }))

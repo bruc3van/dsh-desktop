@@ -3,9 +3,8 @@
  * pnpm's `engines.node`.
  *
  * pnpm 11 hard-exits (not a warning) if `process.versions.node` is below its
- * floor — currently `>=22.13`, while Electron 39 ships 22.22, a 0.09-minor
- * margin. An Electron upgrade that slipped under that floor would turn every
- * `dsh plugin add` into a hard failure with no earlier signal. Unparseable
+ * floor — currently `>=22.13`. An Electron upgrade that slipped under that
+ * floor would make every `dsh plugin add` fail with no earlier signal. Unparseable
  * range forms also fail here: silently skipping them would hide the coupling.
  *
  * Usage: node scripts/check-pnpm-engine.mjs
@@ -49,7 +48,8 @@ if (!satisfiesMinimum(actual, minimum)) {
     + JSON.stringify(range) + ' (minimum ' + formatVersion(minimum) + ')')
 }
 
-console.log('✓ Electron Node ' + nodeVersion + ' satisfies bundled pnpm engines.node ' + JSON.stringify(range))
+console.log('✓ Electron Node ' + nodeVersion + ' satisfies bundled pnpm engines.node ' + JSON.stringify(range)
+  + '; DSH native internal-module bridge is supported')
 
 /**
  * Only `>=x`, `>=x.y`, and `>=x.y.z` (optional spaces, optional leading `v`).
@@ -83,9 +83,18 @@ function formatVersion(version) {
 
 function readElectronNodeVersion(executable) {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, ['-e', 'process.stdout.write(process.versions.node)'], {
+    // DSH 0.2 resolves profile modules through a native Node-internals bridge.
+    // A compatible Node version alone does not prove its Electron fingerprint
+    // is supported (Electron 39 passed engines but failed this exact import).
+    const anchor = join(APP_DIR, '.runtime', 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+    const probe = `const requireRuntime = require('node:module').createRequire(${JSON.stringify(anchor)});
+      const loader = requireRuntime('node-addon-require-builtin').requireBuiltin('internal/modules/esm/loader');
+      if (!loader) throw new Error('DSH internal module loader unavailable');
+      process.stdout.write(process.versions.node);`
+    const child = spawn(executable, ['--expose-internals', '-e', probe], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     })
     let stdout = ''
     let stderr = ''

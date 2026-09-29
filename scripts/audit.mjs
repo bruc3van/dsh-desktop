@@ -210,7 +210,8 @@ check('update card leaves Models tab', await settingsDialog.locator('#dsh-deskto
 const deepSeekHelp = settingsDialog.locator('.dsh-desktop-key-help a')
 await checkKeyHelpLink('DeepSeek settings key link', deepSeekHelp)
 
-await settingsDialog.getByRole('button', { name: /添加自定义提供方|Add a custom provider/i }).click()
+await settingsDialog.getByRole('button', { name: /添加模型提供商|Add model provider/i }).click()
+await settingsDialog.getByRole('tab', { name: /自定义模型 API|Custom model API/i }).click()
 await window.waitForTimeout(200)
 const customKey = settingsDialog.locator('input[type="password"]').last()
 const customHelpCount = await customKey.locator('xpath=..').locator('.dsh-desktop-key-help').count()

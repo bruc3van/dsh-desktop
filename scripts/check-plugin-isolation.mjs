@@ -391,8 +391,8 @@ if (process.argv.includes('--version')) {
   process.exit(0)
 }
 const manifest = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'profiles', 'web', 'package.json'), 'utf8'))
-if (manifest.dsh.profile.bundles.includes('dsh-desktop-safe-market')) {
-  process.stderr.write('Error: plugin(s) failed to activate: dsh-desktop-safe-market\\n')
+if (manifest.dsh.profile.bundles.includes('safer-dsh-market')) {
+  process.stderr.write('Error: plugin(s) failed to activate: safer-dsh-market\\n')
   process.exit(1)
 }
 const server = createServer((req, res) => {
@@ -449,7 +449,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
   const manifestAfterRetry = JSON.parse(readFileSync(seatManifest, 'utf8'))
   const installedStarts = seatLog.match(/dsh runtime: installed/g)?.length ?? 0
   if (seatSettings.dshDataMode === 'isolated'
-    || manifestAfterRetry.dsh.profile.bundles.includes('dsh-desktop-safe-market')
+    || manifestAfterRetry.dsh.profile.bundles.includes('safer-dsh-market')
     || installedStarts != 1
     || seatLog.includes('retrying the same dsh runtime without the bundled plugin seat')) {
     throw new Error('the unverified external runtime received a bundled market seat\n' + seatLog)

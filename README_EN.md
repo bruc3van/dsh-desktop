@@ -20,7 +20,7 @@ Release installers include a pinned version of the official `@deepseek-ai/dsh` r
 - Includes the official runtime in the installer.
 - Can reuse a running dsh or use a PATH installation, npx cache, or the bundled runtime.
 - Can share `~/.dsh` with the CLI or use an isolated desktop data environment.
-- Includes a safe marketplace. Its plugin catalog stays offline until enabled by the user; **Safe install** uses a prompt to ask the Agent to review code before installation.
+- Includes a safe marketplace. Its plugin catalog stays offline until enabled by the user; installation uses the official plugin manager, with optional AI review afterwards.
 - Verifies update packages with SHA-256 before installation.
 - Uses Electron sandboxing, context isolation, navigation restrictions, and permission controls.
 
@@ -143,7 +143,9 @@ See [Desktop client architecture](docs/desktop-client-architecture.md) and the [
 
 ## Bundled Safe Market
 
-The [Safe Market](https://github.com/bruc3van/dsh-desktop-safe-market) ships offline with the installer. The desktop setting to load the bundled market at startup is on by default. The client prepares the plugin for client-started runtimes with compatible dependencies, without an online installation. Reusing a running local instance or connecting to a Custom address does not modify its plugin configuration.
+Bundled versions: DSH `0.2.0-rc.1` and `safer-dsh-market@0.8.3`. Client-owned copies of the old `dsh-desktop-safe-market` name migrate automatically; user installations are preserved. Re-enable the catalog after upgrading because the previous setting is not migrated. Screenshots below show an earlier version.
+
+The [Safe Market](https://github.com/bruc3van/safer-dsh-market) ships offline with the installer. The desktop setting to load the bundled market at startup is on by default. The client prepares the plugin for client-started runtimes with compatible dependencies, without an online installation. Reusing a running local instance or connecting to a Custom address does not modify its plugin configuration.
 
 The **Enable Safe Market** control inside the market page governs network access to the plugin catalog. It is off by default and independent of the desktop startup setting. Enabling it saves that choice and caches the last successful catalog. Turning off the desktop startup setting removes the client-owned copy and registration on the next client-managed runtime launch. User installations that have not been transferred to client management are unaffected by this switch.
 
@@ -165,19 +167,17 @@ Catalog data comes from [awesome-dsh-plugin](https://github.com/bruc3van/awesome
 - Archived, discontinued, and ineligible projects are excluded.
 - A maintained exclusion list is applied, and catalog data is validated before display.
 
-**Safe install** does not run an installation command. It fills a new conversation with a security-review prompt but does not send it.
+The marketplace installs selected plugins directly through the official plugin manager. AI review of the installed version is optional.
 
-After the user sends the prompt, it asks the Agent to check credential access, data exfiltration, remote code execution, install scripts, obfuscated files, and requested permissions. A passing review can proceed to installation with the official command; suspicious findings or installation approval requirements pause the process for the user. Sending the prompt authorizes this review-and-install flow; a second confirmation after review is not guaranteed.
+AI review does not guarantee safety.
 
 **Catalog inclusion is not a security endorsement. Review the result before installation.**
-
-![Safe install first fills a review prompt](docs/images/marketplace-sec-install.png)
 
 Installed plugins can be viewed, enabled, disabled, or removed. Installed but unloaded plugins are also listed.
 
 ![Installed plugin management](docs/images/marketplace-installed.png)
 
-If the marketplace is incompatible with the active runtime, the client stops loading it without disabling other plugins. See the [Safe Market repository](https://github.com/bruc3van/dsh-desktop-safe-market) for configuration, protocol, and limitations.
+If the marketplace is incompatible with the active runtime, the client stops loading it without disabling other plugins. See the [Safe Market repository](https://github.com/bruc3van/safer-dsh-market) for configuration, protocol, and limitations.
 
 ## FAQ
 
@@ -195,12 +195,12 @@ Update the official `dsh` on PATH or the npx-cached runtime and enable that sour
 
 **Q: Does Safe Market install plugins automatically?**
 
-Clicking **Safe install** only fills a review prompt; it does not send the prompt or install anything. After the user sends it, the Agent follows the prompt to review the artifact and can proceed to installation if it passes. Suspicious findings or approval requirements pause the flow for the user.
+Installation is performed by the official plugin manager after the user chooses a plugin. AI review is optional and follows installation.
 
 ## Related projects
 
 - [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin): catalog data for Safe Market. It collects plugin repositories daily and maintains exclusion records.
-- [dsh-desktop-safe-market](https://github.com/bruc3van/dsh-desktop-safe-market): the Safe Market implementation bundled with this client.
+- [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market): the Safe Market implementation bundled with this client.
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness): the upstream project for the official dsh and Web UI.
 
 ## License

@@ -1,7 +1,7 @@
 /** Exercise Unicode copying on Windows Electron; keep other CI hosts headless. */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,7 +45,7 @@ if (process.argv[2] === '--probe') {
     symlinkSync(payload, join(payload, 'cycle'), process.platform === 'win32' ? 'junction' : 'dir')
     assert.match(seatBundledPlugin(payload, home, runtime).error, /Circular bundled market directory/)
     assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).version, '0.5.2')
-    rmSync(join(payload, 'cycle'))
+    unlinkSync(join(payload, 'cycle'))
     assert.equal(seatBundledPlugin(payload, home, runtime).seated, true)
     assert.equal(JSON.parse(readFileSync(join(installed, 'package.json'))).version, '0.5.3')
     console.log('✓ Unicode market copy: ' + sourceName + ' -> ' + homeName + '; links, failed upgrade and retry')

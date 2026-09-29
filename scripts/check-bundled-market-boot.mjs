@@ -11,7 +11,7 @@ import { build } from 'esbuild'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const modules = join(root, '.runtime/node_modules')
-const name = 'dsh-desktop-safe-market'
+const name = 'safer-dsh-market'
 const payload = join(root, '.runtime/bundled-plugins', name)
 const anchor = join(modules, '@deepseek-ai/dsh/package.json')
 const entry = join(dirname(anchor), 'lib/bin.js')
@@ -21,12 +21,15 @@ assert.ok(existsSync(join(payload, 'package.json')), 'run pnpm run prepare:runti
 assert.equal(existsSync(join(modules, name)), false, 'installation must not shadow a profile market')
 const pinned = JSON.parse(await readFile(join(root, 'dsh-runtime/package.json'))).dependencies[name]
 assert.equal(JSON.parse(await readFile(join(payload, 'package.json'))).version, pinned)
-const { loadProfileDirectory, healProfilesModuleFallback } = await import(pathToFileURL(join(modules, '@deepseek-ai/dsh-app-boot/lib/index.js')))
+const { loadProfileDirectory, createRuntimeResolution } = await import(pathToFileURL(join(modules, '@deepseek-ai/dsh-app-boot/lib/index.js')))
 const temp = await mkdtemp(join(tmpdir(), 'dsh-market-boot-'))
 try {
   const output = join(temp, 'boot.mjs')
   await build({ entryPoints: [join(root, 'src/main/bundled-market-boot.ts')], bundle: true, platform: 'node', format: 'esm', outfile: output, logLevel: 'silent' })
-  const { prepareBundledMarket, marketPeerIssues } = await import(pathToFileURL(output))
+  const { prepareBundledMarket, marketPeerIssues, compatibleMarketPeer } = await import(pathToFileURL(output))
+  assert.equal(compatibleMarketPeer('0.2.0-rc.1', '>=0.1.7-rc.2 <0.3.0'), true)
+  assert.equal(compatibleMarketPeer('0.3.0-rc.1', '>=0.1.7-rc.2 <0.3.0'), false)
+  assert.equal(compatibleMarketPeer('0.2.0-rc.1', '0.2.0-rc.1'), true)
   const home = join(temp, 'fresh')
   const request = { home, pluginDir: payload, mode: 'offer' }
   await prepareBundledMarket(entry, request)
@@ -39,11 +42,11 @@ try {
   assert.match(await readFile(join(profileDir, 'pnpm-workspace.yaml'), 'utf8'), /autoInstallPeers: false/)
   const profile = loadProfileDirectory('dsh', profileDir, anchor)
   assert.equal(resolve(profile.layers.find(layer => layer.packageName === name).packageDir), resolve(marketDir))
-  await healProfilesModuleFallback({ installAnchor: anchor, profile, home })
-  const fromMarket = createRequire(join(marketDir, 'package.json'))
-  const fromRuntime = createRequire(anchor)
-  assert.equal(fromMarket.resolve('@deepseek-ai/cordis'), fromRuntime.resolve('@deepseek-ai/cordis'))
-  assert.equal(fromMarket.resolve('@deepseek-ai/dsh-settings'), fromRuntime.resolve('@deepseek-ai/dsh-settings'))
+  const resolution = await createRuntimeResolution({ installAnchor: anchor, profile, home })
+  for (const peer of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-settings']) {
+    assert.equal(realpathSync(resolution.entries.find(item => item.name === peer).packageDir), realpathSync(join(modules, peer)))
+  }
+  assert.deepEqual(marketPeerIssues(home, anchor), [])
   console.log('✓ cold profile uses official defaults; patch and module come from its owned package with runtime peers')
 
   // User payloads are deliberately different, so a stale in-box patch cannot pass.
@@ -61,8 +64,8 @@ try {
     await prepareBundledMarket(entry, { ...request, home: userHome })
     const loaded = loadProfileDirectory('dsh', userProfile, anchor)
     assert.equal(resolve(loaded.layers[0].packageDir), resolve(userPackage))
-    assert.ok(loaded.layers[0].patchPath.endsWith('user.patch.yml'))
-    await healProfilesModuleFallback({ installAnchor: anchor, profile: loaded, home: userHome })
+    assert.ok(loaded.layers[0].patchPaths[0].endsWith('user.patch.yml'))
+    await createRuntimeResolution({ installAnchor: anchor, profile: loaded, home: userHome })
     assert.equal(createRequire(join(userProfile, 'package.json'))(name), version)
     assert.equal(await readFile(join(userProfile, 'package.json'), 'utf8'), userManifest)
     assert.equal(await readFile(join(userProfile, 'pnpm-lock.yaml'), 'utf8'), 'lockfile-owned-by-user')
@@ -133,7 +136,7 @@ try {
     const staleProfile = join(staleHome, 'profiles/web')
     assert.ok(JSON.parse(await readFile(join(staleProfile, 'package.json'))).dsh.profile.bundles.includes(name))
     const loaded = loadProfileDirectory('dsh', staleProfile, anchor)
-    await healProfilesModuleFallback({ installAnchor: anchor, profile: loaded, home: staleHome })
+    await createRuntimeResolution({ installAnchor: anchor, profile: loaded, home: staleHome })
     assert.ok(marketPeerIssues(staleHome).some(issue => issue.includes(peerName)))
     assert.deepEqual(marketPeerIssues(staleHome, anchor), [])
     assert.equal(realpathSync(sharedLink), realpathSync(staleTarget))
@@ -149,7 +152,14 @@ try {
   const requiredManifest = JSON.parse(await readFile(installedMarketFile))
   requiredManifest.peerDependenciesMeta[peerName].optional = false
   await writeFile(installedMarketFile, JSON.stringify(requiredManifest))
-  assert.ok(marketPeerIssues(staleHome, anchor).some(issue => issue.includes(peerName)), 'required peers are never ignored')
+  assert.deepEqual(marketPeerIssues(staleHome, anchor), [], 'the new runtime supplies this required peer through its package table')
+  const missingPeer = '@desktop-test/missing-required-peer'
+  requiredManifest.peerDependencies[missingPeer] = '^1.0.0'
+  await writeFile(installedMarketFile, JSON.stringify(requiredManifest))
+  assert.ok(marketPeerIssues(staleHome, anchor).some(issue => issue.includes(missingPeer + ': resolved missing')),
+    'required peers missing from both the profile and runtime must report an error')
+  Reflect.deleteProperty(requiredManifest.peerDependencies, missingPeer)
+  await writeFile(installedMarketFile, JSON.stringify(requiredManifest))
   console.log('✓ stale optional peers absent from the production runtime do not withdraw the market or mutate shared links')
 
   await prepareBundledMarket(entry, { ...request, mode: 'disabled' })
@@ -204,7 +214,7 @@ try {
   const oldDriftMarket = JSON.parse(await readFile(join(driftMarket, 'package.json')))
   oldDriftMarket.version = '0.4.3'
   await writeFile(join(driftMarket, 'package.json'), JSON.stringify(oldDriftMarket))
-  const driftLock = 'lockfileVersion: \'9.0\'\nimporters:\n  .:\n    dependencies:\n      dsh-desktop-safe-market:\n        specifier: 0.4.3\n        version: 0.4.3\n'
+  const driftLock = 'lockfileVersion: \'9.0\'\nimporters:\n  .:\n    dependencies:\n      safer-dsh-market:\n        specifier: 0.4.3\n        version: 0.4.3\n'
   await writeFile(join(driftProfile, 'pnpm-lock.yaml'), driftLock)
   for (let boot = 0; boot < 2; boot++) {
     await prepareBundledMarket(entry, { ...request, home: driftHome })

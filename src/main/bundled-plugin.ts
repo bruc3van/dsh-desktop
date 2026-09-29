@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import satisfies from 'semver/functions/satisfies.js'
 import valid from 'semver/functions/valid.js'
@@ -18,12 +18,13 @@ import { load, dump } from 'js-yaml'
 
 /** Only release tags from our exact upstream repository are upgradeable URLs. */
 function officialMarketTag(source: string): boolean {
-  const match = /^https:\/\/github\.com\/bruc3van\/dsh-desktop-safe-market\/archive\/refs\/tags\/v([^/?#]+)\.tar\.gz$/.exec(source)
+  const match = /^https:\/\/github\.com\/bruc3van\/safer-dsh-market\/archive\/refs\/tags\/v([^/?#]+)\.tar\.gz$/.exec(source)
   return match?.[1] !== undefined && valid(match[1]) !== null
 }
 
 /** The plugin this client ships. */
-export const BUNDLED_PLUGIN_NAME = 'dsh-desktop-safe-market'
+export const BUNDLED_PLUGIN_NAME = 'safer-dsh-market'
+const PREVIOUS_PLUGIN_NAME = 'dsh-desktop-safe-market'
 
 /** The profile the web GUI boots. */
 export const WEB_PROFILE = 'web'
@@ -40,6 +41,49 @@ const dependencySections = ['dependencies', 'optionalDependencies', 'devDependen
 
 function declaresMarket(manifest: ProfileManifest): boolean {
   return dependencySections.some(section => Object.hasOwn(manifest[section] ?? {}, BUNDLED_PLUGIN_NAME))
+}
+
+/** A renamed user installation must never be loaded alongside our new bundle. */
+function hasUserOwnedPreviousMarket(manifest: ProfileManifest, dshHome: string): boolean {
+  if (dependencySections.some(section => Object.hasOwn(manifest[section] ?? {}, PREVIOUS_PLUGIN_NAME))) return true
+  for (const dir of [profileDir(dshHome), join(dshHome, 'profiles')]) {
+    const path = join(dir, 'node_modules', PREVIOUS_PLUGIN_NAME)
+    try {
+      if (lstatSync(path).isSymbolicLink() || readSeatMarker(path) === undefined) return true
+    } catch { /* no previous package */ }
+  }
+  return false
+}
+
+/** Withdraw only marked copies of the old name; other profiles retain their copy. */
+function retirePreviousMarket(dshHome: string): void {
+  const manifest = readManifest(dshHome)
+  if (!manifest || hasUserOwnedPreviousMarket(manifest, dshHome)) return
+  const local = join(profileDir(dshHome), 'node_modules', PREVIOUS_PLUGIN_NAME)
+  const shared = join(dshHome, 'profiles', 'node_modules', PREVIOUS_PLUGIN_NAME)
+  if (readSeatMarker(local) === undefined && readSeatMarker(shared) === undefined) return
+  commitProfileManifest(dshHome, fresh => {
+    if (hasUserOwnedPreviousMarket(fresh, dshHome)) return false
+    const profile = fresh.dsh?.profile
+    if (!profile?.bundles?.includes(PREVIOUS_PLUGIN_NAME)) return false
+    profile.bundles = profile.bundles.filter(name => name !== PREVIOUS_PLUGIN_NAME)
+    return true
+  })
+  const fresh = readManifest(dshHome)
+  if (!fresh || hasUserOwnedPreviousMarket(fresh, dshHome)
+    || fresh.dsh?.profile?.bundles?.includes(PREVIOUS_PLUGIN_NAME)) return
+  removeOwnedSeat(dshHome, local)
+  for (const name of readdirSync(join(dshHome, 'profiles'))) {
+    if (name === WEB_PROFILE || name === 'node_modules') continue
+    const file = join(dshHome, 'profiles', name, 'package.json')
+    if (!existsSync(file)) continue
+    try {
+      const other = JSON.parse(readFileSync(file, 'utf8')) as ProfileManifest
+      if (other.dsh?.profile?.bundles?.includes(PREVIOUS_PLUGIN_NAME)
+        || dependencySections.some(section => Object.hasOwn(other[section] ?? {}, PREVIOUS_PLUGIN_NAME))) return
+    } catch { return }
+  }
+  removeOwnedSeat(dshHome, shared)
 }
 
 /** Evidence supplied by the managed launcher, never inferred from a live URL. */
@@ -497,7 +541,7 @@ function removeUnusedLegacySeat(dshHome: string, pluginDir?: string): void {
   try {
     if (lstatSync(legacy).isSymbolicLink()) {
       // A dead or foreign link is not ownership evidence. Unlink only a known payload.
-      if (isKnownLegacyLink(dshHome, pluginDir)) rmSync(legacy)
+      if (isKnownLegacyLink(dshHome, pluginDir)) unlinkSync(legacy)
       return
     }
   } catch { return }
@@ -524,6 +568,10 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
   if (runtime.serving === true) return inspectBundledPlugin(dshHome)
   const manifest = readManifest(dshHome)
   if (manifest === undefined) return { seated: false, added: false, error: 'the web profile does not exist yet' }
+  if (manifest.dsh?.profile?.bundles?.includes(PREVIOUS_PLUGIN_NAME)
+    && hasUserOwnedPreviousMarket(manifest, dshHome)) {
+    return { seated: false, added: false, error: 'a user-managed dsh-desktop-safe-market installation remains; migrate it to safer-dsh-market before enabling the bundled market' }
+  }
   if (userOwned(manifest, dshHome)) {
     try {
       upgradeUserSeat(pluginDir, dshHome, runtime)
@@ -531,7 +579,9 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
       return { ...inspectBundledPlugin(dshHome), error: error instanceof Error ? error.message : String(error) }
     }
     removeLegacySeatAfterUserInstall(dshHome, pluginDir)
-    return inspectBundledPlugin(dshHome)
+    const result = inspectBundledPlugin(dshHome)
+    if (result.seated) retirePreviousMarket(dshHome)
+    return result
   }
   const version = readPackageVersion(pluginDir)
   if (version === undefined) {
@@ -553,14 +603,27 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
       if (userOwned(fresh, dshHome)) return false
       const list = fresh.dsh?.profile?.bundles
       if (!Array.isArray(list) || list.includes(BUNDLED_PLUGIN_NAME)) return false
+      if (list.includes(PREVIOUS_PLUGIN_NAME) && hasUserOwnedPreviousMarket(fresh, dshHome)) return false
       list.push(BUNDLED_PLUGIN_NAME)
+      // Commit both names together; a failed manifest write must not leave the
+      // previously working market removed before the replacement is registered.
+      const previous = [join(profileDir(dshHome), 'node_modules', PREVIOUS_PLUGIN_NAME),
+        join(dshHome, 'profiles', 'node_modules', PREVIOUS_PLUGIN_NAME)]
+      if (previous.some(path => readSeatMarker(path) !== undefined)) {
+        for (let index = list.length - 1; index >= 0; index--) {
+          if (list[index] === PREVIOUS_PLUGIN_NAME) list.splice(index, 1)
+        }
+      }
       return true
     })
     const result = inspectBundledPlugin(dshHome)
-    if (result.owned) removeUnusedLegacySeat(dshHome, pluginDir)
+    if (result.owned) {
+      retirePreviousMarket(dshHome)
+      removeUnusedLegacySeat(dshHome, pluginDir)
+    }
     return { ...result, added }
   } catch (error) {
-    withdrawBundledPlugin(dshHome)
+    withdrawBundledPlugin(dshHome, undefined, true)
     return { seated: false, added: false, error: error instanceof Error ? error.message : String(error) }
   }
 }
@@ -574,7 +637,10 @@ export function seatBundledPlugin(pluginDir: string, dshHome: string, runtime: S
  * @param dshHome - the harness home whose `web` profile is being booted.
  * @returns whether an entry was removed.
  */
-export function withdrawBundledPlugin(dshHome: string, pluginDir?: string): boolean {
+export function withdrawBundledPlugin(dshHome: string, pluginDir?: string, preservePrevious = false): boolean {
+  if (!preservePrevious) {
+    try { retirePreviousMarket(dshHome) } catch { /* Old-name cleanup must not block withdrawal. */ }
+  }
   const manifest = readManifest(dshHome)
   if (manifest === undefined || userOwned(manifest, dshHome)) return false
   if (readSeatMarker(seatPath(dshHome)) === undefined && readSeatMarker(legacySeatPath(dshHome)) === undefined && !isKnownLegacyLink(dshHome, pluginDir)) return false
