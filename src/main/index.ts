@@ -725,6 +725,10 @@ function navigateMainWindow(url: string, force: boolean): void {
   if (mainWindow === null) return
   if (appOrigin(mainWindow.webContents.getURL()) === appOrigin(url)) {
     if (!force) return
+    // A rapid save can arrive while the previous reload is still in flight.
+    // Stop that navigation before issuing another reload; Electron 44 can
+    // otherwise leave the old document loading without replacing it.
+    if (mainWindow.webContents.isLoading()) mainWindow.webContents.stop()
     mainWindow.webContents.reload()
     return
   }

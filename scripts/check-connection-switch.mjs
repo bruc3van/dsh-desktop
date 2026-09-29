@@ -122,12 +122,15 @@ async function waitForStatus(app, predicate, timeoutMs = 60_000) {
 }
 
 let app
+let runtimeLog = ''
 try {
   app = await electron.launch({
     args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(checkHome, 'chromium')],
     env: electronEnv,
   })
   let window = await app.firstWindow()
+  app.process().stdout?.on('data', data => { runtimeLog += data.toString() })
+  app.process().stderr?.on('data', data => { runtimeLog += data.toString() })
   await window.waitForFunction(() => document.title === 'Remote Harness Fixture', null, { timeout: 10_000 })
   const legacyStatus = await window.evaluate(() => window.desktop.connection.getStatus())
   if (legacyStatus.selectedMode !== 'connect' || legacyStatus.savedServerUrl !== remoteOrigin || !legacyStatus.canSwitch) {
@@ -360,6 +363,12 @@ try {
   console.log('✓ switching to Smart mode keeps the remote address')
   console.log('✓ shortcut switches back to the saved remote origin')
   console.log('✓ saving an unchanged selection still reconnects the window')
+} catch (error) {
+  console.error(runtimeLog)
+  console.error(await app?.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(window => ({
+    url: window.webContents.getURL(), loading: window.webContents.isLoading(),
+  }))).catch(() => []))
+  throw error
 } finally {
   await app?.close().catch(() => {})
   await new Promise(resolve => remoteServer.close(resolve))
