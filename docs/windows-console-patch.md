@@ -2,7 +2,7 @@
 
 对应 [Issue #16](https://github.com/bruc3van/dsh-desktop/issues/16) 和 [Issue #19](https://github.com/bruc3van/dsh-desktop/issues/19)。仅影响客户端内置的 DSH 运行时；外部 CLI / 远程服务需要在其运行环境升级或修复。
 
-四个 `0.2.0-rc.1` 依赖通过 `pnpm patchedDependencies` 交付修复：
+四个 `0.2.0-rc.2` 依赖通过 `pnpm patchedDependencies` 交付修复：
 
 - 上游已为 Windows Job helper 和 fallback `spawnSubprocess` 设置 `windowsHide: true`，本次移除重复补丁并保留回归检查；不改变独立的交互终端实现。
 - `dsh-win32-process` 的 `spawnCurrentTokenJobProcess` 给普通目标的 `CreateProcessW` 添加 `CREATE_NO_WINDOW`，保留 Unicode 环境、挂起创建、Job 关联及恢复执行流程。

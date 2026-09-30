@@ -5,17 +5,17 @@
   "description": "Pinned dsh runtime closure for macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64.",
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "1.0.4",
-    "@deepseek-ai/dsh": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-api-remotes": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-api-session-controller": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-session": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-workspace": "0.2.0-rc.1",
+    "@deepseek-ai/dsh": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-api-remotes": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-api-session-controller": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-workspace": "0.2.0-rc.2",
     "pnpm": "11.16.0",
-    "safer-dsh-market": "0.8.3"
+    "safer-dsh-market": "0.9.0"
   },
   "optionalDependencies": {
     "@deepseek-ai/node-addon-system-darwin-arm64": "0.1.2",

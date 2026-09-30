@@ -166,7 +166,7 @@ See [Desktop client architecture](docs/desktop-client-architecture.md) and the [
 
 ## Bundled Safe Market
 
-Bundled versions: DSH `0.2.0-rc.1` and `safer-dsh-market@0.8.3`. Client-owned copies of the old `dsh-desktop-safe-market` name migrate automatically; user installations are preserved. Re-enable the catalog after upgrading because the previous setting is not migrated. Screenshots below show an earlier version.
+Bundled versions: DSH `0.2.0-rc.2` and `safer-dsh-market@0.9.0`. Client-owned copies of the old `dsh-desktop-safe-market` name migrate automatically; user installations are preserved. Re-enable the catalog after upgrading because the previous setting is not migrated. Screenshots below show an earlier version.
 
 The [Safe Market](https://github.com/bruc3van/safer-dsh-market) ships offline with the installer. The desktop setting to load the bundled market at startup is on by default. The client prepares the plugin for client-started runtimes with compatible dependencies, without an online installation. Reusing a running local instance or connecting to a Custom address does not modify its plugin configuration.
 
