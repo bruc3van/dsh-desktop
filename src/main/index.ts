@@ -1,11 +1,12 @@
 import { createQuitCoordinator } from './quit-coordinator.ts'
+import { scheduleAppImageRestart } from './appimage-restart.ts'
 import { createBrowserAdmission } from './browser-admission.ts'
 import { mainContentHeightScript } from './window-content.ts'
 import { createBridgePolicy,type BridgeCaller } from './bridge-policy.ts'
 import { createDesktopIpc } from './desktop-ipc.ts'
 import { createLocaleController } from './locale-controller.ts'
 import { createMainWindowFactory } from './main-window.ts'
-import { buildApplicationMenu,buildTrayMenu } from './native-menus.ts'
+import { buildApplicationMenu, buildLinuxApplicationMenu, buildTrayMenu } from './native-menus.ts'
 import { createPluginRecoveryController } from './plugin-recovery-controller.ts'
 import { showConfirmationDialog } from './plugin-recovery-dialog.ts'
 import { createSettingsCommands } from './settings-commands.ts'
@@ -1004,6 +1005,8 @@ function requestRestart(): { started: boolean; error?: string } {
  * for this process to exit before spawning — so `before-quit` still runs the
  * stop ladder, and the single-instance lock is free by the time the new
  * instance asks for it.
+ * Linux AppImages use a host-side helper instead: their temporary filesystem
+ * must not contain the helper that starts the successor after unmount/cleanup.
  *
  * Refused during the Windows installer handoff: `isInstallerHandoff()` is set
  * seconds before that quit lands, and a successor started into a half-written
@@ -1016,6 +1019,17 @@ function restartApp(): void {
   // an unattached successor process behind. Packaged builds ignore this flag.
   if (devFlag('DSH_DESKTOP_SKIP_RELAUNCH')) {
     app.quit()
+    return
+  }
+  // AppImage mount/extraction directories can disappear when this process
+  // exits. Restart the persistent image so its runtime prepares a fresh one.
+  const image = process.platform === 'linux' && app.isPackaged ? process.env.APPIMAGE : undefined
+  if (image) {
+    void scheduleAppImageRestart(image, app.getPath('home')).then(() => app.quit(), (error: unknown) => {
+      restarting = false
+      dialog.showErrorBox('DSH Desktop', (localeChinese() ? '重启失败：' : 'Restart failed: ')
+        + (error instanceof Error ? error.message : String(error)))
+    })
     return
   }
   app.relaunch()
@@ -1484,6 +1498,12 @@ function launchWindow(generation = connection.generation, force = false): void {
  * `watchLocalePreference`.
  */
 function installMenu(): void {
+  if (process.platform === 'linux') {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(buildLinuxApplicationMenu({
+      chinese: localeChinese(), state: desktopUpdater?.getState(), actions: nativeMenuActions,
+    })))
+    return
+  }
   Menu.setApplicationMenu(process.platform !== 'darwin' ? null : Menu.buildFromTemplate(buildApplicationMenu({
     chinese: localeChinese(), name: app.name, development: !app.isPackaged, actions: nativeMenuActions,
   })))
@@ -1726,6 +1746,17 @@ const mainWindowFactory = createMainWindowFactory({
   loadingPageUrl,
   scheduleLoadingHints,
 })
+
+// AppImage's legacy wrapper may add --no-sandbox when its user-namespace
+// heuristic fails. Keep the renderer sandbox mandatory instead of silently
+// weakening the installed application on a restricted host.
+if (process.platform === 'linux') {
+  if (app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
+    console.error('[desktop] Chromium sandbox is required. Remove --no-sandbox. On Ubuntu 24.04, move the AppImage to ~/Applications/ and install resources/dsh-desktop.apparmor as described in docs/development.zh.md#linux-x64.')
+    app.exit(1)
+  }
+  app.enableSandbox()
+}
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {

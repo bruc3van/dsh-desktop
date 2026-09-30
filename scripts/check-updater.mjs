@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -52,7 +52,8 @@ if (!releaseNotes.includes('fixture release change')
   || releaseNotes.includes('old change that must not leak')
   || !releaseNotes.includes('dsh-desktop-9.9.9-mac-arm64.dmg')
   || !releaseNotes.includes('dsh-desktop-9.9.9-mac-x64.dmg')
-  || !releaseNotes.includes('dsh-desktop-9.9.9-win-x64.exe')) {
+  || !releaseNotes.includes('dsh-desktop-9.9.9-win-x64.exe')
+  || !releaseNotes.includes('dsh-desktop-9.9.9-linux-x86_64.AppImage')) {
   throw new Error('generated GitHub Release notes are incomplete')
 }
 if (releaseChanges !== '### 新增\n- fixture release change\n') {
@@ -135,7 +136,7 @@ console.log('✓ write-update-feed.mjs copies release notes from --notes-file')
 // release version. Bundle the module against an electron stub so the ordering
 // rules themselves — including prerelease ranks — are asserted directly.
 const electronStub = join(work, 'electron-stub.mjs')
-writeFileSync(electronStub, 'export const shell = { openPath: async () => "" }\n')
+writeFileSync(electronStub, 'export const shell = { openPath: async () => { globalThis.installerOpens = (globalThis.installerOpens ?? 0) + 1; return "" } }\n')
 const updaterBundle = join(work, 'updater.mjs')
 await esbuild.build({
   entryPoints: [join(APP_DIR, 'src', 'main', 'updater.ts')],
@@ -156,12 +157,14 @@ for (const chinese of [true, false]) {
   const copy = { found: '', later: '', ignore: '', install: '' }
   const mac = decodeURIComponent(renderUpdatePromptPageUrl(info, chinese, '', copy, 'darwin'))
   const win = decodeURIComponent(renderUpdatePromptPageUrl(info, chinese, '', copy, 'win32'))
+  const linux = decodeURIComponent(renderUpdatePromptPageUrl(info, chinese, '', copy, 'linux'))
   if (!mac.includes(chinese ? '中断本地正在运行的任务' : 'interrupts running local tasks')
-    || !win.includes(chinese ? '将打开安装程序' : 'The installer will open')) {
+    || !win.includes(chinese ? '将打开安装程序' : 'The installer will open')
+    || !linux.includes(chinese ? '手动替换原文件' : 'replace the original file manually')) {
     throw new Error('Update prompt must explain the correct platform installation behavior')
   }
 }
-console.log('✓ Mac/Windows update prompt copy matches platform behavior in both languages')
+console.log('✓ update prompt copy matches each platform in both languages')
 const orderings = [
   // Numeric prerelease identifiers rank by value: the string comparison this
   // replaced put rc.10 BELOW rc.9 and reported a newer build as current.
@@ -186,10 +189,9 @@ for (const [left, right, expected] of orderings) {
 }
 console.log('✓ compareVersions orders core, release-over-prerelease, and numeric prerelease ranks')
 
-// The release matrix builds macOS and Windows. `platformKey` still answers for
-// Linux, so a source-built Linux client asks a feed that has nothing for it —
-// and used to be told it was up to date, which is the one answer that is both
-// wrong and unactionable. The three cases below are the whole rule: a platform
+// This deliberately incomplete fixture carries macOS and Windows only. A
+// Linux client must distinguish a missing artifact from being up to date.
+// The three cases below are the whole rule: a platform
 // the feed does not carry, the same feed on a platform it does, and a feed
 // that is simply not newer (up to date whatever the platform).
 const matrixFeed = {
@@ -267,6 +269,107 @@ if (rejectedPreflight.started || preflightFetches !== beforePreflight || stopped
 }
 console.log('✓ Mac preflight failure downloads nothing and leaves the runtime running')
 
+const linuxPayload = Buffer.from('fixture-AppImage')
+const linuxHash = createHash('sha256').update(linuxPayload).digest('hex')
+const linuxFile = 'dsh-desktop-99.0.0-linux-x86_64.AppImage'
+let linuxDownloads = 0, linuxStops = 0, linuxReveals = 0
+const linuxOptions = {
+  currentVersion: '0.0.1', feedUrl: 'https://example.invalid/latest.json',
+  platform: 'linux', arch: 'x64', packaged: true, downloadDir: join(work, 'linux'),
+  loadPersistence: () => ({}), savePersistence() {}, dryRun: false,
+  fetchImpl: async input => {
+    if (String(input).endsWith('/latest.json')) return new Response(JSON.stringify({
+      version: '99.0.0', platforms: { 'linux-x64': { url: 'https://example.invalid/' + linuxFile, sha256: linuxHash } },
+    }))
+    linuxDownloads++
+    return new Response(linuxPayload)
+  },
+  onBeforeInstall: async () => { linuxStops++ },
+  revealDownload: file => { assert.equal(readFileSync(file).toString(), linuxPayload.toString()); linuxReveals++ },
+}
+const linuxUpdater = new DesktopUpdater(linuxOptions)
+assert.equal((await linuxUpdater.check()).hasUpdate, true)
+assert.equal((await linuxUpdater.install()).started, true)
+assert.equal(linuxUpdater.getState().phase, 'downloaded')
+assert.equal(linuxStops, 0)
+assert.equal(globalThis.installerOpens ?? 0, 0, 'Linux must not launch a second AppImage')
+assert.equal(linuxReveals, 1)
+if (process.platform !== 'win32') assert.equal(statSync(join(work, 'linux', linuxFile)).mode & 0o777, 0o755)
+await linuxUpdater.check()
+assert.equal(linuxUpdater.getState().phase, 'downloaded')
+await linuxUpdater.install()
+assert.equal(linuxDownloads, 1, 'showing the downloaded file must not redownload it')
+assert.equal(linuxReveals, 2)
+const restartedLinuxUpdater = new DesktopUpdater(linuxOptions)
+await restartedLinuxUpdater.check()
+assert.equal(restartedLinuxUpdater.getState().phase, 'downloaded', 'a new updater process must recognize its verified AppImage')
+await restartedLinuxUpdater.install()
+assert.equal(linuxDownloads, 1, 'restart must not redownload a verified AppImage')
+const recheckingLinux = restartedLinuxUpdater.check()
+assert.equal((await restartedLinuxUpdater.install()).started, false, 'checking and installing must not race over the cached file')
+await recheckingLinux
+rmSync(join(work, 'linux', linuxFile))
+await linuxUpdater.install()
+assert.equal(linuxDownloads, 2, 'a missing downloaded file must be fetched again')
+assert.equal(linuxStops, 0)
+console.log('✓ Linux downloads, verifies and reveals updates without executing them or stopping tasks')
+
+// A publisher can replace bytes under the same asset name. A failed attempt
+// to fetch those new bytes must preserve the previous verified download.
+const replacementPayload = Buffer.from('replacement-AppImage')
+const replacementHash = createHash('sha256').update(replacementPayload).digest('hex')
+let failReplacement = true
+let corruptReplacement = false
+const replacementUpdater = new DesktopUpdater({
+  ...linuxOptions,
+  revealDownload: file => { assert.deepEqual(readFileSync(file), replacementPayload) },
+  fetchImpl: async input => {
+    if (String(input).endsWith('/latest.json')) return new Response(JSON.stringify({
+      version: '99.0.0', platforms: { 'linux-x64': { url: 'https://example.invalid/' + linuxFile, sha256: replacementHash } },
+    }))
+    if (!failReplacement) return new Response(corruptReplacement ? Buffer.from('wrong-checksum') : replacementPayload)
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(Buffer.from('partial'))
+      setTimeout(() => { controller.error(new Error('fixture connection interrupted')) }, 20)
+    } }))
+  },
+})
+await replacementUpdater.check()
+assert.equal(replacementUpdater.getState().phase, 'available', 'a changed checksum must invalidate the cached offer')
+assert.equal((await replacementUpdater.install()).started, false)
+assert.deepEqual(readFileSync(join(work, 'linux', linuxFile)), linuxPayload, 'failed replacement must retain the previous verified file')
+assert.deepEqual(readdirSync(join(work, 'linux')), [linuxFile], 'failed replacement must clean up staging files')
+failReplacement = false
+corruptReplacement = true
+assert.equal((await replacementUpdater.install()).started, false)
+assert.deepEqual(readFileSync(join(work, 'linux', linuxFile)), linuxPayload, 'checksum failure must also retain the previous verified file')
+assert.deepEqual(readdirSync(join(work, 'linux')), [linuxFile])
+corruptReplacement = false
+assert.equal((await replacementUpdater.install()).started, true)
+assert.deepEqual(readFileSync(join(work, 'linux', linuxFile)), replacementPayload)
+console.log('✓ Linux recovers verified downloads after restart and preserves them until a replacement passes verification')
+
+const linuxApiUpdater = new DesktopUpdater({
+  currentVersion: '0.0.1', feedUrl: 'https://example.invalid/latest.json',
+  githubApiUrl: 'https://example.invalid/release',
+  platform: 'linux', arch: 'x64', packaged: true, downloadDir: work,
+  loadPersistence: () => ({}), savePersistence() {}, dryRun: true,
+  fetchImpl: async input => {
+    const url = String(input)
+    if (url.endsWith('/latest.json')) return new Response('not found', { status: 404 })
+    if (url.endsWith('/SHA256SUMS.txt')) return new Response(linuxHash + '  ' + linuxFile + '\n')
+    return new Response(JSON.stringify({ tag_name: 'v99.0.0', assets: [
+      { name: linuxFile, browser_download_url: 'https://example.invalid/' + linuxFile },
+      { name: 'SHA256SUMS.txt', browser_download_url: 'https://example.invalid/SHA256SUMS.txt' },
+    ] }))
+  },
+})
+const linuxApiResult = await linuxApiUpdater.check()
+assert.equal(linuxApiResult.hasUpdate, true)
+assert.equal(linuxApiResult.info.fileName, linuxFile)
+assert.equal(linuxApiResult.info.sha256, linuxHash)
+console.log('✓ GitHub fallback maps linux-x64 to the actual x86_64 AppImage asset and checksum')
+
 const unbuiltPlatform = feedOnlyUpdater('linux', 'x64')
 const unbuiltResult = await unbuiltPlatform.check()
 if (unbuiltResult.hasUpdate || unbuiltPlatform.getState().phase !== 'unsupportedPlatform') {
@@ -295,6 +398,7 @@ console.log('✓ a platform with no installer in the feed is reported as such, n
 // through by folding it into the harmless one.
 const dialogAnswers = {
   available: 'available',
+  downloaded: 'downloaded',
   unsupportedPlatform: 'unsupportedPlatform',
   error: 'failed',
   upToDate: 'upToDate',

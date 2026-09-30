@@ -47,7 +47,7 @@ if (parseArtifactName(prerelease)?.version !== '1.2.3-rc.4') {
 
 // A file that is not one of ours must not be mistaken for one, or the feed
 // would publish a checksum row pointing at the wrong download.
-for (const name of ['SHA256SUMS.txt', 'latest.json', 'dsh-desktop-1.2.3-linux-x64.AppImage', 'dsh-desktop.exe']) {
+for (const name of ['SHA256SUMS.txt', 'latest.json', 'dsh-desktop-1.2.3-linux-arm64.AppImage', 'dsh-desktop.exe']) {
   if (parseArtifactName(name) !== undefined) failures.push(name + ' was parsed as a release artifact')
 }
 

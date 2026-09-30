@@ -1,0 +1,7 @@
+# Allow Chromium user namespaces only for DSH Desktop AppImages installed here.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile dsh-desktop-appimage @{HOME}/Applications/dsh-desktop-*-linux-x86_64.AppImage flags=(unconfined) {
+  userns,
+}

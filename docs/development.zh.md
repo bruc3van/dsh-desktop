@@ -71,6 +71,41 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 - 官方 fallback 准备后，从市场真实目录检查 peer；用户依赖漂移写入启动日志，不改用户包或锁文件。客户端自有市场遇到漂移会撤销自己的登记，避免带不兼容依赖启动。
 - 市场目录与审查提示词由市场仓库维护；本仓库负责载荷发布和 profile 准备，见 `src/main/bundled-market-boot.ts`、`src/main/bundled-plugin.ts`。
 
+## Linux x64
+
+首版构建目标为 x64 AppImage，以 Ubuntu 24.04 为验证基线。暂未提供 ARM64、DEB、RPM、Snap 或 Flatpak 安装包；其他发行版和完整 GNOME/KDE 桌面体验仍需独立验证。
+
+AppImage 已包含 Node/pnpm/dsh。下载后允许执行，再启动文件；Ubuntu 24.04 缺少 FUSE 2 时可安装 `libfuse2t64`，或使用 `--appimage-extract-and-run` 解压运行。仍需系统图形库及允许 Chromium 沙箱运行的内核/系统策略，应用不会以关闭沙箱作为自动降级。
+
+Ubuntu 24.04 默认限制未授权应用创建用户命名空间，见[Ubuntu 发布说明](https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890)。若双击后没有窗口，请在终端运行 AppImage 查看启动错误。若错误涉及用户命名空间或 Chromium 沙箱，把 AppImage 放到 `~/Applications/`，下载仓库提供的 [AppArmor 配置](../resources/dsh-desktop.apparmor)，由管理员安装；同时移除启动命令或桌面快捷方式中的 `--no-sandbox`：
+
+```sh
+sudo install -m 0644 dsh-desktop.apparmor /etc/apparmor.d/dsh-desktop
+sudo apparmor_parser -r /etc/apparmor.d/dsh-desktop
+```
+
+该配置只匹配上述目录中的 DSH Desktop AppImage。它允许该应用创建沙箱所需的命名空间，不关闭系统的 AppArmor 限制。WSL 的内核/策略不同，不能代替这一配置在真实 Ubuntu 桌面上的验证。系统没有配置 Documents 目录时，上游首次创建默认工作区可能提示失败；可通过「选择工作区」选择现有项目文件夹。
+
+关闭窗口保留页面和后台任务。没有托盘图标的桌面环境可再次启动同一 AppImage 恢复窗口；窗口菜单「DSH Desktop → 退出」或 `Ctrl+Q` 可结束客户端。应用内更新只下载、校验并打开文件位置；请先退出，再手动替换原 AppImage 并重新打开。
+
+在 Linux 原生文件系统中构建，勿复用 Windows 的 `node_modules`：
+
+```sh
+corepack pnpm install --frozen-lockfile
+corepack pnpm run build
+DSH_RUNTIME_TARGET=linux-x64 corepack pnpm run prepare:runtime
+corepack pnpm exec electron-builder --linux AppImage --x64 --publish never
+```
+
+产物名称为 `dsh-desktop-<版本>-linux-x86_64.AppImage`，更新清单的平台键为 `linux-x64`。`check:linux` 验证 Koffi、Sharp、ripgrep、PTY、Landlock 读权限以及真实窗口关闭/恢复；`smoke:appimage` 解压实际 AppImage 并验证其载荷、离线插件安装和 AppRun 启动，再验证真实镜像启动及菜单重启后的客户端与后台运行时交接。默认使用解压运行；设置 `DSH_SMOKE_APPIMAGE_FUSE=1` 可验证 FUSE 模式。无桌面的构建环境可在 Xvfb/D-Bus 会话中运行：
+
+```sh
+xvfb-run -a dbus-run-session -- corepack pnpm run check:linux
+xvfb-run -a dbus-run-session -- corepack pnpm run smoke:appimage
+```
+
+CI 在 PR、main 和手动运行中构建 Linux 包，测试通过后保存 14 天的 Actions 下载资产。自动冒烟不包含模型 API 往返、真实托盘、通知点击、中文输入法或完整 Wayland 桌面验收。
+
 ## 版本发布
 
 发布版本时直接推送版本 tag；GitHub Actions 会以 tag 为唯一版本来源，并在构建时写入 `package.json`：
@@ -84,15 +119,16 @@ GitHub Actions 会校验 tag 格式，并以 tag 作为发布版本分别构建�
 
 - macOS Apple Silicon：DMG；
 - macOS Intel：DMG；
-- Windows x64：NSIS 安装程序。
+- Windows x64：NSIS 安装程序；
+- Linux x64：AppImage。
 
-Linux 安装包暂不在自动发布范围内；源码中的通用平台兼容逻辑仍予保留。
+Linux 安装包通过原生 Ubuntu runner 构建，实际 AppImage 载荷测试通过后才上传到 Release；`latest.json` 要求四个平台资产完整。
 
 全部平台构建成功后，工作流会生成 SHA-256 校验文件和 `latest.json` 在线更新清单，并创建或更新对应的 GitHub Release。包含 `-rc`、`-beta` 等预发布标识的 tag 会自动标记为预发布版本；预发布不会成为 `/releases/latest` 上的更新源。
 
 ## 当前状态
 
-桌面外壳、智能/固定地址模式、共享 `DSH_HOME`、托盘常驻、运行时监护、应用内在线更新、系统通知权限、内置官方 `@deepseek-ai/dsh`、内置安全市场（先审查、再安装，随安装包发布）、macOS/Windows 打包和 tag 自动发布流程均已实现；同一 `DSH_HOME` 下有运行时锁定与遗留进程接管，智能模式会一并探测 profile 补丁层配置的端口。发布流水线会在空 PATH 下启动打包应用并探测 Web UI，阻止遗漏内置运行时的产物发布。当前自动产物尚无正式代码签名：Windows/Linux 使用原生通知，macOS 则将 Web Notification 降级为 Dock 角标、弹跳和应用内提醒；正式签名仍是面向普通用户无警告安装及使用 macOS 通知中心的前置条件。OS Keychain 与语音输入也属于后续工作，见 [TODO](../TODO.md)。
+桌面外壳、智能/固定地址模式、共享 `DSH_HOME`、托盘常驻、运行时监护、应用内在线更新、系统通知权限、内置官方 `@deepseek-ai/dsh`、内置安全市场（先审查、再安装，随安装包发布）、macOS/Windows/Linux 打包和 tag 自动发布流程均已实现；同一 `DSH_HOME` 下有运行时锁定与遗留进程接管，智能模式会一并探测 profile 补丁层配置的端口。发布流水线会在无系统 Node/pnpm 的环境下启动打包应用并探测 Web UI，阻止遗漏内置运行时的产物发布。当前自动产物尚无正式代码签名：Windows/Linux 使用原生通知，macOS 则将 Web Notification 降级为 Dock 角标、弹跳和应用内提醒；正式签名仍是面向普通用户无警告安装及使用 macOS 通知中心的前置条件。OS Keychain 与语音输入也属于后续工作，见 [TODO](../TODO.md)。
 
 欢迎提交贡献与问题反馈，尤其是 Windows 使用、固定地址连接和打包方面的反馈。
 
@@ -102,7 +138,7 @@ Linux 安装包暂不在自动发布范围内；源码中的通用平台兼容�
 
 `src/main/settings-adapter.ts` 集中管理官方设置 DOM 的只读探测。注入诊断区分 `absent`（未发现可识别弹窗）、`mounted`（入口已挂载）与 `unsupported`（已识别弹窗但结构不支持）。后者会撤销注入产生的导航和显示状态，同一文档内每种失败原因仅告警一次。主进程状态接口的 `settingsIntegration` 字段提供诊断，不包含页面文本、地址或密钥。无法识别的全新弹窗仍可能显示为 `absent`，此字段不用于判断上游版本兼容性。
 
-运行 `npm run build:shell && npm run check:settings-integration`，用隔离的 Electron 实例验证结构变更、清理、重新挂载、原生设置入口和安全市场持久化。该检查已加入 macOS/Windows CI；模拟页面不代替实际官方 Web UI 的版本兼容验证。
+运行 `npm run build:shell && npm run check:settings-integration`，用隔离的 Electron 实例验证结构变更、清理、重新挂载、原生设置入口和安全市场持久化。该检查已加入 macOS/Windows/Linux CI；模拟页面不代替实际官方 Web UI 的版本兼容验证。
 
 ## 运行时与连接边界
 

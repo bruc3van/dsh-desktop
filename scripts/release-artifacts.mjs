@@ -31,14 +31,14 @@ export const ARTIFACT_NAME_TEMPLATE = 'dsh-desktop-${version}-${os}-${arch}.${ex
  * lists them. `key` is the updater's platform key in latest.json, so adding a
  * matrix leg here is what makes the feed require it.
  *
- * Linux is deliberately absent: the workflow builds no Linux artifact. The
- * source tree keeps its platform-generic paths, but a release that claims a
- * Linux download would be lying.
+ * Keep this table aligned with the native build matrix in release.yml.
  */
 export const RELEASE_TARGETS = [
   { key: 'mac-arm64', os: 'mac', arch: 'arm64', ext: 'dmg', device: 'Mac，芯片显示 Apple M 系列' },
   { key: 'mac-x64', os: 'mac', arch: 'x64', ext: 'dmg', device: 'Mac，处理器显示 Intel' },
   { key: 'win-x64', os: 'win', arch: 'x64', ext: 'exe', device: 'Windows 64 位，Intel 或 AMD 处理器' },
+  // AppImageTarget expands electron-builder's x64 architecture as x86_64.
+  { key: 'linux-x64', os: 'linux', arch: 'x86_64', ext: 'AppImage', device: 'Linux 64 位，Intel 或 AMD 处理器' },
 ]
 
 /** The file electron-builder produces for one target at one version. */

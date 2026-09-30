@@ -197,7 +197,55 @@ jobs:
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: pnpm run check:plugin-recovery
 
-  # main/手动运行验证两个架构的 DMG 实际安装；PR 只运行上面的契约检查。
+  package-linux:
+    name: Linux x64 AppImage 冒烟 / Linux package smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: 检出 / Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: 安装 pnpm / Setup pnpm
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+      - name: 安装 Node.js / Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: 准备 Linux 图形测试环境 / Prepare Linux display
+        shell: bash
+        run: bash scripts/setup-linux-ci.sh
+      - name: 安装依赖 / Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: 构建应用 / Build application
+        run: pnpm run build
+      - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
+        run: pnpm run prepare:runtime && pnpm run check:market-boot
+        env:
+          DSH_RUNTIME_TARGET: linux-x64
+      - name: 验证 Linux 应用与运行时 / Verify Linux application and runtime
+        env:
+          DSH_DESKTOP_REQUIRE_RUNTIME_CLOSURE: "1"
+        run: |
+          pnpm run check:runtime-env
+          pnpm run check:pnpm-engine
+          pnpm run check:runtime-survivor
+          pnpm run check:connection
+          pnpm run check:settings-integration
+          pnpm run check:updater
+          pnpm run check:linux
+      - name: 生成 AppImage / Package AppImage
+        run: pnpm exec electron-builder --linux AppImage --x64 --publish never
+      - name: 验证 AppImage 内的应用 / Smoke application extracted from AppImage
+        run: pnpm run smoke:appimage
+      - name: 保存 Linux 测试安装包 / Save Linux test package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dsh-desktop-linux-x64
+          path: release/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  # main/手动运行验证两个架构的 DMG 实际安装。
   # 保留独立打包作业，让安装验证与源码检查并行。
   package-macos:
     name: macOS ${{ matrix.arch }} 安装包冒烟 / Package smoke

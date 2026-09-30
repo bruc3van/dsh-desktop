@@ -39,6 +39,23 @@ npmRebuild: false
 compression: normal
 artifactName: dsh-desktop-${version}-${os}-${arch}.${ext}
 
+linux:
+  executableName: dsh-desktop
+  syncDesktopName: true
+  icon: resources/icon-app.png
+  category: Development
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  desktop:
+    entry:
+      StartupWMClass: dsh-desktop
+
+# Legacy AppImage desktop entries otherwise add --no-sandbox by default.
+appImage:
+  executableArgs: []
+
 # Chromium ships 55 locale packs (44 MB on Windows / 45 MB on macOS) but the
 # client only needs zh and en. Both spellings are required: the platforms name
 # them differently (zh-CN.pak on Windows, zh_CN.lproj on macOS) and

@@ -15,6 +15,8 @@ function updateCopy(english: boolean): {
   found: string
   preparing: string
   downloading: string
+  downloaded: string
+  reveal: string
   installing: string
   restart: string
   failed: string
@@ -31,7 +33,7 @@ function updateCopy(english: boolean): {
       title: 'App updates',
       check: 'Check for updates',
       checking: 'Checking…',
-      install: 'Download and install',
+      install: process.platform === 'linux' ? 'Download update' : 'Download and install',
       dismiss: 'Remind me later',
       releases: 'Open the releases page to download manually',
       upToDate: 'You are on the latest version',
@@ -39,6 +41,8 @@ function updateCopy(english: boolean): {
       found: 'New version available',
       preparing: 'Preparing the download…',
       downloading: 'Downloading',
+      downloaded: 'Downloaded and verified. Quit, replace the original AppImage, then reopen it.',
+      reveal: 'Show downloaded file',
       installing: 'Starting the installer…',
       restart: 'Install the new copy, then reopen the app',
       failed: 'Update failed: ',
@@ -55,7 +59,7 @@ function updateCopy(english: boolean): {
     title: '应用更新',
     check: '检查更新',
     checking: '检查中…',
-    install: '下载并安装',
+    install: process.platform === 'linux' ? '下载新版本' : '下载并安装',
     dismiss: '稍后提醒',
     releases: '打开 GitHub 发布页手动下载',
     upToDate: '已是最新版本',
@@ -63,6 +67,8 @@ function updateCopy(english: boolean): {
     found: '发现新版本',
     preparing: '正在准备下载…',
     downloading: '下载中',
+    downloaded: '已下载并校验。请退出客户端，替换原 AppImage 后重新打开。',
+    reveal: '打开下载位置',
     installing: '正在启动安装程序…',
     restart: '请安装新版本后重新打开应用',
     failed: '更新失败：',
@@ -124,10 +130,11 @@ export function paintUpdateCard(state: UpdateState, english: boolean): void {
   // A failed attempt keeps the offer on screen: the update is still there and
   // retrying is the obvious next move. Without this the state would say
   // "hide" while the click handler said "show", and they would fight.
-  const showInstall = (state.phase === 'available' || state.phase === 'error') && state.info !== null && !busy
+  const showInstall = (state.phase === 'available' || state.phase === 'downloaded' || state.phase === 'error') && state.info !== null && !busy
   installEl.hidden = !showInstall
   dismissEl.hidden = !showInstall || state.dismissed
   installEl.disabled = busy
+  installEl.textContent = state.phase === 'downloaded' ? copy.reveal : copy.install
 
   const dsh = block.dataset.dshVersion || copy.dshUnavailable
   versionEl.textContent = copy.client + state.currentVersion + ' · ' + copy.bundled + ' ' + dsh
@@ -150,6 +157,7 @@ export function paintUpdateCard(state: UpdateState, english: boolean): void {
       line += ' · ' + megabytes(progress.downloaded) + (total > 0 ? '/' + megabytes(total) : '') + ' MB'
     }
   } else if (state.phase === 'installing') line = copy.installing
+  else if (state.phase === 'downloaded') line = copy.downloaded
   else if (state.phase === 'restartRequired') line = copy.restart
   // A refusal leaves the phase alone and publishes only a reason, so the
   // reason — not the phase — is what decides this line.

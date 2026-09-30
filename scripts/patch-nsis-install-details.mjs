@@ -1042,7 +1042,8 @@ function rewriteFile(file, contents) {
  * place so the NSIS compile that follows picks up details and upgrade safety.
  * @returns {void}
  */
-export default function beforePack() {
+export default function beforePack(context) {
+  if (context.electronPlatformName !== 'win32') return
   const result = patchInstalledNsisTemplates()
   const verb = result.changed ? 'enabled' : 'already enabled'
   console.log('✓ NSIS install details ' + verb + ' in ' + result.paths.installSection)

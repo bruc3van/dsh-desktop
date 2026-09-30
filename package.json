@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "main": ".build/main.mjs",
+  "desktopName": "dsh-desktop.desktop",
   "author": "bruc3van",
   "homepage": "https://github.com/bruc3van/dsh-desktop#readme",
   "repository": {
@@ -64,6 +65,8 @@
     "check:updater": "node scripts/check-updater.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
     "smoke:dmg": "node scripts/smoke-dmg.mjs",
+    "smoke:appimage": "node scripts/smoke-appimage.mjs",
+    "check:linux": "node scripts/check-linux.mjs",
     "e2e": "node scripts/e2e.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "oxlint -c .oxlintrc.json src scripts",

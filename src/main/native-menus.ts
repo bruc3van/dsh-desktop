@@ -19,6 +19,20 @@ interface ApplicationMenuOptions {
   actions: MenuActions
 }
 
+/** Linux desktops may omit the tray; keep settings and quit in the window. */
+export function buildLinuxApplicationMenu({ chinese, actions }: TrayMenuOptions): Electron.MenuItemConstructorOptions[] {
+  return [
+    { label: 'DSH Desktop', submenu: [
+      { label: chinese ? '桌面设置…' : 'Desktop settings…', accelerator: 'CommandOrControl+,', click: actions.openSettings },
+      { label: chinese ? '检查更新…' : 'Check for Updates…', click: actions.checkUpdates },
+      { label: chinese ? '重启客户端' : 'Restart', click: actions.restart },
+      { type: 'separator' },
+      { label: chinese ? '退出' : 'Quit', accelerator: 'CommandOrControl+Q', click: actions.quit },
+    ] },
+    { role: 'editMenu' },
+  ]
+}
+
 export function buildTrayMenu({ chinese, state, actions }: TrayMenuOptions): Electron.MenuItemConstructorOptions[] {
   const updateLabel = state?.phase === 'available' && state.info !== null && !state.dismissed
     ? (chinese ? '更新到 v' : 'Update to v') + state.info.availableVersion

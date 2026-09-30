@@ -124,7 +124,7 @@ export function createMainWindowFactory(options: Options) {
       // Keep the Web UI renderer alive in the tray so its notification plugin
       // can keep observing long-running sessions. A real quit sets `quitting`
       // in before-quit and passes through; installer handoff must pass too.
-      if (process.platform !== 'win32' || options.getQuitting() || isInstallerHandoff()) return
+      if ((process.platform !== 'win32' && process.platform !== 'linux') || options.getQuitting() || isInstallerHandoff()) return
       event.preventDefault()
       mainWindow?.hide()
     })

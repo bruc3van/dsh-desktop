@@ -15,7 +15,7 @@ DSH Desktop 是独立的 DeepSeek Harness（`dsh`）Electron 客户端。窗口�
 
 ## 主要功能
 
-- 关闭窗口后继续在后台运行，可从托盘或菜单栏重新打开。
+- 关闭窗口后继续在后台运行，可从托盘或菜单栏重新打开；Linux 无托盘时可再次启动同一 AppImage 恢复窗口。
 - 直接使用官方 Web UI，不维护另一套界面。
 - 安装包内置官方运行时，可直接启动。
 - 可复用正在运行的 dsh，也可使用 PATH、npx 缓存或内置运行时。
@@ -30,9 +30,16 @@ DSH Desktop 是独立的 DeepSeek Harness（`dsh`）Electron 客户端。窗口�
 
 从 [GitHub Releases](https://github.com/bruc3van/dsh-desktop/releases) 下载对应系统的安装包。发布版已经包含官方 dsh 运行时，首次启动不会执行 npm 安装。
 
-当前发布流程提供 macOS Apple Silicon、macOS Intel 和 Windows x64 安装包。Linux 暂不提供预构建安装包，可参照开发指南从源码运行。
+| 你的设备 | 选择的安装包 |
+|---|---|
+| macOS，Apple Silicon（Apple M 系列） | `mac-arm64.dmg` |
+| macOS，Intel | `mac-x64.dmg` |
+| Windows，Intel/AMD 64 位 | `win-x64.exe` |
+| Linux，Intel/AMD 64 位 | `linux-x86_64.AppImage` |
 
-当前安装包尚未完成正式开发者签名认证，首次打开时系统可能拦截。
+表中列出文件名后缀，实际文件名还包含客户端版本号。各版本覆盖的平台以该 Release 的下载资产为准。Linux 首版只提供 x64 AppImage，暂不提供 ARM64、DEB 或 RPM 包。
+
+macOS/Windows 安装包尚未完成正式开发者签名认证，首次打开时系统可能拦截。
 
 **首次打开被系统拦截时**
 
@@ -45,6 +52,20 @@ DSH Desktop 是独立的 DeepSeek Harness（`dsh`）Electron 客户端。窗口�
   ```
 
 - **Windows**：在 Microsoft Defender SmartScreen 中点击“更多信息”，再点击“仍要运行”。
+
+### Linux x64 安装
+
+1. 下载文件名以 `linux-x86_64.AppImage` 结尾的包。
+2. 将文件放到 `~/Applications/`（目录不存在时先创建），保留原文件名。
+3. 在文件属性中允许执行，然后双击打开。也可用以下命令赋予执行权限：
+
+   ```sh
+   chmod +x ~/Applications/dsh-desktop-*-linux-x86_64.AppImage
+   ```
+
+缺少 FUSE 2 时，Ubuntu 24.04 可安装 `libfuse2t64`；也可在启动 AppImage 时加上 `--appimage-extract-and-run` 解压运行。若双击后没有窗口，请从终端运行该文件查看错误；遇到用户命名空间或 Chromium 沙箱限制时，按[Linux 安装与系统要求](docs/development.zh.md#linux-x64)配置 AppArmor。客户端要求保留渲染器沙箱。
+
+当前验证环境为 WSL 中的 Ubuntu 24.04，已检查 X11 和 WSLg Wayland。其他发行版及完整原生 GNOME/KDE 桌面仍需独立验证；AppImage 格式不代表所有 Linux 系统均已验证兼容。托盘、系统通知和中文输入法的实际表现取决于桌面环境。
 
 ### 开始对话
 
@@ -70,7 +91,7 @@ DSH Desktop 是独立的 DeepSeek Harness（`dsh`）Electron 客户端。窗口�
 
 共享数据环境下，如果客户端检测到官方实例仍在运行，但当前设置不允许复用，会拒绝另起进程，也不会结束用户启动的进程。请先在终端停止该实例，或切换到独立数据环境。
 
-可从托盘菜单、macOS 应用菜单或主窗口快捷键打开“桌面设置”：macOS 使用 `Cmd+,`，Windows/Linux 使用 `Ctrl+,`。
+可从托盘菜单、macOS/Linux 应用菜单或主窗口快捷键打开“桌面设置”：macOS 使用 `Cmd+,`，Windows/Linux 使用 `Ctrl+,`。
 
 ![桌面设置：连接方式、运行时来源、安全市场和版本信息](docs/images/dsh-desktop-setting.png)
 
@@ -116,7 +137,7 @@ Windows 安装版支持系统通知。Linux 使用 Chromium 通知。当前 macO
 
 ## 桌面端行为
 
-- 关闭主窗口后继续后台运行；从托盘或菜单栏可重新打开。
+- 关闭主窗口后继续后台运行；从托盘或菜单栏可重新打开。Linux 无托盘时，再次启动同一 AppImage 可恢复窗口；使用窗口菜单“DSH Desktop → 退出”或 `Ctrl+Q` 结束客户端。
 - “重启客户端”会重启客户端管理的本地运行时，不会结束用户在终端启动的 `dsh web`。
 - 本地 Web UI 意外退出时会进行有限次数的重启。
 - 系统唤醒或长时间后台运行后，页面异常时会在服务可用后重新加载。
@@ -124,9 +145,11 @@ Windows 安装版支持系统通知。Linux 使用 Chromium 通知。当前 macO
 - 客户端通过运行时锁和本机服务探测，避免为同一 `DSH_HOME` 重复启动运行时。无法安全接管或停止旧进程时，会拒绝启动新进程；这些检查不能阻止用户从其他终端或工具启动额外实例。
 - 共享环境因插件失败而无法启动时，可卸载确认存在的问题插件后重试，或保留插件并切换到独立环境。
 
-发布版启动后会检查 GitHub Releases，12 小时内不重复自动检查。也可从设置、托盘菜单或 macOS 应用菜单手动检查。更新窗口显示下载、校验和安装状态；下载失败可重试，关闭窗口后下载可以继续。
+发布版启动后会检查 GitHub Releases，12 小时内不重复自动检查。也可从设置、托盘菜单或 macOS/Linux 应用菜单手动检查。更新窗口显示下载、校验和后续操作；下载失败可重试，关闭窗口后下载可以继续。
 
 macOS 可在应用目录可写时自动替换并重启应用。更新失败时会尝试恢复旧应用。更新会中断客户端管理的本地任务，请选择合适的时间执行。
+
+Linux 更新会下载并校验新 AppImage，然后打开文件位置，供手动替换；下载期间任务继续运行。请通过“DSH Desktop → 退出”或 `Ctrl+Q` 退出客户端，再用新文件替换原 AppImage 并重新打开。关闭主窗口仅隐藏窗口，不能代替退出。已校验的下载在客户端重启后仍可复用。
 
 ## 内置运行环境
 

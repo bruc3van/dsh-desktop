@@ -10,8 +10,8 @@
  */
 
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { chmodSync, createReadStream, createWriteStream, mkdirSync, readdirSync, unlinkSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { chmodSync, createReadStream, createWriteStream, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -22,18 +22,19 @@ export type UpdaterPhase =
   | 'checking'
   | 'available'
   | 'downloading'
+  | 'downloaded'
   | 'installing'
   | 'restartRequired'
   | 'upToDate'
   // A release newer than this one exists, but it ships no installer for this
-  // platform (today: any Linux build, which is source-only). Distinct from
+  // platform (for example Linux ARM64). Distinct from
   // upToDate on purpose — telling that user they are current is a lie the
   // client would repeat at every check.
   | 'unsupportedPlatform'
   | 'error'
 
 /** What a finished manual check has to tell the person who asked for it. */
-export type ManualCheckAnswer = 'available' | 'upToDate' | 'unsupportedPlatform' | 'failed'
+export type ManualCheckAnswer = 'available' | 'downloaded' | 'upToDate' | 'unsupportedPlatform' | 'failed'
 
 /**
  * Three surfaces render an update state — the injected card, the native
@@ -51,6 +52,7 @@ export type ManualCheckAnswer = 'available' | 'upToDate' | 'unsupportedPlatform'
 export function manualCheckAnswer(phase: UpdaterPhase): ManualCheckAnswer {
   switch (phase) {
     case 'available': return 'available'
+    case 'downloaded': return 'downloaded'
     case 'unsupportedPlatform': return 'unsupportedPlatform'
     case 'error': return 'failed'
     case 'idle':
@@ -118,6 +120,8 @@ export interface DesktopUpdaterOptions {
   packaged: boolean
   preflightMac?: () => Promise<void>
   installMac?: (file: string, version: string) => Promise<void>
+  /** Linux downloads are revealed for manual replacement, never executed. */
+  revealDownload?: (file: string) => void
   downloadDir: string
   loadPersistence: () => UpdaterPersistence
   savePersistence: (next: UpdaterPersistence) => void
@@ -487,8 +491,7 @@ export class DesktopUpdater {
       const platform = key === undefined ? undefined : pickFeedPlatform(feed, key)
       // Two different answers used to share this branch. "Nothing newer
       // exists" is up to date; "something newer exists, but not for this
-      // machine" is not — the release matrix builds macOS and Windows, so a
-      // Linux (or any unlisted) build would otherwise be told it was current
+      // machine" is not — an unlisted build would otherwise be told it was current
       // by a feed that never had anything to offer it.
       if (compareVersions(feed.version, this.options.currentVersion) <= 0) {
         this.info = null
@@ -515,10 +518,11 @@ export class DesktopUpdater {
         ...feed.pubDate !== undefined && { pubDate: feed.pubDate },
         ...platform.sha256 !== undefined && { sha256: platform.sha256 },
       }
+      const alreadyDownloaded = await this.verifiedLinuxDownload(info)
       this.info = info
       const persisted = this.options.loadPersistence()
       this.dismissed = persisted.dismissedVersion === info.availableVersion
-      this.setPhase('available')
+      this.setPhase(alreadyDownloaded ? 'downloaded' : 'available')
       this.markChecked()
       return { hasUpdate: true, info }
     } catch (err) {
@@ -558,40 +562,57 @@ export class DesktopUpdater {
     // going, the state is already saying the right thing, and the caller
     // still gets the reason in the result.
     if (info === null) return { started: false, error: '没有可安装的更新' }
-    if (this.phase === 'downloading' || this.phase === 'installing' || this.phase === 'restartRequired') {
+    if (this.phase === 'checking' || this.phase === 'downloading' || this.phase === 'installing' || this.phase === 'restartRequired') {
       return { started: false, error: '更新正在进行中' }
     }
     if (info.sha256 === undefined) {
       return this.refuseInstall('安装包缺少 SHA-256，已拒绝安装')
     }
-
     this.error = null
     this.progress = { total: 0, downloaded: 0, percent: 0 }
     this.setPhase('downloading')
 
+    let pendingDownload: string | undefined
     try {
+      const existing = await this.verifiedLinuxDownload(info)
+      if (existing !== undefined) {
+        this.revealLinuxDownload(existing)
+        return { started: true }
+      }
       if (this.options.platform === 'darwin' && !this.options.dryRun) await this.options.preflightMac?.()
       const destination = joinDownloadPath(this.options.downloadDir, info.fileName)
-      await this.downloadToFile(info, destination)
-      const actual = await sha256File(destination)
+      // Preserve a previous AppImage until the new bytes have been verified.
+      // Same-directory rename publishes a complete file, including on retry.
+      const staging = this.options.platform === 'linux' ? destination + '.' + randomUUID() + '.part' : destination
+      if (staging !== destination) pendingDownload = staging
+      await this.downloadToFile(info, staging)
+      const actual = await sha256File(staging)
       if (actual !== info.sha256.toLowerCase()) {
-        try { unlinkSync(destination) } catch { /* keep going to report the hash error */ }
+        try { unlinkSync(staging) } catch { /* keep going to report the hash error */ }
         throw new Error('安装包校验失败（SHA-256 不匹配）')
       }
-      pruneOldInstallers(this.options.downloadDir, info.fileName)
       // The download never carries an executable bit, and an AppImage is the
       // program itself: give it one before the desktop tries to launch it.
       if (destination.toLowerCase().endsWith('.appimage')) {
-        try {
-          chmodSync(destination, 0o755)
-        } catch (error) {
-          console.warn('[desktop] could not make the AppImage executable: ' + describeFetchError(error))
-        }
+        chmodSync(staging, 0o755)
       }
+      if (staging !== destination) {
+        renameSync(staging, destination)
+        pendingDownload = undefined
+      }
+      pruneOldInstallers(this.options.downloadDir, info.fileName)
 
       if (this.options.dryRun) {
         this.progress = null
         this.setPhase('available')
+        return { started: true }
+      }
+
+      // AppImages are the application itself, not installers. Opening a second
+      // copy cannot replace this one and may collide with its live runtime.
+      // Leave tasks running and reveal the verified file for manual replacement.
+      if (this.options.platform === 'linux') {
+        this.revealLinuxDownload(destination)
         return { started: true }
       }
 
@@ -619,7 +640,26 @@ export class DesktopUpdater {
       this.error = describeFetchError(err)
       this.setPhase('error')
       return { started: false, error: this.error }
+    } finally {
+      if (pendingDownload !== undefined) {
+        try { unlinkSync(pendingDownload) } catch { /* already removed after a transport failure */ }
+      }
     }
+  }
+
+  private async verifiedLinuxDownload(info: UpdateInfo): Promise<string | undefined> {
+    if (this.options.platform !== 'linux' || this.options.dryRun || info.sha256 === undefined) return undefined
+    try {
+      const destination = joinDownloadPath(this.options.downloadDir, info.fileName)
+      if (await sha256File(destination) === info.sha256.toLowerCase()) return destination
+    } catch { /* Missing, invalid or unreadable files require a fresh download. */ }
+    return undefined
+  }
+
+  private revealLinuxDownload(destination: string): void {
+    this.progress = null
+    this.setPhase('downloaded')
+    this.options.revealDownload?.(destination)
   }
 
   /**
@@ -816,7 +856,8 @@ function githubReleaseToFeed(release: GithubRelease, key: string): FeedWithSums 
   if (version === '') return undefined
   const assets = Array.isArray(release.assets) ? release.assets : []
   const expectedExt = key.startsWith('win') ? 'exe' : key.startsWith('linux') ? 'AppImage' : 'dmg'
-  const expectedName = `dsh-desktop-${version}-${key}.${expectedExt}`
+  const assetKey = key === 'linux-x64' ? 'linux-x86_64' : key
+  const expectedName = `dsh-desktop-${version}-${assetKey}.${expectedExt}`
   let downloadUrl: string | undefined
   let sumsUrl: string | undefined
   for (const item of assets) {

@@ -46,7 +46,9 @@ export function renderSettingsPageScript(chinese: boolean): string {
     + '$("update-check").disabled=busy;$("update-install").disabled=busy;'
     // A refused install keeps the offer (and the button) on screen, so the
     // error phase counts as an offer too — same rule as the injected card.
-    + 'const has=(u.phase==="available"||u.phase==="error")&&u.info;$("update-install").hidden=!has||busy;'
+    + 'const has=(u.phase==="available"||u.phase==="downloaded"||u.phase==="error")&&u.info;$("update-install").hidden=!has||busy;'
+    + '$("update-install").textContent=u.phase==="downloaded"?' + t('打开下载位置', 'Show downloaded file') + ':'
+    + (process.platform === 'linux' ? t('下载新版本', 'Download update') : t('下载并安装', 'Download and install')) + ';'
     + '$("update-dismiss").hidden=!has||u.dismissed||busy;'
     + 'let line="";'
     + 'if(u.phase==="checking")line=' + t('正在检查…', 'Checking…') + ';'
@@ -60,6 +62,7 @@ export function renderSettingsPageScript(chinese: boolean): string {
     + '+(u.progress&&u.progress.downloaded?" · "+(u.progress.downloaded/1048576).toFixed(1)'
     + '+(u.progress.total?"/"+(u.progress.total/1048576).toFixed(1):"")+" MB":"");'
     + 'else if(u.phase==="installing")line=' + t('正在启动安装程序', 'Starting the installer') + ';'
+    + 'else if(u.phase==="downloaded")line=' + t('已下载并校验。请退出客户端，替换原 AppImage 后重新打开。', 'Downloaded and verified. Quit, replace the original AppImage, then reopen it.') + ';'
     + 'else if(u.phase==="restartRequired")line=' + t('请安装后重新打开', 'Install it, then reopen') + ';'
     // The reason, not the phase, decides: a refusal publishes only a reason.
     + 'const failed=u.phase==="error"||u.error;'

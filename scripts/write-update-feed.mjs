@@ -41,7 +41,7 @@ for (const name of readdirSync(dir)) {
 // this file's old check while leaving one platform's users with no updates at
 // all — and silently, because the updater reads a missing key as "up to date"
 // rather than as an error. The build matrix is what normally guarantees all
-// three are present; this is the last place that can still see whether they
+// four are present; this is the last place that can still see whether they
 // actually are, so it refuses to write a feed that would strand anyone.
 const missing = requiredPlatformKeys().filter(key => platforms[key] === undefined)
 if (missing.length > 0) {

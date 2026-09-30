@@ -15,7 +15,7 @@ Release installers include a pinned version of the official `@deepseek-ai/dsh` r
 
 ## Main features
 
-- Keeps running after the main window closes and reopens from the tray or menu bar.
+- Keeps running after the main window closes and reopens from the tray or menu bar. On Linux without a tray, launching the same AppImage again restores the window.
 - Uses the official Web UI instead of maintaining a separate interface.
 - Includes the official runtime in the installer.
 - Can reuse a running dsh or use a PATH installation, npx cache, or the bundled runtime.
@@ -30,9 +30,16 @@ Release installers include a pinned version of the official `@deepseek-ai/dsh` r
 
 Download the installer for your system from [GitHub Releases](https://github.com/bruc3van/dsh-desktop/releases). Release builds already contain the official dsh runtime and do not run npm installation on first launch.
 
-The current release workflow provides installers for macOS Apple Silicon, macOS Intel, and Windows x64. Linux has no prebuilt installer at present; see the development guide to run from source.
+| Your device | Package to choose |
+|---|---|
+| macOS, Apple Silicon (Apple M series) | `mac-arm64.dmg` |
+| macOS, Intel | `mac-x64.dmg` |
+| Windows, 64-bit Intel/AMD | `win-x64.exe` |
+| Linux, 64-bit Intel/AMD | `linux-x86_64.AppImage` |
 
-Current packages do not yet have full developer signing and notarization, so the operating system may block the first launch.
+These are filename suffixes; the full name also includes the client version. Platform availability depends on the assets of the selected Release. The first Linux package is an x64 AppImage; ARM64, DEB, and RPM packages are not provided.
+
+macOS/Windows packages do not yet have full developer signing and notarization, so the operating system may block the first launch.
 
 **If the operating system blocks the first launch**
 
@@ -45,6 +52,20 @@ Current packages do not yet have full developer signing and notarization, so the
   ```
 
 - **Windows:** In Microsoft Defender SmartScreen, choose **More info**, then **Run anyway**.
+
+### Install on Linux x64
+
+1. Download the package whose filename ends in `linux-x86_64.AppImage`.
+2. Place it in `~/Applications/` (create the directory if needed) and keep the original filename.
+3. Allow execution in the file's properties, then double-click it. Alternatively, grant executable permission with:
+
+   ```sh
+   chmod +x ~/Applications/dsh-desktop-*-linux-x86_64.AppImage
+   ```
+
+If FUSE 2 is missing, Ubuntu 24.04 users can install `libfuse2t64`. Alternatively, pass `--appimage-extract-and-run` when launching the AppImage. If double-clicking opens no window, run the file from a terminal to see the error. For user-namespace or Chromium sandbox restrictions, follow the [Linux installation and system requirements](docs/development.md#linux-x64) to configure AppArmor. The client requires renderer sandboxing.
+
+The current validation environment is Ubuntu 24.04 under WSL, with X11 and WSLg Wayland checks. Other distributions and full native GNOME/KDE desktop behavior need separate validation; the AppImage format does not establish compatibility with every Linux system. Tray integration, system notifications, and input methods depend on the desktop environment.
 
 ### Start a conversation
 
@@ -70,7 +91,7 @@ For local services, automatic port selection tries 3080, then 13080, then an OS-
 
 In the shared data environment, if the client detects a running official instance but the current settings do not allow reuse, it refuses to start another process and does not stop the user-owned process. Stop that instance in the terminal first, or switch to the isolated data environment.
 
-Open **Desktop settings** from the tray menu, the macOS application menu, or with `Cmd+,` on macOS and `Ctrl+,` on Windows/Linux.
+Open **Desktop settings** from the tray menu, the macOS/Linux application menu, or with `Cmd+,` on macOS and `Ctrl+,` on Windows/Linux.
 
 ![Desktop settings: connection mode, runtime sources, Safe Market, and version information](docs/images/dsh-desktop-setting.png)
 
@@ -116,7 +137,7 @@ Use of this client remains subject to the terms and privacy policies of DeepSeek
 
 ## Desktop behavior
 
-- Closing the main window keeps the app running; reopen it from the tray or menu bar.
+- Closing the main window keeps the app running; reopen it from the tray or menu bar. On Linux without a tray, launch the same AppImage again to restore the window. Use **DSH Desktop → Quit** in the window menu or `Ctrl+Q` to exit.
 - **Restart client** restarts client-managed local runtimes but does not stop a `dsh web` process started by the user.
 - A local Web UI that exits unexpectedly receives a limited number of restart attempts.
 - After system resume or a long idle, an invalid page reloads after the service becomes available.
@@ -124,11 +145,13 @@ Use of this client remains subject to the terms and privacy policies of DeepSeek
 - Uses runtime locks and local service probes to avoid starting duplicate runtimes on the same `DSH_HOME`. If it cannot safely adopt or stop an old process, it refuses to start a new one. These checks cannot stop users from launching additional instances through other terminals or tools.
 - If plugins prevent Shared from starting, the user can remove the confirmed plugins and retry, or keep them and switch to the isolated environment.
 
-Release builds check GitHub Releases after startup and do not repeat automatic checks within 12 hours. Manual checks are available from settings, the tray, and the macOS application menu.
+Release builds check GitHub Releases after startup and do not repeat automatic checks within 12 hours. Manual checks are available from settings, the tray, and the macOS/Linux application menu.
 
-The update window shows download, verification, and installation status. Failed downloads can be retried, and downloads can continue after the window closes.
+The update window shows download, verification, and the next action. Failed downloads can be retried, and downloads can continue after the window closes.
 
 On macOS, the client can replace and restart an app installed in a writable directory. It attempts to restore the previous app if replacement fails. Updates interrupt client-managed local tasks.
+
+On Linux, updates download and verify the new AppImage, then reveal it for manual replacement. Tasks keep running during the download. Use **DSH Desktop → Quit** or `Ctrl+Q` to exit, replace the original AppImage with the new file, and reopen it. Closing the main window only hides it; it does not quit the client. Verified downloads remain reusable after a client restart.
 
 ## Bundled runtime environment
 

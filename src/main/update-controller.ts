@@ -114,6 +114,7 @@ export function createUpdateController(services: Options) {
       arch: process.arch,
       packaged: app.isPackaged,
       downloadDir: join(clientHome(), 'updates'),
+      revealDownload: file => { shell.showItemInFolder(file) },
       preflightMac: async () => { await preflightMacUpdate(process.execPath, localeChinese()) },
       installMac: async (file, version) => {
         // Preparation cleans its own staging directory if it fails.
@@ -134,7 +135,7 @@ export function createUpdateController(services: Options) {
       // Both constraints meet at exactly this point in the install.
       //
       // macOS stops the runtime in installMac, after staging and verification.
-      // Linux still opens the installer without stopping the runtime here.
+      // Linux only downloads and reveals the AppImage, leaving tasks running.
       onBeforeInstall: async () => {
         if (process.platform !== 'win32') return
         await beginInstallerHandoff()
@@ -191,6 +192,7 @@ export function createUpdateController(services: Options) {
     failed: string
     checking: string
     downloading: string
+    downloaded: string
     installing: string
     restart: string
   } {
@@ -200,13 +202,14 @@ export function createUpdateController(services: Options) {
         latest: '已是最新版本',
         later: '稍后',
         ignore: '忽略此版本',
-        install: '下载并安装',
+        install: process.platform === 'linux' ? '下载新版本' : '下载并安装',
         failed: '检查更新失败',
         unsupported: '已有更新版本，但没有本平台的安装包',
         unsupportedDetail: '这次发布没有为本平台构建安装包。发布页可以确认该版本覆盖了哪些平台。',
         releases: '打开发布页',
         checking: '正在检查更新…',
         downloading: '正在下载新版本…',
+        downloaded: '已下载并校验。请退出客户端后，用下载的 AppImage 替换原文件，再重新打开。',
         installing: process.platform === 'darwin' ? '正在验证并准备更新，随后将自动重启…' : '正在启动安装程序…',
         restart: process.platform === 'darwin' ? '即将退出并自动重启…' : '请安装新版本后重新打开应用',
       }
@@ -216,13 +219,14 @@ export function createUpdateController(services: Options) {
       latest: 'You are on the latest version',
       later: 'Later',
       ignore: 'Skip this version',
-      install: 'Download and install',
+      install: process.platform === 'linux' ? 'Download update' : 'Download and install',
       failed: 'Could not check for updates',
       unsupported: 'A newer version exists, but not for this platform',
       unsupportedDetail: 'That release was not built for this platform. The releases page shows which platforms it covers.',
       releases: 'Open the releases page',
       checking: 'Checking for updates…',
       downloading: 'Downloading the new version…',
+      downloaded: 'Downloaded and verified. Quit the client, replace the original AppImage with the downloaded file, then reopen it.',
       installing: process.platform === 'darwin' ? 'Verifying and preparing the update; the app will restart…' : 'Starting the installer…',
       restart: process.platform === 'darwin' ? 'The app will quit and restart automatically…' : 'Install the new copy, then reopen the app',
     }
@@ -379,7 +383,7 @@ export function createUpdateController(services: Options) {
     const options: Electron.MessageBoxOptions = {
       type: answer === 'failed' ? 'error' : 'info',
       title: 'DSH Desktop',
-      message: answer === 'failed' ? copy.failed : unsupported ? copy.unsupported : copy.latest,
+      message: answer === 'failed' ? copy.failed : answer === 'downloaded' ? copy.downloaded : unsupported ? copy.unsupported : copy.latest,
       ...state.error !== null && { detail: state.error },
       ...unsupported && { detail: copy.unsupportedDetail, defaultId: 0, cancelId: 1 },
       buttons: unsupported ? [copy.releases, 'OK'] : ['OK'],

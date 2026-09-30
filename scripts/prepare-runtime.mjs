@@ -195,11 +195,8 @@ const RUNTIME_TARGET = process.env.DSH_RUNTIME_TARGET
 if (RUNTIME_TARGET !== undefined) {
   // Shape only. What the target must actually be is decided below against the
   // directories node-pty really ships — a list that no regex here can stay in
-  // sync with. `linux` is absent because no linux artifact is released — the
-  // matrix is macOS arm64/x64 and Windows x64 — not because node-pty lacks the
-  // prebuild: it has shipped linux-x64 and linux-arm64 since 1.2.0-beta.15.
-  // Re-enabling a linux release means widening this shape too.
-  if (!/^(darwin|win32)-(arm64|x64)$/.test(RUNTIME_TARGET)) {
+  // sync with. The retained native payload must exist before any pruning.
+  if (!/^(darwin|win32|linux)-(arm64|x64)$/.test(RUNTIME_TARGET)) {
     throw new Error('invalid DSH_RUNTIME_TARGET: ' + RUNTIME_TARGET + ' (expected e.g. win32-x64)')
   }
   const prebuilds = join(runtimeModules, 'node-pty', 'prebuilds')

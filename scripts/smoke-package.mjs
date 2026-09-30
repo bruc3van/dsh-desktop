@@ -8,7 +8,7 @@
 
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -64,16 +64,15 @@ if (!existsSync(executable)) throw new Error('packaged executable does not exist
  * are required per platform (zh-CN.pak on Windows, zh_CN.lproj on macOS)
  * because the matcher is a reverse-prefix check: one spelling alone silently
  * deletes the other platform's Chinese pack. This assertion turns that silent
- * deletion into a red build on both release matrix legs. Linux is not covered:
- * the release matrix ships no Linux artifact (revisit if one is added).
+ * deletion into a red build on every release matrix leg.
  */
 async function assertLocalePacks(packagedExecutable) {
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' || process.platform === 'linux') {
     const dir = join(dirname(packagedExecutable), 'locales')
     const packs = (await readdir(dir)).filter(name => name.endsWith('.pak')).sort()
     const expected = ['en-US.pak', 'zh-CN.pak']
     if (JSON.stringify(packs) !== JSON.stringify(expected)) {
-      throw new Error('unexpected Windows locale packs in ' + dir + ': ' + packs.join(', '))
+      throw new Error('unexpected ' + process.platform + ' locale packs in ' + dir + ': ' + packs.join(', '))
     }
     return
   }
@@ -171,6 +170,16 @@ await assertPackedPathBudget()
 
 const smokeHome = await mkdtemp(join(tmpdir(), 'dsh-desktop-package-smoke-'))
 const emptyPath = join(smokeHome, 'empty-path')
+// AppRun's shell wrapper needs system utilities. Block developer runtimes at
+// the front of PATH while allowing bash/readlink; the managed runtime must
+// still supply its own node/dsh/pnpm shims. The bare executable keeps empty PATH.
+const shellLauncher = process.platform === 'linux' && basename(executable) === 'AppRun'
+if (shellLauncher) {
+  await mkdir(emptyPath)
+  for (const name of ['node', 'pnpm', 'npm', 'npx', 'dsh']) {
+    await writeFile(join(emptyPath, name), '#!/bin/sh\necho "unexpected system runtime" >&2\nexit 99\n', { mode: 0o755 })
+  }
+}
 // Spreading process.env drops the case-insensitivity Windows env vars have:
 // the system spells the search path `Path`, so a literal `PATH` override would
 // leave the inherited `Path` in the object and libuv's case-insensitive
@@ -217,7 +226,7 @@ const child = spawn(executable, ['--user-data-dir=' + join(smokeHome, 'chromium'
     // does — this smoke asserts the RELEASE's runtime, not whichever dsh the
     // person building it happens to have.
     DSH_DESKTOP_SKIP_INSTALLED_DSH: '1',
-    PATH: emptyPath,
+    PATH: shellLauncher ? emptyPath + ':/usr/bin:/bin' : emptyPath,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
@@ -382,7 +391,7 @@ try {
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
   console.log('✓ packaged resources include dsh-cli.mjs')
   console.log('✓ packaged pnpm.mjs is present and artifacts/ was pruned')
-  console.log('✓ bundled node shim runs with no system PATH: ' + nodeShim)
+  console.log('✓ bundled node shim runs without system Node/pnpm: ' + nodeShim)
   console.log('✓ bundled dsh shim reports a version')
   console.log('✓ bundled pnpm shim reports a version')
   console.log('✓ packaged runtime keeps ELECTRON_RUN_AS_NODE out of the Agent environment')

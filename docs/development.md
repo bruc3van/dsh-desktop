@@ -74,6 +74,41 @@ A valid user installation allows cleanup of an unused shared copy marked as clie
 
 After official fallback preparation, peer checks start from the market's real directory. User dependency drift is reported in startup logs without changing user packages or lockfiles. Drift in a client-owned market withdraws only its registration.
 
+## Linux x64
+
+The first Linux target is an x64 AppImage, using Ubuntu 24.04 as the validation baseline. ARM64, DEB, RPM, Snap and Flatpak packages are not provided. Other distributions and full GNOME/KDE desktop behavior need separate validation.
+
+The AppImage includes Node, pnpm and dsh. Make it executable before launching. On Ubuntu 24.04, install `libfuse2t64` if FUSE 2 is missing, or use `--appimage-extract-and-run`. System graphics libraries and a kernel/system policy allowing Chromium sandboxing are still required; the app does not automatically disable its renderer sandbox.
+
+Ubuntu 24.04 restricts unprivileged user namespaces by default; see the [Ubuntu release notes](https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890). If double-clicking opens no window, run the AppImage from a terminal to see the startup error. For user-namespace or Chromium sandbox errors, place the AppImage in `~/Applications/`, download the supplied [AppArmor profile](../resources/dsh-desktop.apparmor), and have an administrator install it. Also remove any `--no-sandbox` flag from the launch command or desktop shortcut:
+
+```sh
+sudo install -m 0644 dsh-desktop.apparmor /etc/apparmor.d/dsh-desktop
+sudo apparmor_parser -r /etc/apparmor.d/dsh-desktop
+```
+
+This profile matches only DSH Desktop AppImages in that directory and permits their sandbox namespaces without disabling the system restriction. WSL has different kernel/policy behavior and cannot validate this profile's enforcement on a real Ubuntu desktop. If the system has no configured Documents directory, upstream default-workspace creation may fail; **Choose workspace** can select an existing project folder.
+
+Closing the window keeps its renderer and background tasks alive. If the desktop has no tray, launching the same AppImage again restores the window. Use **DSH Desktop → Quit** or `Ctrl+Q` to exit. In-app updates download, verify and reveal the new AppImage; quit, manually replace the original file, then reopen it.
+
+Build on a native Linux filesystem with a separate dependency installation:
+
+```sh
+corepack pnpm install --frozen-lockfile
+corepack pnpm run build
+DSH_RUNTIME_TARGET=linux-x64 corepack pnpm run prepare:runtime
+corepack pnpm exec electron-builder --linux AppImage --x64 --publish never
+```
+
+The artifact is `dsh-desktop-<version>-linux-x86_64.AppImage`; its update-feed key is `linux-x64`. `check:linux` exercises Koffi, Sharp, ripgrep, PTY, Landlock read permissions and real window close/recovery. `smoke:appimage` extracts the actual AppImage and checks its payload, offline plugin installation and AppRun startup, then verifies standalone startup and a menu restart that replaces both the desktop and its managed runtime. It uses extract-and-run by default; set `DSH_SMOKE_APPIMAGE_FUSE=1` to validate FUSE mode. A headless host can use Xvfb and D-Bus:
+
+```sh
+xvfb-run -a dbus-run-session -- corepack pnpm run check:linux
+xvfb-run -a dbus-run-session -- corepack pnpm run smoke:appimage
+```
+
+Linux CI runs on PRs, main pushes and manual dispatch, retaining successful test packages as Actions artifacts for 14 days. Automated smoke does not cover model API round trips, a real tray, notification activation, input methods or full Wayland desktop acceptance.
+
 ## Releasing a version
 
 To release a version, push its tag directly. GitHub Actions treats the tag as the single version source and writes it to `package.json` during the build:
@@ -87,15 +122,16 @@ GitHub Actions validates the tag format, uses the tag as the release version, th
 
 - macOS Apple Silicon: DMG;
 - macOS Intel: DMG;
-- Windows x64: NSIS installer.
+- Windows x64: NSIS installer;
+- Linux x64: AppImage.
 
-Linux packages are temporarily outside the automated release scope; the source-level cross-platform compatibility code remains in place.
+Linux packages are built on a native Ubuntu runner and uploaded only after the actual AppImage payload passes smoke tests. `latest.json` requires complete assets for all four platform keys.
 
 After every platform succeeds, the workflow generates SHA-256 checksums and `latest.json` for the in-app updater, then creates or updates the matching GitHub Release. Tags containing prerelease identifiers such as `-rc` or `-beta` are marked as prereleases automatically and do not become the `/releases/latest` update feed.
 
 ## Project status
 
-The desktop shell, Smart/Pinned address modes, shared `DSH_HOME`, tray behavior, runtime supervision, in-app updates, system-notification permissions, bundled official `@deepseek-ai/dsh`, the bundled safe marketplace (review-before-install, shipped in the installer), macOS/Windows packaging, and tag-based release automation are implemented; a runtime lock with legacy-process adoption keeps a second harness from writing one `DSH_HOME`, and Smart mode also probes ports configured in the profile's patch layer. The release workflow launches each packaged app with an empty PATH and probes its Web UI, preventing artifacts that accidentally omit the bundled runtime. Automated artifacts still lack formal signing: Windows/Linux use native notifications, while macOS preserves Web Notification behavior through Dock badges, bouncing, and in-app reminders. Proper signing remains a prerequisite for warning-free installation and macOS Notification Center delivery. OS keychain integration and voice input are also future work — see [TODO](../TODO.md).
+The desktop shell, Smart/Pinned address modes, shared `DSH_HOME`, tray behavior, runtime supervision, in-app updates, system-notification permissions, bundled official `@deepseek-ai/dsh`, the bundled safe marketplace (review-before-install, shipped in the installer), macOS/Windows/Linux packaging, and tag-based release automation are implemented; a runtime lock with legacy-process adoption keeps a second harness from writing one `DSH_HOME`, and Smart mode also probes ports configured in the profile's patch layer. The release workflow launches each packaged app without system Node/pnpm and probes its Web UI, preventing artifacts that accidentally omit the bundled runtime. Automated artifacts still lack formal signing: Windows/Linux use native notifications, while macOS preserves Web Notification behavior through Dock badges, bouncing, and in-app reminders. Proper signing remains a prerequisite for warning-free installation and macOS Notification Center delivery. OS keychain integration and voice input are also future work — see [TODO](../TODO.md).
 
 Contributions and issue reports are welcome, especially around Windows behavior, Pinned address connections, and packaging.
 
@@ -105,7 +141,7 @@ Contributions and issue reports are welcome, especially around Windows behavior,
 
 `src/main/settings-adapter.ts` owns read-only detection of the official settings DOM. Integration diagnostics distinguish `absent` (no recognizable dialog), `mounted` (entry attached), and `unsupported` (recognizable dialog with an unsupported structure). Unsupported structures trigger cleanup of injected navigation and display changes. Each failure reason is logged once per document. The main-process status field `settingsIntegration` contains fixed codes, without page text, addresses, or credentials. An entirely unrecognizable new dialog can still appear as `absent`; this is not an upstream version compatibility verdict.
 
-Run `npm run build:shell && npm run check:settings-integration` for an isolated Electron check of structural changes, cleanup, remounting, native settings access, and marketplace persistence. This check runs in macOS/Windows CI. Its fixture does not replace compatibility checks against actual official Web UI releases.
+Run `npm run build:shell && npm run check:settings-integration` for an isolated Electron check of structural changes, cleanup, remounting, native settings access, and marketplace persistence. This check runs in macOS/Windows/Linux CI. Its fixture does not replace compatibility checks against actual official Web UI releases.
 
 ## Runtime and connection boundaries
 

@@ -48,7 +48,7 @@ ${changes}
 |---|---|
 ${downloadRows}
 
-不知道 Mac 属于哪一种时，打开「 → 关于本机」：显示“芯片 Apple M…”选择 \`arm64\`，显示“处理器 Intel”选择 \`x64\`。目前不提供 Linux 或 Windows ARM64 安装包。
+不知道 Mac 属于哪一种时，打开「 → 关于本机」：显示“芯片 Apple M…”选择 \`arm64\`，显示“处理器 Intel”选择 \`x64\`。Linux 首版提供 x64 AppImage，以 Ubuntu 24.04 为验证基线；目前不提供 Linux 或 Windows ARM64 安装包。
 
 ## 安装
 
@@ -64,6 +64,15 @@ ${downloadRows}
 1. 下载 \`${windowsInstaller}\`。
 2. 双击安装程序并按提示完成安装。
 3. 若 Microsoft Defender SmartScreen 拦截，请先确认文件来自本 Release；然后点击「更多信息 → 仍要运行」。
+
+### Linux x64
+
+1. 下载 \`dsh-desktop-${version}-linux-x86_64.AppImage\`。
+2. 在文件属性中允许执行，或运行 \`chmod +x dsh-desktop-${version}-linux-x86_64.AppImage\`，然后打开文件。
+3. Ubuntu 24.04 若提示缺少 FUSE 2，可安装 \`libfuse2t64\`；也可用 \`./dsh-desktop-${version}-linux-x86_64.AppImage --appimage-extract-and-run\` 解压运行。
+4. Ubuntu 24.04 若限制沙箱所需的用户命名空间，请按 [Linux 安装说明](https://github.com/bruc3van/dsh-desktop/blob/v${version}/docs/development.zh.md#linux-x64) 安装限定应用路径的 AppArmor 配置。
+5. 应用内更新会下载、校验并打开文件位置。请先退出客户端，再用新 AppImage 替换原文件并重新打开；下载期间不会中断任务。
+6. 某些桌面环境不显示托盘图标。关闭窗口后可再次启动同一 AppImage 恢复主窗口；需要退出时，在窗口菜单「DSH Desktop」中选择「退出」。
 
 > 当前安装包尚未使用注册开发者证书签名。Release 同时提供 \`SHA256SUMS.txt\`，用于核对下载文件是否完整；校验值不一致时请勿安装。
 `

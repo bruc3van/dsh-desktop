@@ -218,6 +218,11 @@ jobs:
             os: windows-latest
             command: pnpm exec electron-builder --win nsis --x64 --publish never
             runtime_target: win32-x64
+          - name: Linux x64
+            id: linux-x64
+            os: ubuntu-24.04
+            command: pnpm exec electron-builder --linux AppImage --x64 --publish never
+            runtime_target: linux-x64
 
     steps:
       - name: 检出 tag / Checkout tag
@@ -264,6 +269,11 @@ jobs:
 
       - name: 构建应用 / Build application
         run: pnpm run build
+
+      - name: 准备 Linux 图形测试环境 / Prepare Linux display
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/setup-linux-ci.sh
 
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
         run: pnpm run prepare:runtime && pnpm run check:market-boot
@@ -340,6 +350,14 @@ jobs:
       - name: 验证安装包内置运行时 / Smoke packaged runtime
         run: pnpm run smoke:package
 
+      - name: 验证 Linux 原生模块与窗口常驻 / Verify Linux native modules and window lifecycle
+        if: runner.os == 'Linux'
+        run: pnpm run check:linux
+
+      - name: 验证 AppImage 内的应用 / Smoke application extracted from AppImage
+        if: runner.os == 'Linux'
+        run: pnpm run smoke:appimage
+
       # 三个场景合起来才说明问题。安装器退出码 0 不能证明任何事：直接解压把写不
       # 进去的文件直接丢掉且不置错误标志，所以守卫失效的表现是「装完了、能启动、
       # 少了几个文件」。脚本因此断言两件真正有区别的事——实际走的是哪条分支（暂
@@ -397,7 +415,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
 
-          files=(release/*.dmg release/*.exe)
+          files=(release/*.dmg release/*.exe release/*.AppImage)
           if (( ${#files[@]} == 0 )); then
             echo "release/ 下没有找到安装包 / No packages found under release/" >&2
             exit 1
@@ -418,6 +436,7 @@ jobs:
           path: |
             release/*.dmg
             release/*.exe
+            release/*.AppImage
 
   publish:
     name: 发布 GitHub Release / Publish GitHub Release

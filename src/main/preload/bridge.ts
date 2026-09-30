@@ -100,7 +100,7 @@ interface UpdateInfo {
 }
 
 export interface UpdateState {
-  phase: 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'restartRequired' | 'upToDate'
+  phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'restartRequired' | 'upToDate'
     | 'unsupportedPlatform' | 'error'
   currentVersion: string
   info: UpdateInfo | null

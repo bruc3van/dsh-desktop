@@ -178,8 +178,12 @@ export function createDesktopIpc(options: Options) {
       // may ask; only the person at the keyboard may answer.
       if (caller.remote) {
         const confirmed = await confirmSensitiveAction(
-          chinese ? '当前页面请求下载并安装更新' : 'The current page asked to download and install an update',
-          (chinese ? '安装程序会在本机运行。请求来自：' : 'The installer will run on this machine. Requested by: ')
+          process.platform === 'linux'
+            ? (chinese ? '当前页面请求下载更新' : 'The current page asked to download an update')
+            : (chinese ? '当前页面请求下载并安装更新' : 'The current page asked to download and install an update'),
+          (process.platform === 'linux'
+            ? (chinese ? '下载并校验后打开文件位置，请手动替换原 AppImage。请求来自：' : 'The verified download will be revealed for manual AppImage replacement. Requested by: ')
+            : (chinese ? '安装程序会在本机运行。请求来自：' : 'The installer will run on this machine. Requested by: '))
           + (currentTarget() ?? ''),
         )
         // Declining is an answer, not a failure: the card says so, and says
