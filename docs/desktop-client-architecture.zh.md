@@ -23,7 +23,7 @@ DSH 0.1.2-alpha.1 为完整 Web API 增加了浏览器会话认证，并移除�
 
 开发/诊断环境变量 `DSH_DESKTOP_DSH` 和 `DSH_DESKTOP_NODE` 可覆盖 CLI 与 Node 路径。`DSH_DESKTOP_SKIP_PROBE=1` 与 `DSH_DESKTOP_PROBE_URL` 仅供自动化测试控制探测，不属于用户配置接口。
 
-当前发布矩阵提供 macOS Apple Silicon、macOS Intel、Windows x64 与 Linux x64 AppImage，每个原生 runner 只部署当前架构依赖。Linux 以 Ubuntu 24.04 为验证基线，暂不提供 ARM64、DEB 或 RPM；其他发行版和原生桌面环境的兼容性需要单独验证。`dsh-runtime/package.json` 包含 Linux x64 所需的原生可选包。固定版本的 Win32 原生目录选择器带有一份客户端自有、精确版本绑定的 pnpm 补丁：原实现通过 `koffi.view()` 读取用户选中的 COM 路径时会使 Electron 内置 Node 中止，补丁改为经 Win32 复制准确长度的 UTF-16 字节，并在 Windows 构建中使用 Electron 运行验证。新增发布架构或升级 dsh 时必须同步核对该清单、处理或删除此补丁，并运行对应平台的安装包 smoke。
+当前发布矩阵提供 macOS Apple Silicon、macOS Intel、Windows x64 与 Linux x64 AppImage / DEB，每个原生 runner 只部署当前架构依赖。Linux 以 Ubuntu 24.04 为验证基线，暂不提供 ARM64 或 RPM；其他发行版和原生桌面环境的兼容性需要单独验证。`dsh-runtime/package.json` 包含 Linux x64 所需的原生可选包。固定版本的 Win32 原生目录选择器带有一份客户端自有、精确版本绑定的 pnpm 补丁：原实现通过 `koffi.view()` 读取用户选中的 COM 路径时会使 Electron 内置 Node 中止，补丁改为经 Win32 复制准确长度的 UTF-16 字节，并在 Windows 构建中使用 Electron 运行验证。新增发布架构或升级 dsh 时必须同步核对该清单、处理或删除此补丁，并运行对应平台的安装包 smoke。
 
 ## 后果
 

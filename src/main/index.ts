@@ -1752,7 +1752,7 @@ const mainWindowFactory = createMainWindowFactory({
 // weakening the installed application on a restricted host.
 if (process.platform === 'linux') {
   if (app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
-    console.error('[desktop] Chromium sandbox is required. Remove --no-sandbox. On Ubuntu 24.04, move the AppImage to ~/Applications/ and install resources/dsh-desktop.apparmor as described in docs/development.zh.md#linux-x64.')
+    console.error('[desktop] Chromium sandbox is required. Remove --no-sandbox. On Ubuntu 24.04, reinstall the DEB to restore its AppArmor profile, or follow the AppImage AppArmor setup in docs/development.zh.md#linux-x64.')
     app.exit(1)
   }
   app.enableSandbox()

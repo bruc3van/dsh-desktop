@@ -93,6 +93,7 @@ export const connection = {
 }
 
 interface UpdateInfo {
+  fileName: string
   currentVersion: string
   availableVersion: string
   notes?: string

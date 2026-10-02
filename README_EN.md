@@ -36,8 +36,9 @@ Download the installer for your system from [GitHub Releases](https://github.com
 | macOS, Intel | `mac-x64.dmg` |
 | Windows, 64-bit Intel/AMD | `win-x64.exe` |
 | Linux, 64-bit Intel/AMD | `linux-x86_64.AppImage` |
+| Ubuntu 24.04, 64-bit Intel/AMD installer | `linux-amd64.deb` |
 
-These are filename suffixes; the full name also includes the client version. Platform availability depends on the assets of the selected Release. The first Linux package is an x64 AppImage; ARM64, DEB, and RPM packages are not provided.
+These are filename suffixes; the full name also includes the client version. Platform availability depends on the assets of the selected Release. Linux build targets include x64 AppImage and DEB. DEB targets Ubuntu 24.04; ARM64 and RPM packages are not provided.
 
 macOS/Windows packages do not yet have full developer signing and notarization, so the operating system may block the first launch.
 
@@ -54,6 +55,10 @@ macOS/Windows packages do not yet have full developer signing and notarization, 
 - **Windows:** In Microsoft Defender SmartScreen, choose **More info**, then **Run anyway**.
 
 ### Install on Linux x64
+
+**Ubuntu 24.04 installer (DEB):** Download the file ending in `linux-amd64.deb` and run `sudo apt install ./actual-filename.deb` from its folder. Open **DSH Desktop** from the application menu or run `dsh-desktop`. Installation sets up the launcher, icons and an application-scoped AppArmor profile; FUSE is not required. Quit the client before upgrading with the same command. `sudo apt remove dsh-desktop` removes the app while preserving settings and session data.
+
+**Portable AppImage:**
 
 1. Download the package whose filename ends in `linux-x86_64.AppImage`.
 2. Place it in `~/Applications/` (create the directory if needed) and keep the original filename.
@@ -137,7 +142,7 @@ Use of this client remains subject to the terms and privacy policies of DeepSeek
 
 ## Desktop behavior
 
-- Closing the main window keeps the app running; reopen it from the tray or menu bar. On Linux without a tray, launch the same AppImage again to restore the window. Use **DSH Desktop → Quit** in the window menu or `Ctrl+Q` to exit.
+- Closing the main window keeps the app running; reopen it from the tray or menu bar. On Linux without a tray, launch the installed app or the same AppImage again to restore the window. Use **DSH Desktop → Quit** in the window menu or `Ctrl+Q` to exit.
 - **Restart client** restarts client-managed local runtimes but does not stop a `dsh web` process started by the user.
 - A local Web UI that exits unexpectedly receives a limited number of restart attempts.
 - After system resume or a long idle, an invalid page reloads after the service becomes available.
@@ -151,7 +156,7 @@ The update window shows download, verification, and the next action. Failed down
 
 On macOS, the client can replace and restart an app installed in a writable directory. It attempts to restore the previous app if replacement fails. Updates interrupt client-managed local tasks.
 
-On Linux, updates download and verify the new AppImage, then reveal it for manual replacement. Tasks keep running during the download. Use **DSH Desktop → Quit** or `Ctrl+Q` to exit, replace the original AppImage with the new file, and reopen it. Closing the main window only hides it; it does not quit the client. Verified downloads remain reusable after a client restart.
+On Linux, updates download and verify the current package format (DEB or AppImage), then reveal the file. For DEB, quit the client and run `sudo apt install ./actual-filename.deb`; for AppImage, replace the original file. Tasks keep running during the download. Use **DSH Desktop → Quit** or `Ctrl+Q` to exit, finish installing the update for your package format, and reopen it. Closing the main window only hides it; it does not quit the client. Verified downloads remain reusable after a client restart.
 
 ## Bundled runtime environment
 

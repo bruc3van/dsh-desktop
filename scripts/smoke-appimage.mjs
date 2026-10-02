@@ -38,6 +38,7 @@ try {
   const payload = join(work, 'squashfs-root')
   const executable = join(payload, 'dsh-desktop')
   await access(executable, constants.X_OK)
+  await assert.rejects(access(join(payload, 'resources/package-type')), { code: 'ENOENT' }, 'AppImage must not inherit the DEB package marker')
   await access(join(payload, 'AppRun'), constants.X_OK)
   const desktopFile = (await readdir(payload)).find(name => name.endsWith('.desktop'))
   assert.ok(desktopFile, 'AppImage must contain a desktop entry')

@@ -73,9 +73,11 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 
 ## Linux x64
 
-首版构建目标为 x64 AppImage，以 Ubuntu 24.04 为验证基线。暂未提供 ARM64、DEB、RPM、Snap 或 Flatpak 安装包；其他发行版和完整 GNOME/KDE 桌面体验仍需独立验证。
+构建目标为 x64 AppImage 和 DEB，以 Ubuntu 24.04 为验证基线。暂未提供 ARM64、RPM、Snap 或 Flatpak 安装包；其他发行版和完整 GNOME/KDE 桌面体验仍需独立验证。
 
-AppImage 已包含 Node/pnpm/dsh。下载后允许执行，再启动文件；Ubuntu 24.04 缺少 FUSE 2 时可安装 `libfuse2t64`，或使用 `--appimage-extract-and-run` 解压运行。仍需系统图形库及允许 Chromium 沙箱运行的内核/系统策略，应用不会以关闭沙箱作为自动降级。
+DEB 安装：`sudo apt install ./dsh-desktop-<版本>-linux-amd64.deb`。程序位于 `/opt/DSH Desktop/`，命令为 `dsh-desktop`。包自带桌面入口、图标及 `/etc/apparmor.d/dsh-desktop-deb` 策略，只允许安装路径对应的程序创建用户命名空间；不会关闭系统沙箱限制。升级前通过菜单“退出”结束客户端，再用同一命令安装新版。`sudo apt remove dsh-desktop` 保留 `~/.bruc3van-dsh-desktop` 和 `~/.dsh` 中的数据。
+
+AppImage 与 DEB 均已包含 Node/pnpm/dsh。下载后允许执行，再启动文件；Ubuntu 24.04 缺少 FUSE 2 时可安装 `libfuse2t64`，或使用 `--appimage-extract-and-run` 解压运行。仍需系统图形库及允许 Chromium 沙箱运行的内核/系统策略，应用不会以关闭沙箱作为自动降级。
 
 Ubuntu 24.04 默认限制未授权应用创建用户命名空间，见[Ubuntu 发布说明](https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890)。若双击后没有窗口，请在终端运行 AppImage 查看启动错误。若错误涉及用户命名空间或 Chromium 沙箱，把 AppImage 放到 `~/Applications/`，下载仓库提供的 [AppArmor 配置](../resources/dsh-desktop.apparmor)，由管理员安装；同时移除启动命令或桌面快捷方式中的 `--no-sandbox`：
 
@@ -88,16 +90,18 @@ sudo apparmor_parser -r /etc/apparmor.d/dsh-desktop
 
 关闭窗口保留页面和后台任务。没有托盘图标的桌面环境可再次启动同一 AppImage 恢复窗口；窗口菜单「DSH Desktop → 退出」或 `Ctrl+Q` 可结束客户端。应用内更新只下载、校验并打开文件位置；请先退出，再手动替换原 AppImage 并重新打开。
 
+DEB 更新只下载并校验安装包，然后提示退出并通过 `apt` 手动安装，不自动提权或中断任务。
+
 在 Linux 原生文件系统中构建，勿复用 Windows 的 `node_modules`：
 
 ```sh
 corepack pnpm install --frozen-lockfile
 corepack pnpm run build
 DSH_RUNTIME_TARGET=linux-x64 corepack pnpm run prepare:runtime
-corepack pnpm exec electron-builder --linux AppImage --x64 --publish never
+corepack pnpm exec electron-builder --linux AppImage deb --x64 --publish never
 ```
 
-产物名称为 `dsh-desktop-<版本>-linux-x86_64.AppImage`，更新清单的平台键为 `linux-x64`。`check:linux` 验证 Koffi、Sharp、ripgrep、PTY、Landlock 读权限以及真实窗口关闭/恢复；`smoke:appimage` 解压实际 AppImage 并验证其载荷、离线插件安装和 AppRun 启动，再验证真实镜像启动及菜单重启后的客户端与后台运行时交接。默认使用解压运行；设置 `DSH_SMOKE_APPIMAGE_FUSE=1` 可验证 FUSE 模式。无桌面的构建环境可在 Xvfb/D-Bus 会话中运行：
+AppImage 产物名称为 `dsh-desktop-<版本>-linux-x86_64.AppImage`，更新清单保留 `linux-x64` 以兼容旧客户端；DEB 为 `dsh-desktop-<版本>-linux-amd64.deb`，使用独立的 `linux-deb-x64`。FPM 仅向 DEB 添加 dpkg 所有的 `resources/package-type` 标记，应用据此选择更新格式；不根据用户环境变量判断。`check:linux` 验证 Koffi、Sharp、ripgrep、PTY、Landlock 读权限以及真实窗口关闭/恢复；`smoke:appimage` 解压实际 AppImage 并验证其载荷、离线插件安装和 AppRun 启动，再验证真实镜像启动及菜单重启后的客户端与后台运行时交接。默认使用解压运行；设置 `DSH_SMOKE_APPIMAGE_FUSE=1` 可验证 FUSE 模式。无桌面的构建环境可在 Xvfb/D-Bus 会话中运行：
 
 ```sh
 xvfb-run -a dbus-run-session -- corepack pnpm run check:linux
@@ -105,6 +109,9 @@ xvfb-run -a dbus-run-session -- corepack pnpm run smoke:appimage
 ```
 
 CI 在 PR、main 和手动运行中构建 Linux 包，测试通过后保存 14 天的 Actions 下载资产。自动冒烟不包含模型 API 往返、真实托盘、通知点击、中文输入法或完整 Wayland 桌面验收。
+
+`smoke:deb` 只允许在临时 GitHub Actions Linux runner 上执行，会修改系统包数据库。它用当前产物重建一个 `0.0.0` 版本作为升级夹具，验证安装、升级、桌面入口、AppArmor 加载、实际安装目录中的运行时与原生模块、卸载及用户数据保留。该夹具验证 dpkg 升级流程，不代替未来真实旧版本到新版本的兼容性验收。原生 GNOME/KDE、Wayland、通知和输入法仍需桌面验收。
+
 
 ## 版本发布
 
@@ -120,7 +127,7 @@ GitHub Actions 会校验 tag 格式，并以 tag 作为发布版本分别构建�
 - macOS Apple Silicon：DMG；
 - macOS Intel：DMG；
 - Windows x64：NSIS 安装程序；
-- Linux x64：AppImage。
+- Linux x64：AppImage 和 DEB。
 
 Linux 安装包通过原生 Ubuntu runner 构建，实际 AppImage 载荷测试通过后才上传到 Release；`latest.json` 要求四个平台资产完整。
 

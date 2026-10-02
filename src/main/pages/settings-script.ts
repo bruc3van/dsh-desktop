@@ -1,9 +1,11 @@
+import { linuxDownloadInstructions } from '../linux-update-copy.ts'
 import { installRuntimeSelection } from '../runtime-selection.ts'
 import { installRestartAction } from '../restart-action.ts'
 
 export function renderSettingsPageScript(chinese: boolean): string {
   const t = (zh: string, en: string): string => JSON.stringify(chinese ? zh : en)
-  return 'const $ = id => document.getElementById(id);'
+  return 'const linuxDownloadInstructions=' + linuxDownloadInstructions.toString() + ';'
+    + 'const $ = id => document.getElementById(id);'
     + 'let shownNotes="";'
     + 'let marketSaving=false;let marketReading=false;let marketEpoch=0;let marketChanged=false;let marketError=false;'
     + 'function paintMarket(enabled){const button=$("market-toggle");button.disabled=false;'
@@ -62,7 +64,7 @@ export function renderSettingsPageScript(chinese: boolean): string {
     + '+(u.progress&&u.progress.downloaded?" · "+(u.progress.downloaded/1048576).toFixed(1)'
     + '+(u.progress.total?"/"+(u.progress.total/1048576).toFixed(1):"")+" MB":"");'
     + 'else if(u.phase==="installing")line=' + t('正在启动安装程序', 'Starting the installer') + ';'
-    + 'else if(u.phase==="downloaded")line=' + t('已下载并校验。请退出客户端，替换原 AppImage 后重新打开。', 'Downloaded and verified. Quit, replace the original AppImage, then reopen it.') + ';'
+    + 'else if(u.phase==="downloaded")line=linuxDownloadInstructions(u.info?.fileName,' + JSON.stringify(chinese) + ');'
     + 'else if(u.phase==="restartRequired")line=' + t('请安装后重新打开', 'Install it, then reopen') + ';'
     // The reason, not the phase, decides: a refusal publishes only a reason.
     + 'const failed=u.phase==="error"||u.error;'

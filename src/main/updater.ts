@@ -117,6 +117,7 @@ export interface DesktopUpdaterOptions {
   githubApiUrl?: string
   platform: NodeJS.Platform
   arch: string
+  linuxPackageType?: 'appimage' | 'deb'
   packaged: boolean
   preflightMac?: () => Promise<void>
   installMac?: (file: string, version: string) => Promise<void>
@@ -262,11 +263,12 @@ function parseVersion(input: string): { core: number[]; prerelease?: string } {
 }
 
 /** Platform key used in latest.json and matching release asset names. */
-export function platformKey(platform: NodeJS.Platform, arch: string): string | undefined {
+export function platformKey(platform: NodeJS.Platform, arch: string, linuxPackageType: 'appimage' | 'deb' = 'appimage'): string | undefined {
   if (platform === 'win32' && arch === 'arm64') return 'win-arm64'
   if (platform === 'win32') return 'win-x64'
   if (platform === 'darwin' && arch === 'arm64') return 'mac-arm64'
   if (platform === 'darwin') return 'mac-x64'
+  if (platform === 'linux' && linuxPackageType === 'deb') return 'linux-deb-' + arch
   if (platform === 'linux' && arch === 'arm64') return 'linux-arm64'
   if (platform === 'linux') return 'linux-x64'
   return undefined
@@ -487,7 +489,7 @@ export class DesktopUpdater {
     this.setPhase('checking')
     try {
       const feed = await this.loadFeed()
-      const key = platformKey(this.options.platform, this.options.arch)
+      const key = platformKey(this.options.platform, this.options.arch, this.options.linuxPackageType)
       const platform = key === undefined ? undefined : pickFeedPlatform(feed, key)
       // Two different answers used to share this branch. "Nothing newer
       // exists" is up to date; "something newer exists, but not for this
@@ -722,7 +724,7 @@ export class DesktopUpdater {
     })
     if (!response.ok) throw new Error('检查更新失败（HTTP ' + String(response.status) + '）')
     const release = await response.json() as GithubRelease
-    const key = platformKey(this.options.platform, this.options.arch)
+    const key = platformKey(this.options.platform, this.options.arch, this.options.linuxPackageType)
     if (key === undefined) throw new Error('当前平台暂不支持在线更新')
     const feed = githubReleaseToFeed(release, key)
     if (feed === undefined) throw new Error('最新版本没有当前平台的安装包')
@@ -855,8 +857,9 @@ function githubReleaseToFeed(release: GithubRelease, key: string): FeedWithSums 
   const version = tag.replace(/^v/i, '')
   if (version === '') return undefined
   const assets = Array.isArray(release.assets) ? release.assets : []
-  const expectedExt = key.startsWith('win') ? 'exe' : key.startsWith('linux') ? 'AppImage' : 'dmg'
-  const assetKey = key === 'linux-x64' ? 'linux-x86_64' : key
+  const expectedExt = key.startsWith('win') ? 'exe' : key.startsWith('linux-deb-') ? 'deb' : key.startsWith('linux') ? 'AppImage' : 'dmg'
+  const assetKey = key === 'linux-deb-x64' ? 'linux-amd64'
+    : key === 'linux-x64' ? 'linux-x86_64' : key.replace('linux-deb-', 'linux-')
   const expectedName = `dsh-desktop-${version}-${assetKey}.${expectedExt}`
   let downloadUrl: string | undefined
   let sumsUrl: string | undefined

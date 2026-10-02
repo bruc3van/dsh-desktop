@@ -76,9 +76,11 @@ After official fallback preparation, peer checks start from the market's real di
 
 ## Linux x64
 
-The first Linux target is an x64 AppImage, using Ubuntu 24.04 as the validation baseline. ARM64, DEB, RPM, Snap and Flatpak packages are not provided. Other distributions and full GNOME/KDE desktop behavior need separate validation.
+Linux targets are x64 AppImage and DEB, using Ubuntu 24.04 as the validation baseline. ARM64, RPM, Snap and Flatpak packages are not provided. Other distributions and full GNOME/KDE desktop behavior need separate validation.
 
-The AppImage includes Node, pnpm and dsh. Make it executable before launching. On Ubuntu 24.04, install `libfuse2t64` if FUSE 2 is missing, or use `--appimage-extract-and-run`. System graphics libraries and a kernel/system policy allowing Chromium sandboxing are still required; the app does not automatically disable its renderer sandbox.
+Install the DEB with `sudo apt install ./dsh-desktop-<version>-linux-amd64.deb`. The app lives in `/opt/DSH Desktop/` and can be launched with `dsh-desktop` or from the application menu. Its `/etc/apparmor.d/dsh-desktop-deb` profile grants user namespaces only to the installed executable. Quit before upgrading with the same command. `sudo apt remove dsh-desktop` preserves user data in `~/.bruc3van-dsh-desktop` and `~/.dsh`.
+
+Both packages include Node, pnpm and dsh. Make it executable before launching. On Ubuntu 24.04, install `libfuse2t64` if FUSE 2 is missing, or use `--appimage-extract-and-run`. System graphics libraries and a kernel/system policy allowing Chromium sandboxing are still required; the app does not automatically disable its renderer sandbox.
 
 Ubuntu 24.04 restricts unprivileged user namespaces by default; see the [Ubuntu release notes](https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890). If double-clicking opens no window, run the AppImage from a terminal to see the startup error. For user-namespace or Chromium sandbox errors, place the AppImage in `~/Applications/`, download the supplied [AppArmor profile](../resources/dsh-desktop.apparmor), and have an administrator install it. Also remove any `--no-sandbox` flag from the launch command or desktop shortcut:
 
@@ -97,7 +99,7 @@ Build on a native Linux filesystem with a separate dependency installation:
 corepack pnpm install --frozen-lockfile
 corepack pnpm run build
 DSH_RUNTIME_TARGET=linux-x64 corepack pnpm run prepare:runtime
-corepack pnpm exec electron-builder --linux AppImage --x64 --publish never
+corepack pnpm exec electron-builder --linux AppImage deb --x64 --publish never
 ```
 
 The artifact is `dsh-desktop-<version>-linux-x86_64.AppImage`; its update-feed key is `linux-x64`. `check:linux` exercises Koffi, Sharp, ripgrep, PTY, Landlock read permissions and real window close/recovery. `smoke:appimage` extracts the actual AppImage and checks its payload, offline plugin installation and AppRun startup, then verifies standalone startup and a menu restart that replaces both the desktop and its managed runtime. It uses extract-and-run by default; set `DSH_SMOKE_APPIMAGE_FUSE=1` to validate FUSE mode. A headless host can use Xvfb and D-Bus:
@@ -108,6 +110,11 @@ xvfb-run -a dbus-run-session -- corepack pnpm run smoke:appimage
 ```
 
 Linux CI runs on PRs, main pushes and manual dispatch, retaining successful test packages as Actions artifacts for 14 days. Automated smoke does not cover model API round trips, a real tray, notification activation, input methods or full Wayland desktop acceptance.
+
+DEB artifacts use `dsh-desktop-<version>-linux-amd64.deb` and the separate `linux-deb-x64` update key. AppImage retains `linux-x64` for older clients. FPM adds a dpkg-owned `resources/package-type` marker only to DEB; the app selects its update format from this marker, not environment variables. DEB updates download and verify the file for manual installation with `apt`, without privilege escalation or stopping tasks.
+
+`smoke:deb` only runs on ephemeral GitHub Actions Linux runners because it changes the system package database. It rebuilds the current payload with version `0.0.0` as an upgrade fixture, then checks installation, upgrade, desktop integration, AppArmor loading, the installed runtime/native modules, removal and user-data retention. This exercises the dpkg upgrade path, not compatibility with a historical payload. Native GNOME/KDE, Wayland, notifications and input methods still require desktop acceptance testing.
+
 
 ## Releasing a version
 
@@ -123,7 +130,7 @@ GitHub Actions validates the tag format, uses the tag as the release version, th
 - macOS Apple Silicon: DMG;
 - macOS Intel: DMG;
 - Windows x64: NSIS installer;
-- Linux x64: AppImage.
+- Linux x64: AppImage and DEB.
 
 Linux packages are built on a native Ubuntu runner and uploaded only after the actual AppImage payload passes smoke tests. `latest.json` requires complete assets for all four platform keys.
 

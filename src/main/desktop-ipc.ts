@@ -182,7 +182,7 @@ export function createDesktopIpc(options: Options) {
             ? (chinese ? '当前页面请求下载更新' : 'The current page asked to download an update')
             : (chinese ? '当前页面请求下载并安装更新' : 'The current page asked to download and install an update'),
           (process.platform === 'linux'
-            ? (chinese ? '下载并校验后打开文件位置，请手动替换原 AppImage。请求来自：' : 'The verified download will be revealed for manual AppImage replacement. Requested by: ')
+            ? (chinese ? '下载并校验后打开文件位置，请退出客户端后手动安装新版。请求来自：' : 'The verified download will be revealed for manual installation after quitting the client. Requested by: ')
             : (chinese ? '安装程序会在本机运行。请求来自：' : 'The installer will run on this machine. Requested by: '))
           + (currentTarget() ?? ''),
         )

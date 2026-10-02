@@ -1,3 +1,4 @@
+import { linuxDownloadInstructions } from '../linux-update-copy.ts'
 import { connection, update, type UpdateState } from './bridge.ts'
 import { renderReleaseNotes } from '../release-notes.ts'
 import { UPDATE_ID, RELEASES_PAGE_URL, EXTERNAL_LINK_SVG } from './constants.ts'
@@ -15,7 +16,6 @@ function updateCopy(english: boolean): {
   found: string
   preparing: string
   downloading: string
-  downloaded: string
   reveal: string
   installing: string
   restart: string
@@ -41,7 +41,6 @@ function updateCopy(english: boolean): {
       found: 'New version available',
       preparing: 'Preparing the download…',
       downloading: 'Downloading',
-      downloaded: 'Downloaded and verified. Quit, replace the original AppImage, then reopen it.',
       reveal: 'Show downloaded file',
       installing: 'Starting the installer…',
       restart: 'Install the new copy, then reopen the app',
@@ -67,7 +66,6 @@ function updateCopy(english: boolean): {
     found: '发现新版本',
     preparing: '正在准备下载…',
     downloading: '下载中',
-    downloaded: '已下载并校验。请退出客户端，替换原 AppImage 后重新打开。',
     reveal: '打开下载位置',
     installing: '正在启动安装程序…',
     restart: '请安装新版本后重新打开应用',
@@ -157,7 +155,7 @@ export function paintUpdateCard(state: UpdateState, english: boolean): void {
       line += ' · ' + megabytes(progress.downloaded) + (total > 0 ? '/' + megabytes(total) : '') + ' MB'
     }
   } else if (state.phase === 'installing') line = copy.installing
-  else if (state.phase === 'downloaded') line = copy.downloaded
+  else if (state.phase === 'downloaded') line = linuxDownloadInstructions(state.info?.fileName, !english)
   else if (state.phase === 'restartRequired') line = copy.restart
   // A refusal leaves the phase alone and publishes only a reason, so the
   // reason — not the phase — is what decides this line.

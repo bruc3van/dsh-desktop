@@ -15,7 +15,7 @@ DSH Desktop 是独立的 DeepSeek Harness（`dsh`）Electron 客户端。窗口�
 
 ## 主要功能
 
-- 关闭窗口后继续在后台运行，可从托盘或菜单栏重新打开；Linux 无托盘时可再次启动同一 AppImage 恢复窗口。
+- 关闭窗口后继续在后台运行，可从托盘或菜单栏重新打开；Linux 无托盘时可再次从应用菜单启动或打开同一 AppImage 恢复窗口。
 - 直接使用官方 Web UI，不维护另一套界面。
 - 安装包内置官方运行时，可直接启动。
 - 可复用正在运行的 dsh，也可使用 PATH、npx 缓存或内置运行时。
@@ -36,8 +36,9 @@ DSH Desktop 是独立的 DeepSeek Harness（`dsh`）Electron 客户端。窗口�
 | macOS，Intel | `mac-x64.dmg` |
 | Windows，Intel/AMD 64 位 | `win-x64.exe` |
 | Linux，Intel/AMD 64 位 | `linux-x86_64.AppImage` |
+| Ubuntu 24.04，Intel/AMD 64 位安装版 | `linux-amd64.deb` |
 
-表中列出文件名后缀，实际文件名还包含客户端版本号。各版本覆盖的平台以该 Release 的下载资产为准。Linux 首版只提供 x64 AppImage，暂不提供 ARM64、DEB 或 RPM 包。
+表中列出文件名后缀，实际文件名还包含客户端版本号。各版本覆盖的平台以该 Release 的下载资产为准。Linux 构建目标包括 x64 AppImage 和 DEB；DEB 以 Ubuntu 24.04 为支持基线，暂不提供 ARM64 或 RPM 包。
 
 macOS/Windows 安装包尚未完成正式开发者签名认证，首次打开时系统可能拦截。
 
@@ -54,6 +55,10 @@ macOS/Windows 安装包尚未完成正式开发者签名认证，首次打开时
 - **Windows**：在 Microsoft Defender SmartScreen 中点击“更多信息”，再点击“仍要运行”。
 
 ### Linux x64 安装
+
+**Ubuntu 24.04 安装版（DEB）**：下载 `linux-amd64.deb` 结尾的包，在下载目录执行 `sudo apt install ./实际文件名.deb`，然后从应用菜单打开 **DSH Desktop**，或运行 `dsh-desktop`。安装会设置菜单、图标及限定应用路径的 AppArmor 策略，不需要 FUSE。升级前请使用“退出”结束客户端，再执行同一安装命令；`sudo apt remove dsh-desktop` 卸载应用并保留用户设置及会话数据。
+
+**AppImage 便携版**：
 
 1. 下载文件名以 `linux-x86_64.AppImage` 结尾的包。
 2. 将文件放到 `~/Applications/`（目录不存在时先创建），保留原文件名。
@@ -137,7 +142,7 @@ Windows 安装版支持系统通知。Linux 使用 Chromium 通知。当前 macO
 
 ## 桌面端行为
 
-- 关闭主窗口后继续后台运行；从托盘或菜单栏可重新打开。Linux 无托盘时，再次启动同一 AppImage 可恢复窗口；使用窗口菜单“DSH Desktop → 退出”或 `Ctrl+Q` 结束客户端。
+- 关闭主窗口后继续后台运行；从托盘或菜单栏可重新打开。Linux 无托盘时，再次从应用菜单启动或打开同一 AppImage 可恢复窗口；使用窗口菜单“DSH Desktop → 退出”或 `Ctrl+Q` 结束客户端。
 - “重启客户端”会重启客户端管理的本地运行时，不会结束用户在终端启动的 `dsh web`。
 - 本地 Web UI 意外退出时会进行有限次数的重启。
 - 系统唤醒或长时间后台运行后，页面异常时会在服务可用后重新加载。
@@ -149,7 +154,7 @@ Windows 安装版支持系统通知。Linux 使用 Chromium 通知。当前 macO
 
 macOS 可在应用目录可写时自动替换并重启应用。更新失败时会尝试恢复旧应用。更新会中断客户端管理的本地任务，请选择合适的时间执行。
 
-Linux 更新会下载并校验新 AppImage，然后打开文件位置，供手动替换；下载期间任务继续运行。请通过“DSH Desktop → 退出”或 `Ctrl+Q` 退出客户端，再用新文件替换原 AppImage 并重新打开。关闭主窗口仅隐藏窗口，不能代替退出。已校验的下载在客户端重启后仍可复用。
+Linux 更新会按当前安装格式下载并校验 DEB 或 AppImage，然后打开文件位置；DEB 请在退出客户端后用 `sudo apt install ./实际文件名.deb` 安装新版，AppImage 则手动替换原文件；下载期间任务继续运行。请通过“DSH Desktop → 退出”或 `Ctrl+Q` 退出客户端，再按安装格式完成更新并重新打开。关闭主窗口仅隐藏窗口，不能代替退出。已校验的下载在客户端重启后仍可复用。
 
 ## 内置运行环境
 

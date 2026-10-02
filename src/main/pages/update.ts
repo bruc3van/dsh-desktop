@@ -1,3 +1,4 @@
+import { linuxDownloadInstructions } from '../linux-update-copy.ts'
 import { escapeHtml } from './html.ts'
 import { releaseNotesCss, renderReleaseNotes } from '../release-notes.ts'
 import type { UpdateInfo, UpdateState } from '../updater.ts'
@@ -5,10 +6,10 @@ import type { UpdateInfo, UpdateState } from '../updater.ts'
 // Runs only in the app-owned prompt. Keep state as JSON data and write textContent
 // so download errors can never introduce markup or script into the page.
 export function updatePromptStateScript(state: UpdateState, chinese: boolean): string {
-  return `(${paintUpdatePrompt.toString()})(${JSON.stringify(state)},${JSON.stringify(chinese)},${JSON.stringify(process.platform === 'linux')})`
+  return `(${paintUpdatePrompt.toString()})(${JSON.stringify(state)},${JSON.stringify(chinese)},${JSON.stringify(process.platform === 'linux')},${JSON.stringify(linuxDownloadInstructions(state.info?.fileName, chinese))})`
 }
 
-function paintUpdatePrompt(state: UpdateState, chinese: boolean, linux: boolean): void {
+function paintUpdatePrompt(state: UpdateState, chinese: boolean, linux: boolean, downloadedInstructions: string): void {
   const status = document.getElementById('update-status')
   const progress = document.getElementById('update-progress') as HTMLProgressElement | null
   const details = document.getElementById('update-progress-detail')
@@ -23,7 +24,7 @@ function paintUpdatePrompt(state: UpdateState, chinese: boolean, linux: boolean)
   document.querySelector('main')?.classList.toggle('updating', busy || failed)
   status.hidden = !busy && !failed && !downloaded
   status.textContent = failed ? (chinese ? '更新失败：' : 'Update failed: ') + state.error
-    : downloaded ? (chinese ? '已下载并校验。请退出客户端后，用新 AppImage 替换原文件，再重新打开。' : 'Downloaded and verified. Quit, replace the original AppImage, then reopen it.')
+    : downloaded ? downloadedInstructions
     : downloading ? (chinese ? '正在下载新版本…' : 'Downloading the new version…')
       : state.phase === 'restartRequired' ? (chinese ? '即将退出并自动重启…' : 'The app will quit and restart…')
         : (chinese ? '正在验证并准备安装…' : 'Verifying and preparing the installer…')
@@ -64,7 +65,9 @@ export function renderUpdatePromptPageUrl(info: UpdateInfo, chinese: boolean, ic
   const versionLabel = chinese ? '版本' : 'Version'
   const hint = platform === 'darwin'
     ? (chinese ? '下载验证完成后，应用将自动退出、替换并重新打开。这会中断本地正在运行的任务。' : 'After downloading and verification, the app will quit, update and reopen automatically. This interrupts running local tasks.')
-    : platform === 'linux' ? (chinese ? '下载并校验 AppImage 后，请退出客户端，手动替换原文件，再重新打开。下载不会中断正在运行的任务。' : 'After downloading and verifying the AppImage, quit, replace the original file manually, then reopen it. Downloading leaves running tasks active.')
+    : platform === 'linux' ? (info.fileName?.toLowerCase().endsWith('.deb')
+      ? (chinese ? '下载并校验 DEB 后，请退出客户端，用 sudo apt install ./文件名.deb 安装新版，再重新打开。下载不会中断任务。' : 'After downloading and verifying the DEB, quit, install it with sudo apt install ./filename.deb, then reopen. Downloading leaves tasks active.')
+      : (chinese ? '下载并校验 AppImage 后，请退出客户端，手动替换原文件，再重新打开。下载不会中断正在运行的任务。' : 'After downloading and verifying the AppImage, quit, replace the original file manually, then reopen it. Downloading leaves running tasks active.'))
     : chinese ? '下载完成后将打开安装程序。' : 'The installer will open when the download finishes.'
   const html = '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
     + '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">'

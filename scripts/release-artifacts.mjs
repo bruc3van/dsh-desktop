@@ -38,6 +38,7 @@ export const RELEASE_TARGETS = [
   { key: 'mac-x64', os: 'mac', arch: 'x64', ext: 'dmg', device: 'Mac，处理器显示 Intel' },
   { key: 'win-x64', os: 'win', arch: 'x64', ext: 'exe', device: 'Windows 64 位，Intel 或 AMD 处理器' },
   // AppImageTarget expands electron-builder's x64 architecture as x86_64.
+  { key: 'linux-deb-x64', os: 'linux', arch: 'amd64', ext: 'deb', device: 'Ubuntu 24.04，Intel 或 AMD 64 位处理器（安装版）' },
   { key: 'linux-x64', os: 'linux', arch: 'x86_64', ext: 'AppImage', device: 'Linux 64 位，Intel 或 AMD 处理器' },
 ]
 

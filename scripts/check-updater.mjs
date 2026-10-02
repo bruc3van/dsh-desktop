@@ -53,7 +53,8 @@ if (!releaseNotes.includes('fixture release change')
   || !releaseNotes.includes('dsh-desktop-9.9.9-mac-arm64.dmg')
   || !releaseNotes.includes('dsh-desktop-9.9.9-mac-x64.dmg')
   || !releaseNotes.includes('dsh-desktop-9.9.9-win-x64.exe')
-  || !releaseNotes.includes('dsh-desktop-9.9.9-linux-x86_64.AppImage')) {
+  || !releaseNotes.includes('dsh-desktop-9.9.9-linux-x86_64.AppImage')
+  || !releaseNotes.includes('dsh-desktop-9.9.9-linux-amd64.deb')) {
   throw new Error('generated GitHub Release notes are incomplete')
 }
 if (releaseChanges !== '### 新增\n- fixture release change\n') {
@@ -152,6 +153,18 @@ const { compareVersions, describeFetchError, manualCheckAnswer, safeDownloadFile
 const pageBundle = join(work, 'update-page.mjs')
 await esbuild.build({ entryPoints: [join(APP_DIR, 'src/main/pages/update.ts')], bundle: true, format: 'esm', platform: 'node', outfile: pageBundle, logLevel: 'silent' })
 const { renderUpdatePromptPageUrl } = await import(pathToFileURL(pageBundle).href)
+const packageBundle = join(work, 'linux-package.mjs')
+await esbuild.build({ entryPoints: [join(APP_DIR, 'src/main/linux-package.ts')], bundle: true, format: 'esm', platform: 'node', outfile: packageBundle, logLevel: 'silent' })
+const { linuxPackageType } = await import(pathToFileURL(packageBundle).href)
+const packageResources = join(work, 'package-resources')
+mkdirSync(packageResources)
+assert.equal(linuxPackageType(packageResources), 'appimage')
+writeFileSync(join(packageResources, 'package-type'), readFileSync(join(APP_DIR, 'resources/linux-package-type')))
+assert.equal(linuxPackageType(packageResources), 'deb')
+writeFileSync(join(packageResources, 'package-type'), 'unknown')
+assert.equal(linuxPackageType(packageResources), 'appimage')
+console.log('✓ package-owned marker selects DEB; unpacked and AppImage payloads retain the existing update channel')
+
 for (const chinese of [true, false]) {
   const info = { currentVersion: '1.0.0', availableVersion: '2.0.0' }
   const copy = { found: '', later: '', ignore: '', install: '' }
@@ -163,6 +176,11 @@ for (const chinese of [true, false]) {
     || !linux.includes(chinese ? '手动替换原文件' : 'replace the original file manually')) {
     throw new Error('Update prompt must explain the correct platform installation behavior')
   }
+}
+for (const chinese of [true, false]) {
+  const html = decodeURIComponent(renderUpdatePromptPageUrl({ currentVersion: '1', availableVersion: '2', fileName: 'update.deb' }, chinese, '', { found: '', later: '', ignore: '', install: '' }, 'linux'))
+  assert.ok(html.includes('sudo apt install'))
+  assert.ok(!html.includes('AppImage'))
 }
 console.log('✓ update prompt copy matches each platform in both languages')
 const orderings = [
@@ -348,6 +366,46 @@ corruptReplacement = false
 assert.equal((await replacementUpdater.install()).started, true)
 assert.deepEqual(readFileSync(join(work, 'linux', linuxFile)), replacementPayload)
 console.log('✓ Linux recovers verified downloads after restart and preserves them until a replacement passes verification')
+
+// DEB and AppImage coexist without sharing a feed key or installation action.
+const debFile = 'dsh-desktop-99.0.0-linux-amd64.deb'
+const debPayload = Buffer.from('fixture-deb')
+const debHash = createHash('sha256').update(debPayload).digest('hex')
+for (const fallback of [false, true]) {
+  let reveals = 0
+  const debUpdater = new DesktopUpdater({
+    ...linuxOptions, linuxPackageType: 'deb', downloadDir: join(work, 'deb-' + fallback),
+    githubApiUrl: 'https://example.invalid/release',
+    revealDownload(file) { assert.equal(file, join(work, 'deb-' + fallback, debFile)); reveals++ },
+    onBeforeInstall() { throw new Error('DEB download must not stop the runtime') },
+    fetchImpl: async input => {
+      const url = String(input)
+      if (url.endsWith('/latest.json')) return fallback ? new Response('', { status: 404 }) : new Response(JSON.stringify({ version: '99.0.0', platforms: {
+        'linux-x64': { url: 'https://example.invalid/' + linuxFile, sha256: linuxHash },
+        'linux-deb-x64': { url: 'https://example.invalid/' + debFile, sha256: debHash },
+      } }))
+      if (url.endsWith('/release')) return new Response(JSON.stringify({ tag_name: 'v99.0.0', assets: [
+        { name: linuxFile, browser_download_url: 'https://example.invalid/' + linuxFile },
+        { name: debFile, browser_download_url: 'https://example.invalid/' + debFile },
+        { name: 'SHA256SUMS.txt', browser_download_url: 'https://example.invalid/SHA256SUMS.txt' },
+      ] }))
+      if (url.endsWith('/SHA256SUMS.txt')) return new Response(debHash + '  ' + debFile + '\n' + linuxHash + '  ' + linuxFile + '\n')
+      assert.ok(url.endsWith('/' + debFile), 'DEB install must never download an AppImage')
+      return new Response(debPayload)
+    },
+  })
+  assert.equal((await debUpdater.check()).hasUpdate, true)
+  assert.equal(debUpdater.getState().info.fileName, debFile)
+  assert.equal((await debUpdater.install()).started, true)
+  assert.equal(debUpdater.getState().phase, 'downloaded')
+  assert.equal(reveals, 1)
+  assert.equal(statSync(join(work, 'deb-' + fallback, debFile)).mode & 0o111, 0)
+  assert.deepEqual(readFileSync(join(work, 'deb-' + fallback, debFile)), debPayload)
+}
+const debWithoutArtifact = new DesktopUpdater({ ...linuxOptions, linuxPackageType: 'deb' })
+assert.equal((await debWithoutArtifact.check()).hasUpdate, false)
+assert.equal(debWithoutArtifact.getState().phase, 'unsupportedPlatform')
+console.log('✓ DEB feed and API fallback select DEB only, verify the download and leave installation to the user')
 
 const linuxApiUpdater = new DesktopUpdater({
   currentVersion: '0.0.1', feedUrl: 'https://example.invalid/latest.json',

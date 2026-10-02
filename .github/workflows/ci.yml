@@ -198,7 +198,7 @@ jobs:
         run: pnpm run check:plugin-recovery
 
   package-linux:
-    name: Linux x64 AppImage 冒烟 / Linux package smoke
+    name: Linux x64 AppImage / DEB 冒烟 / Linux package smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -233,15 +233,19 @@ jobs:
           pnpm run check:settings-integration
           pnpm run check:updater
           pnpm run check:linux
-      - name: 生成 AppImage / Package AppImage
-        run: pnpm exec electron-builder --linux AppImage --x64 --publish never
+      - name: 生成 AppImage 和 DEB / Package Linux installers
+        run: pnpm exec electron-builder --linux AppImage deb --x64 --publish never
       - name: 验证 AppImage 内的应用 / Smoke application extracted from AppImage
         run: pnpm run smoke:appimage
+      - name: 验证 DEB 安装升级与卸载 / Smoke DEB install, upgrade and removal
+        run: pnpm run smoke:deb
       - name: 保存 Linux 测试安装包 / Save Linux test package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dsh-desktop-linux-x64
-          path: release/*.AppImage
+          path: |
+            release/*.AppImage
+            release/*.deb
           if-no-files-found: error
           retention-days: 14
 

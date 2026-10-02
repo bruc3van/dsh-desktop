@@ -1,3 +1,8 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { load } from 'js-yaml'
+
 /**
  * Assert the release's naming convention still has one meaning.
  *
@@ -63,3 +68,21 @@ if (failures.length > 0) {
 
 console.log('✓ electron-builder.yml artifactName matches ' + JSON.stringify(ARTIFACT_NAME_TEMPLATE))
 console.log('✓ every release target round-trips through parseArtifactName: ' + keys.join(', '))
+
+// Compare the shared naming table with the pinned builder's actual architecture
+// expansion. DEB uses amd64 while AppImage uses x86_64 for the same x64 CPU.
+const requireBuilder = createRequire(import.meta.resolve('electron-builder'))
+const { Arch, getArtifactArchName } = requireBuilder('builder-util')
+for (const target of RELEASE_TARGETS.filter(target => target.os === 'linux')) {
+  assert.equal(target.arch, getArtifactArchName(Arch.x64, target.ext))
+}
+const config = load(readFileSync(new URL('../electron-builder.yml', import.meta.url), 'utf8'))
+assert.ok(config.linux.target.some(target => target.target === 'deb' && target.arch.includes('x64')))
+assert.ok(config.deb.maintainer)
+assert.ok(config.deb.depends.includes('apparmor'))
+assert.ok(config.deb.fpm.includes('resources/linux-package-type=/opt/' + config.productName + '/resources/package-type'))
+assert.equal(readFileSync(new URL('../resources/linux-package-type', import.meta.url), 'utf8').trim(), 'deb')
+for (const hook of [config.deb.afterInstall, config.deb.afterRemove, config.deb.appArmorProfile]) {
+  assert.ok(readFileSync(new URL('../' + hook, import.meta.url), 'utf8').includes('dsh-desktop-deb'))
+}
+console.log('✓ DEB configuration agrees with builder architecture naming and package-owned format marker')

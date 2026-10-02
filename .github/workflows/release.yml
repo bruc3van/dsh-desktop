@@ -221,7 +221,7 @@ jobs:
           - name: Linux x64
             id: linux-x64
             os: ubuntu-24.04
-            command: pnpm exec electron-builder --linux AppImage --x64 --publish never
+            command: pnpm exec electron-builder --linux AppImage deb --x64 --publish never
             runtime_target: linux-x64
 
     steps:
@@ -357,6 +357,9 @@ jobs:
       - name: 验证 AppImage 内的应用 / Smoke application extracted from AppImage
         if: runner.os == 'Linux'
         run: pnpm run smoke:appimage
+      - name: 验证 DEB 安装升级与卸载 / Smoke DEB install, upgrade and removal
+        if: runner.os == 'Linux'
+        run: pnpm run smoke:deb
 
       # 三个场景合起来才说明问题。安装器退出码 0 不能证明任何事：直接解压把写不
       # 进去的文件直接丢掉且不置错误标志，所以守卫失效的表现是「装完了、能启动、
@@ -415,7 +418,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
 
-          files=(release/*.dmg release/*.exe release/*.AppImage)
+          files=(release/*.dmg release/*.exe release/*.AppImage release/*.deb)
           if (( ${#files[@]} == 0 )); then
             echo "release/ 下没有找到安装包 / No packages found under release/" >&2
             exit 1
@@ -437,6 +440,7 @@ jobs:
             release/*.dmg
             release/*.exe
             release/*.AppImage
+            release/*.deb
 
   publish:
     name: 发布 GitHub Release / Publish GitHub Release

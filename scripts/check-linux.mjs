@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { _electron as electron } from 'playwright-core'
 import { sanitizedElectronEnv } from './lib/electron-env.mjs'
+import { respondToConfirmations } from './lib/confirmation-fixture.mjs'
 
 if (process.platform !== 'linux') throw new Error('check:linux requires a Linux host')
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -78,7 +79,15 @@ console.log('✓ Landlock permits granted reads and blocks ungranted reads (' + 
 
   // The close policy runs in the actual application, including the renderer
   // whose notification observers would disappear if the window were destroyed.
-  server = createServer((_req, res) => {
+  server = createServer((req, res) => {
+    if (req.url === '/latest.json') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ version: '999.0.0', platforms: {
+        'linux-x64': { url: 'https://example.invalid/update.AppImage' },
+        'linux-deb-x64': { url: 'https://example.invalid/update.deb' },
+      } }))
+      return
+    }
     res.writeHead(200, { 'content-type': 'text/html' })
     res.end('<html><body id="linux-fixture"><script>window.ticks=0;setInterval(()=>window.ticks++,50)</script>Linux fixture</body></html>')
   })
@@ -88,7 +97,7 @@ console.log('✓ Landlock permits granted reads and blocks ungranted reads (' + 
   await mkdir(home)
   await writeFile(join(home, 'settings.json'), JSON.stringify({ connectionMode: 'connect', serverUrl: origin }))
   const env = sanitizedElectronEnv()
-  Object.assign(env, { DSH_DESKTOP_ALLOW_UNSAFE: '1', DSH_HOME: join(work, 'dsh'), DSH_DESKTOP_HOME: home, DSH_DESKTOP_SKIP_UPDATE_CHECK: '1' })
+  Object.assign(env, { DSH_DESKTOP_ALLOW_UNSAFE: '1', DSH_HOME: join(work, 'dsh'), DSH_DESKTOP_HOME: home, DSH_DESKTOP_SKIP_UPDATE_CHECK: '1', DSH_DESKTOP_UPDATE_FEED: origin + '/latest.json' })
   const args = [...process.argv[2] === undefined ? [join(root, '.build/main.mjs')] : [], '--user-data-dir=' + join(work, 'chromium')]
   if (process.env.DSH_LINUX_TEST_OZONE === 'wayland') args.push('--ozone-platform=wayland')
   if (process.argv[2] !== undefined) {
@@ -101,6 +110,11 @@ console.log('✓ Landlock permits granted reads and blocks ungranted reads (' + 
   app = await electron.launch({ executablePath: executable, args, env, chromiumSandbox: true })
   const page = await app.firstWindow()
   await page.waitForSelector('#linux-fixture')
+  await respondToConfirmations(app)
+  const offered = await page.evaluate(() => window.desktop.update.check())
+  assert.equal(offered.hasUpdate, true)
+  assert.equal(offered.info.fileName, process.argv[3] === 'deb' ? 'update.deb' : 'update.AppImage')
+  console.log('✓ installed package selects its own update format')
   const id = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].id)
   assert.equal(await app.evaluate(({ app }) => app.commandLine.hasSwitch('no-sandbox')), false)
   const preferences = await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id).webContents.getLastWebPreferences(), id)

@@ -48,7 +48,7 @@ ${changes}
 |---|---|
 ${downloadRows}
 
-不知道 Mac 属于哪一种时，打开「 → 关于本机」：显示“芯片 Apple M…”选择 \`arm64\`，显示“处理器 Intel”选择 \`x64\`。Linux 首版提供 x64 AppImage，以 Ubuntu 24.04 为验证基线；目前不提供 Linux 或 Windows ARM64 安装包。
+不知道 Mac 属于哪一种时，打开「 → 关于本机」：显示“芯片 Apple M…”选择 \`arm64\`，显示“处理器 Intel”选择 \`x64\`。Linux 提供 x64 AppImage 和 DEB，以 Ubuntu 24.04 为验证基线；目前不提供 Linux 或 Windows ARM64 安装包。
 
 ## 安装
 
@@ -66,6 +66,10 @@ ${downloadRows}
 3. 若 Microsoft Defender SmartScreen 拦截，请先确认文件来自本 Release；然后点击「更多信息 → 仍要运行」。
 
 ### Linux x64
+
+Ubuntu 24.04 可选择安装版 \`dsh-desktop-${version}-linux-amd64.deb\`，在下载目录执行 \`sudo apt install ./dsh-desktop-${version}-linux-amd64.deb\`。从应用菜单或 \`dsh-desktop\` 命令打开。安装会配置桌面入口和限定应用路径的 AppArmor 策略，无需 FUSE。升级前请退出客户端，再用同一命令安装新包；\`sudo apt remove dsh-desktop\` 卸载程序并保留用户数据。DEB 应用内更新会下载同格式的安装包供手动安装。
+
+AppImage 便携版：
 
 1. 下载 \`dsh-desktop-${version}-linux-x86_64.AppImage\`。
 2. 在文件属性中允许执行，或运行 \`chmod +x dsh-desktop-${version}-linux-x86_64.AppImage\`，然后打开文件。
