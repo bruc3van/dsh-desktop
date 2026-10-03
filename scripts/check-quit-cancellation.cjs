@@ -14,6 +14,8 @@ const assert = require('node:assert/strict');
 const {app, BrowserWindow} = require('electron');
 app.disableHardwareAcceleration();
 let stage = 'Electron startup';
+let beforeQuits = 0, closes = 0, prevents = 0;
+app.on('before-quit', () => { beforeQuits++; });
 process.on('uncaughtException', error => { console.error(error); app.exit(1); });
 const {createQuitCoordinator, confirmWindowClose} = require(${JSON.stringify(bundle)});
 let win, allow = false, begins = 0, stops = 0, prepares = 0, cancellations = 0;
@@ -35,7 +37,8 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 50));
 app.whenReady().then(async () => {
   stage = 'window creation';
   win = new BrowserWindow({show:false, webPreferences:{contextIsolation:true, nodeIntegration:false}});
-  win.webContents.on('will-prevent-unload', event => { if (allow) event.preventDefault(); });
+  win.on('close', () => { closes++; });
+  win.webContents.on('will-prevent-unload', event => { prevents++; if (allow) event.preventDefault(); });
   await win.loadURL('data:text/html,<body>unsaved settings</body>');
   await win.webContents.executeJavaScript("window.addEventListener('beforeunload', event => {event.preventDefault(); event.returnValue='';})");
   stage = 'cancel window close';
@@ -52,7 +55,7 @@ app.whenReady().then(async () => {
   allow = true;
   app.quit();
 }).catch(error => { console.error(error); app.exit(1); });
-setTimeout(() => {console.error('Quit regression timed out at: ' + stage); app.exit(2);}, 60000).unref();
+setTimeout(() => {console.error('Quit regression timed out: ' + JSON.stringify({stage,beforeQuits,closes,prevents,cancellations,begins,stops,prepares})); app.exit(2);}, 60000).unref();
 `);
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;

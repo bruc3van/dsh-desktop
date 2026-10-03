@@ -13,7 +13,9 @@ export function confirmWindowClose(window: BrowserWindow | null): Promise<boolea
     const onClosed = (): void => { finish(true) }
     const onPrevent = (event: Electron.Event): void => {
       // The window's normal discard dialog decides whether to override unload.
-      queueMicrotask(() => { if (!event.defaultPrevented) finish(false) })
+      // Native window close state is reset after the unload event returns.
+      // Resolve on the next turn so an immediate retry is not swallowed.
+      setTimeout(() => { if (!event.defaultPrevented) finish(false) }, 0)
     }
     window.once('closed', onClosed)
     contents.on('will-prevent-unload', onPrevent)

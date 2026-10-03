@@ -160,19 +160,22 @@ try {
   const { createQuitCoordinator } = load('quit-coordinator')
   let release, begins = 0, quits = 0, prevented = 0
   const pending = new Promise(resolve => { release = resolve })
-  const quit = createQuitCoordinator({ confirm: async () => true, cancelled() {}, begin: () => begins++, stop: () => pending,
+  let started
+  const beginning = new Promise(resolve => { started = resolve })
+  const quit = createQuitCoordinator({ confirm: async () => true, cancelled() {}, begin: () => { begins++; started() }, stop: () => pending,
     quit: () => quits++, failed: error => { throw error } })
   quit({ preventDefault: () => prevented++ }); quit({ preventDefault: () => prevented++ })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await beginning
   assert.equal(prevented, 2); assert.equal(begins, 1); assert.equal(quits, 0)
   release(); await turn()
   quit({ preventDefault: () => prevented++ })
   assert.equal(quits, 1); assert.equal(prevented, 2)
-  let timedOut = false
+  let reportTimeout
+  const timeoutReported = new Promise(resolve => { reportTimeout = resolve })
   const bounded = createQuitCoordinator({ confirm: async () => true, cancelled() {}, begin() {}, stop: () => new Promise(() => {}),
-    quit() {}, failed: () => { timedOut = true }, timeoutMs: 5 })
-  bounded({ preventDefault() {} }); await new Promise(resolve => setTimeout(resolve, 15))
-  assert.equal(timedOut, true)
+    quit() {}, failed: () => { reportTimeout() }, timeoutMs: 5 })
+  bounded({ preventDefault() {} })
+  await timeoutReported
   console.log('✓ repeated quit waits for one shutdown, with a bounded failure path')
 
   const { createRuntimeLineReader, sanitizeRuntimeOutput } = load('runtime-output')
