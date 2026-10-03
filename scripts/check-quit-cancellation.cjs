@@ -12,6 +12,8 @@ const entry = path.join(work, 'main.cjs');
 fs.writeFileSync(entry, `
 const assert = require('node:assert/strict');
 const {app, BrowserWindow} = require('electron');
+app.disableHardwareAcceleration();
+let stage = 'Electron startup';
 process.on('uncaughtException', error => { console.error(error); app.exit(1); });
 const {createQuitCoordinator, confirmWindowClose} = require(${JSON.stringify(bundle)});
 let win, allow = false, begins = 0, stops = 0, prepares = 0, cancellations = 0;
@@ -31,22 +33,26 @@ app.on('will-quit', () => {
 });
 const tick = () => new Promise(resolve => setTimeout(resolve, 50));
 app.whenReady().then(async () => {
+  stage = 'window creation';
   win = new BrowserWindow({show:false, webPreferences:{contextIsolation:true, nodeIntegration:false}});
   win.webContents.on('will-prevent-unload', event => { if (allow) event.preventDefault(); });
   await win.loadURL('data:text/html,<body>unsaved settings</body>');
   await win.webContents.executeJavaScript("window.addEventListener('beforeunload', event => {event.preventDefault(); event.returnValue='';})");
+  stage = 'cancel window close';
   assert.equal(await confirmWindowClose(win), false);
   for (let i = 1; i <= 2; i++) {
+    stage = 'cancel quit ' + i;
     app.quit(); app.quit();
     while (cancellations < i) await tick();
     assert.equal(begins, 0); assert.equal(stops, 0); assert.equal(prepares, 0);
     assert.equal(win.isDestroyed(), false);
     assert.equal(await win.webContents.executeJavaScript('1+1'), 2);
   }
+  stage = 'confirm quit';
   allow = true;
   app.quit();
 }).catch(error => { console.error(error); app.exit(1); });
-setTimeout(() => app.exit(2), 10000).unref();
+setTimeout(() => {console.error('Quit regression timed out at: ' + stage); app.exit(2);}, 60000).unref();
 `);
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
