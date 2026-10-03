@@ -1,4 +1,4 @@
-import { createQuitCoordinator } from './quit-coordinator.ts'
+import { confirmWindowClose, createQuitCoordinator } from './quit-coordinator.ts'
 import { scheduleAppImageRestart } from './appimage-restart.ts'
 import { createBrowserAdmission } from './browser-admission.ts'
 import { mainContentHeightScript } from './window-content.ts'
@@ -1015,25 +1015,26 @@ function requestRestart(): { started: boolean; error?: string } {
 function restartApp(): void {
   if (quitting || restarting || isInstallerHandoff()) return
   restarting = true
-  // Integration checks need to observe the persisted handoff without leaving
-  // an unattached successor process behind. Packaged builds ignore this flag.
-  if (devFlag('DSH_DESKTOP_SKIP_RELAUNCH')) {
-    app.quit()
-    return
-  }
-  // AppImage mount/extraction directories can disappear when this process
-  // exits. Restart the persistent image so its runtime prepares a fresh one.
-  const image = process.platform === 'linux' && app.isPackaged ? process.env.APPIMAGE : undefined
-  if (image) {
-    void scheduleAppImageRestart(image, app.getPath('home')).then(() => app.quit(), (error: unknown) => {
-      restarting = false
-      dialog.showErrorBox('DSH Desktop', (localeChinese() ? '重启失败：' : 'Restart failed: ')
-        + (error instanceof Error ? error.message : String(error)))
-    })
-    return
-  }
-  app.relaunch()
   app.quit()
+}
+
+async function prepareRestart(): Promise<void> {
+  if (!restarting || devFlag('DSH_DESKTOP_SKIP_RELAUNCH')) return
+  const image = process.platform === 'linux' && app.isPackaged ? process.env.APPIMAGE : undefined
+  try {
+    if (image) await scheduleAppImageRestart(image, app.getPath('home'))
+    else app.relaunch()
+  } catch (error) {
+    dialog.showErrorBox('DSH Desktop', (localeChinese() ? '重启失败：' : 'Restart failed: ')
+      + (error instanceof Error ? error.message : String(error)))
+    throw error
+  }
+}
+
+let settingsClosePending: Promise<boolean> | undefined
+function confirmSettingsClose(): Promise<boolean> {
+  settingsClosePending ??= confirmWindowClose(settingsWindow).finally(() => { settingsClosePending = undefined })
+  return settingsClosePending
 }
 
 
@@ -1689,7 +1690,8 @@ const updateController = createUpdateController({
   launchWindow,
   getQuitting: () => quitting,
   getWebUiEverLoaded: () => webUiEverLoaded,
-  getWebUi: () => webUi,
+  confirmClose: confirmSettingsClose,
+  stopRuntimeForUpdate: () => connection.stop(true),
 })
 function resetPageAppearance(): void {
   return windowTheme.resetPageAppearance()
@@ -1924,6 +1926,9 @@ if (!gotLock) {
   // so the runtime never outlives the client as an orphan holding the data
   // home and a port.
   app.on('before-quit', createQuitCoordinator({
+    confirm: confirmSettingsClose,
+    prepare: prepareRestart,
+    cancelled: () => { restarting = false },
     begin: () => {
       quitting = true
       if (windowHealthTimer !== undefined) clearInterval(windowHealthTimer)

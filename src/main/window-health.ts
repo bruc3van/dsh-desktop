@@ -51,42 +51,48 @@ export function createWindowHealth(options: Options) {
     if (Date.now() - lastAutomaticReloadAt < AUTOMATIC_RELOAD_COOLDOWN_MS) return
     if (!force && (window.isMinimized() || !window.isVisible())) return
 
+    const generation = options.getConnection().generation
+    const probeConnected = options.getConnection().probeConnected
+    const isCurrent = (): boolean => !options.getQuitting()
+      && generation === options.getConnection().generation
+      && probeConnected === options.getConnection().probeConnected
+      && currentTarget() === target && window === options.getMainWindow()
+      && !window.isDestroyed() && !window.webContents.isDestroyed()
+
     windowRecoveryInFlight = true
     try {
       // A reused local instance is an optimization, not a durable dependency.
       // Probe it even while the renderer still contains stale visible content,
       // but with a grace window: a busy instance must not be replaced by a
       // second writer (see handleProbedInstanceFailure).
-      if (options.getConnection().probeConnected) {
-        const generation = options.getConnection().generation
+      if (probeConnected) {
         const probe = await probeWithGrace(target)
+        if (!isCurrent()) return
         if (probe.kind !== 'verified') {
-          if (generation === options.getConnection().generation && options.getConnection().probeConnected && currentTarget() === target) {
-            if (probe.kind === 'authentication-required') refuseUnauthenticatedProbeTarget(probe.url)
-            else fallbackFromProbedInstance(reason)
-          }
+          if (probe.kind === 'authentication-required') refuseUnauthenticatedProbeTarget(probe.url)
+          else fallbackFromProbedInstance(reason)
           return
         }
         // The instance is alive. A renderer that died or went blank is rebuilt
         // against the surviving origin — the same recovery the local branch
         // gets, so a probed instance is not stuck with a dead window.
-        if (!force && await hasVisiblePageContent(window)) return
+        if (!force && (await hasVisiblePageContent(window) || !isCurrent())) return
         if (!force) {
           await new Promise(resolve => setTimeout(resolve, 2_000))
-          if (window !== options.getMainWindow() || await hasVisiblePageContent(window)) return
+          if (!isCurrent() || await hasVisiblePageContent(window) || !isCurrent()) return
         }
-        if (window !== options.getMainWindow() || window.isDestroyed()) return
+        if (!isCurrent()) return
         lastAutomaticReloadAt = Date.now()
         console.warn('[desktop] reloading blank Web UI (' + reason + ')')
         window.webContents.reload()
         return
       }
-      if (!force && await hasVisiblePageContent(window)) return
+      if (!force && (await hasVisiblePageContent(window) || !isCurrent())) return
       if (!force) {
         await new Promise(resolve => setTimeout(resolve, 2_000))
-        if (window !== options.getMainWindow() || await hasVisiblePageContent(window)) return
+        if (!isCurrent() || await hasVisiblePageContent(window) || !isCurrent()) return
       }
-      if (await probeWebUi(target) === undefined || window !== options.getMainWindow() || window.isDestroyed()) return
+      if (await probeWebUi(target) === undefined || !isCurrent()) return
 
       lastAutomaticReloadAt = Date.now()
       console.warn('[desktop] reloading blank Web UI (' + reason + ')')

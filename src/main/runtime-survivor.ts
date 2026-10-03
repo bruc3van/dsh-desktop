@@ -146,7 +146,8 @@ export function createRuntimeSurvivor(options: SurvivorOptions) {
     console.warn('[desktop] restart: stopping the adopted runtime (PID ' + String(lock.childPid) + ')')
     // The record stays on a failed kill, for the reason the adoption path
     // documents: the next start must not spawn beside a writer nobody stopped.
-    if (await stopRecordedRuntime(lock)) clearRuntimeLock(home)
+    if (!await stopRecordedRuntime(lock)) throw new Error('Could not stop the owned runtime (PID ' + String(lock.childPid) + ')')
+    clearRuntimeLock(home)
   }
 
   return { adoptOrClearSurvivingRuntime, stopAdoptedRuntimeForRestart, canAttemptRuntimeRestart }

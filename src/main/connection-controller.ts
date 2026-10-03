@@ -582,6 +582,8 @@ export function createConnectionController(options: ConnectionOptions) {
       childTarget = undefined
       return
     }
+    const exitGeneration = connectionGeneration
+    const exitRuntime = options.runtime()
     childTarget = undefined
     if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
     launchBudgetResetTimer = undefined
@@ -679,7 +681,8 @@ export function createConnectionController(options: ConnectionOptions) {
       // incidental and must not hide the real runtime/configuration error.
       if (pinned > 0 && options.runtime()?.lastSource !== undefined) {
         void loopbackPortHeld(pinned).then((held) => {
-          if (options.isQuitting() || options.isInstallerHandoff() || configuredTarget !== undefined || replacingLocalRuntime) return
+          if (exitGeneration !== connectionGeneration || exitRuntime !== options.runtime()
+            || options.isQuitting() || options.isInstallerHandoff() || configuredTarget !== undefined || replacingLocalRuntime) return
           if (held) {
             console.error('[desktop] pinned port ' + String(pinned)
               + ' is still held after a failed spawn; not trying other runtimes')

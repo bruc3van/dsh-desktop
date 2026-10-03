@@ -20,7 +20,6 @@ import {
   type UpdateInfo,
   type UpdateState
 } from './updater.ts'
-import type { WebUiManager } from './web-ui-manager.ts'
 interface Options {
   loadSettings: () => ClientSettings
   patchSettings: (patch?: Partial<ClientSettings>, unset?: readonly (keyof ClientSettings)[]) => void
@@ -38,7 +37,8 @@ interface Options {
   launchWindow: (generation?: number, force?: boolean) => void
   getQuitting: () => boolean
   getWebUiEverLoaded: () => boolean
-  getWebUi: () => Pick<WebUiManager, 'stop'> | undefined
+  confirmClose: () => Promise<boolean>
+  stopRuntimeForUpdate: () => Promise<void>
 }
 
 export function createUpdateController(services: Options) {
@@ -603,8 +603,9 @@ export function createUpdateController(services: Options) {
 
 
   async function beginInstallerHandoff(): Promise<void> {
+    if (!await services.confirmClose()) throw new Error('Update cancelled: settings changes have not been discarded')
     installerHandoff = true
-    await services.getWebUi()?.stop()
+    await services.stopRuntimeForUpdate()
   }
 
 

@@ -61,6 +61,13 @@ jobs:
       - name: 验证安全故障恢复 / Verify safety regressions
         run: pnpm run check:safety
 
+      - name: 验证生命周期竞态与更新接管 / Verify lifecycle races and update ownership
+        run: node scripts/check-lifecycle-races.cjs && node scripts/check-update-survivor.cjs
+
+      - name: 验证真实 Electron 取消退出 / Verify Electron quit cancellation
+        if: runner.os != 'Linux'
+        run: node scripts/check-quit-cancellation.cjs
+
       - name: 验证浏览器认证格式 / Verify browser-session format
         run: pnpm run check:dsh-browser-session
 
