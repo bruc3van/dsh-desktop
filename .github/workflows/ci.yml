@@ -62,10 +62,11 @@ jobs:
         run: pnpm run check:safety
 
       - name: 验证生命周期竞态与更新接管 / Verify lifecycle races and update ownership
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/check-lifecycle-races.cjs && node scripts/check-update-survivor.cjs
 
       - name: 验证真实 Electron 取消退出 / Verify Electron quit cancellation
-        if: runner.os != 'Linux'
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os != 'Linux' }}
         run: node scripts/check-quit-cancellation.cjs
 
       - name: 验证浏览器认证格式 / Verify browser-session format

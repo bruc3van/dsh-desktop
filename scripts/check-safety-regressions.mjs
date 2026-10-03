@@ -290,11 +290,14 @@ try {
   buildSync({ entryPoints: [join(root, 'src/main/web-ui-manager.ts')], bundle: true,
     platform: 'node', format: 'cjs', outfile: managerBundle, logLevel: 'silent' })
   const { WebUiManager: RealManager } = require(managerBundle)
+  // Windows records child identity through PowerShell before processing readiness.
+  // Give a healthy successor time to finish that real OS round trip on CI.
+  const startupTimeoutMs = process.platform === 'win32' ? 10_000 : 1500
   for (const announce of [false, true]) {
     const startupHome = join(work, 'startup-' + announce)
     let finishExit, resolveProbe, shouldWait = announce, exits = 0
     const exited = new Promise(resolve => { finishExit = resolve })
-    const managed = new RealManager({ home: () => startupHome, startupTimeoutMs: 1500,
+    const managed = new RealManager({ home: () => startupHome, startupTimeoutMs,
       resolveCommand: () => ({ command: process.execPath,
         args: ['-e', (announce ? 'console.log("dsh web: http://127.0.0.1:49125");' : '') + 'setInterval(()=>{},1000)'],
         source: 'bundled', label: 'startup deadline fixture' }),
@@ -315,7 +318,7 @@ try {
       if (announce) {
         shouldWait = false
         assert.equal(await managed.ready(), 'http://127.0.0.1:49125')
-        await new Promise(resolve => setTimeout(resolve, 1600))
+        await new Promise(resolve => setTimeout(resolve, startupTimeoutMs + 100))
         assert.ok(managed.pid(), 'a ready generation must survive its former startup deadline')
         assert.equal(exits, 1)
       }
