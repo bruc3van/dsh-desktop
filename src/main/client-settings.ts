@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { validateSmartRuntimes, type SmartRuntimeId } from './smart-runtimes.ts'
 import { normalizeLocalWebPort } from './local-web-port.ts'
 import { normalizeDshDataMode, normalizePluginPackageName, type DshDataMode } from './data-home.ts'
+import { PROTECTED_FOLDERS, type ProtectedFolder } from './mac-folder-access.ts'
 
 export interface ClientSettings {
   /** A reusable fixed Web UI origin. Empty/absent means Smart mode only. */
@@ -50,6 +51,8 @@ export interface ClientSettings {
   dshDataFallbackPlugins?: string[]
   /** The one-time compatibility fallback explanation has been acknowledged. */
   dshDataFallbackNoticeShown?: boolean
+  /** macOS folders whose blocked-access hint the user asked never to see again. */
+  macFolderAccessHintDismissed?: ProtectedFolder[]
 }
 
 export function createClientSettingsStore(home: string) {
@@ -164,6 +167,10 @@ export function createClientSettingsStore(home: string) {
     }
     if (!skip.has('legacyBundleNoticeShown') && merged.legacyBundleNoticeShown !== undefined) {
       next.legacyBundleNoticeShown = merged.legacyBundleNoticeShown
+    }
+    if (!skip.has('macFolderAccessHintDismissed') && Array.isArray(merged.macFolderAccessHintDismissed)) {
+      const folders = PROTECTED_FOLDERS.filter(folder => merged.macFolderAccessHintDismissed?.includes(folder))
+      if (folders.length > 0) next.macFolderAccessHintDismissed = folders
     }
     saveSettings(next)
   }

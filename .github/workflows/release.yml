@@ -145,6 +145,9 @@ jobs:
       - name: 验证运行时解析契约 / Verify runtime resolution contract
         run: pnpm run check:runtime-resolution
 
+      - name: 验证 macOS 文件夹授权提示 / Verify macOS folder-access hint
+        run: pnpm run check:mac-folder-access
+
   prepare-release:
     name: 创建草稿 Release / Create draft release
     needs: validate
@@ -320,10 +323,20 @@ jobs:
       - name: 验证 pnpm 与 Electron Node 耦合 / Verify pnpm engine against Electron Node
         run: pnpm run check:pnpm-engine
 
+      # macOS 用项目固定的自签证书签名（scripts/sign-mac.mjs），使每个版本的代码
+      # 身份一致，系统才会在更新后保留「文稿」等文件夹授权。缺少证书时直接失败，
+      # 不回退到 ad-hoc：一个 ad-hoc 版本会让所有用户的授权失效两次。
       - name: 生成安装包 / Package application
         run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          DSH_MAC_SIGN_REQUIRED: ${{ runner.os == 'macOS' && '1' || '' }}
+          DSH_MAC_SIGN_P12_BASE64: ${{ runner.os == 'macOS' && secrets.MAC_SIGN_P12_BASE64 || '' }}
+          DSH_MAC_SIGN_P12_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_SIGN_P12_PASSWORD || '' }}
+
+      - name: 验证 macOS 签名身份 / Verify macOS signing identity
+        if: runner.os == 'macOS'
+        run: pnpm run check:mac-signature
 
       - name: 验证打包产物中的 pnpm / Verify packaged pnpm
         run: pnpm run check:pnpm-runtime

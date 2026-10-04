@@ -164,8 +164,9 @@ contextBridge.exposeInMainWorld('desktop', {
   openConnectionSettings: (): void => { ipcRenderer.send('desktop:open-connection-settings') },
 })
 
-// Current macOS artifacts are intentionally ad-hoc signed. Electron's native
-// UNNotification path is not reliable without a stable valid signature, so
+// Current macOS artifacts carry a self-signed certificate, not a Developer ID
+// (local builds are ad-hoc). Electron's native UNNotification path is not
+// reliable without a trusted signature, so
 // preserve the Web Notification contract while rendering attention through
 // the Dock and an in-app toast. Windows and Linux retain the native API.
 if (process.platform === 'darwin') {

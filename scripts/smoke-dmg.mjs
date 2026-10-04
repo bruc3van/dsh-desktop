@@ -8,7 +8,7 @@
  * `smoke:package` runs against the unpacked `.app` directory electron-builder
  * leaves under `release/`, so the DMG itself was never mounted, copied out, or
  * started. A DMG that mounts to nothing, carries a broken bundle, or
- * loses the ad-hoc signature on the way in would have shipped unnoticed.
+ * loses its signature on the way in would have shipped unnoticed.
  *
  * Usage: node scripts/smoke-dmg.mjs [path/to.dmg]
  * @module desktop/scripts/smoke-dmg
@@ -85,13 +85,13 @@ async function takeAppOutOfVolume() {
   }
   // ditto, not cp: it preserves the symlinks, permissions, and extended
   // attributes an .app bundle is made of. A plain recursive copy strips the
-  // attributes the ad-hoc signature lives in, and the copy would then fail to
+  // attributes the signature lives in, and the copy would then fail to
   // launch for reasons the DMG is not guilty of.
   await execFile('ditto', [join(mountPoint, bundle), join(staged, bundle)])
   const copied = join(staged, bundle, 'Contents', 'MacOS', PRODUCT_NAME)
   if (!existsSync(copied)) throw new Error('copied bundle has no executable: ' + copied)
   // What Gatekeeper checks first. A signature that did not survive the round
-  // trip is exactly the "app is damaged" state electron-builder.yml's ad-hoc
+  // trip is exactly the "app is damaged" state electron-builder.yml's signing
   // identity exists to avoid, and it is invisible in the unpacked directory.
   await execFile('codesign', ['--verify', '--strict', join(staged, bundle)])
   console.log('✓ mounted, copied out, and the bundle still verifies: ' + bundle)

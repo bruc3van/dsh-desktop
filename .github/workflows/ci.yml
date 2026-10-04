@@ -55,6 +55,9 @@ jobs:
       - name: 校验客户端设置读取诊断 / Verify settings read diagnostics
         run: pnpm run check:client-settings
 
+      - name: 校验 macOS 文件夹授权提示 / Verify macOS folder-access hint
+        run: pnpm run check:mac-folder-access
+
       - name: 校验 Web UI 权限策略 / Verify Web UI permission policy
         run: pnpm run check:permissions
 

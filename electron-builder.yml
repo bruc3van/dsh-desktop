@@ -108,11 +108,22 @@ mac:
   category: public.app-category.developer-tools
   target:
     - dmg
-  # No Apple Developer ID yet, so we self-sign ad-hoc instead of shipping
-  # unsigned. This lets Gatekeeper show its normal "unidentified developer"
-  # prompt (with an Open Anyway button) instead of "app is damaged", which is
-  # what unsigned arm64 builds get. Not a substitute for real notarization.
+  # No Apple Developer ID yet. Unsigned arm64 builds open as "app is damaged",
+  # so every build is signed: releases with the project's self-signed
+  # certificate, local builds without one ad-hoc. Either way Gatekeeper shows
+  # its normal "unidentified developer" prompt with an Open Anyway button. Not
+  # a substitute for real notarization.
+  #
+  # The certificate exists for the privacy grants: macOS remembers Documents
+  # access per signing identity, and an ad-hoc identity changes with every
+  # build. scripts/sign-mac.mjs does the signing; `identity: "-"` only stops
+  # electron-builder looking for a Developer ID first, since it cannot see an
+  # untrusted self-signed certificate anyway.
   identity: "-"
+  sign: scripts/sign-mac.mjs
+  # A self-signed signature gains nothing from Apple's timestamp service, and
+  # skipping it keeps signing offline.
+  timestamp: none
   hardenedRuntime: false
   # The Agent reads and writes the user's own files, so macOS asks before the
   # first access to a protected folder. Without these strings the prompt states

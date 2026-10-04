@@ -133,6 +133,25 @@ Linux 安装包通过原生 Ubuntu runner 构建，实际 AppImage 载荷测试�
 
 全部平台构建成功后，工作流会生成 SHA-256 校验文件和 `latest.json` 在线更新清单，并创建或更新对应的 GitHub Release。包含 `-rc`、`-beta` 等预发布标识的 tag 会自动标记为预发布版本；预发布不会成为 `/releases/latest` 上的更新源。
 
+### macOS 签名证书
+
+macOS 会按代码签名身份记住「文稿」「桌面」「下载」等文件夹授权。ad-hoc 签名的身份就是二进制哈希，每次构建都会变，用户因此每次更新都要重新授权。发布版改用项目固定的一张自签代码签名证书（不是 Apple Developer ID，Gatekeeper 的「无法验证开发者」提示依旧），使身份条件保持为 `identifier "io.github.bruc3van.dsh-desktop" and certificate leaf = H"<SHA-1>"`。
+
+- `scripts/sign-mac.mjs` 是 electron-builder 的 `mac.sign` 钩子：把证书导入临时钥匙串，交给 osx-sign 由内向外签名，结束后删除钥匙串。未提供证书时本地构建回退为 ad-hoc；设置 `DSH_MAC_SIGN_REQUIRED=1`（发布工作流已设置）则直接失败。
+- 证书 SHA-1 固定在 `scripts/mac-signing-cert.sha1`。传入其他证书会被拒绝：换证书会让所有现有用户重新授权一次，只能有意为之。
+- `pnpm run check:mac-signature` 校验打包产物的主程序与各 Helper 都由该证书签名，发布工作流在打包后执行。
+
+首次配置（只做一次）：
+
+```sh
+node scripts/create-mac-signing-cert.mjs        # 生成到 ~/.dsh-desktop-signing，并写入固定指纹
+base64 -i ~/.dsh-desktop-signing/dsh-desktop-mac-signing.p12 | gh secret set MAC_SIGN_P12_BASE64
+gh secret set MAC_SIGN_P12_PASSWORD < ~/.dsh-desktop-signing/p12-password.txt
+git add scripts/mac-signing-cert.sha1
+```
+
+`~/.dsh-desktop-signing` 中的 .p12 与密码必须另行备份；丢失后只能换新证书。本地需要签名构建时，用同样的两个值设置 `DSH_MAC_SIGN_P12_BASE64` 与 `DSH_MAC_SIGN_P12_PASSWORD` 即可。
+
 ## 当前状态
 
 桌面外壳、智能/固定地址模式、共享 `DSH_HOME`、托盘常驻、运行时监护、应用内在线更新、系统通知权限、内置官方 `@deepseek-ai/dsh`、内置安全市场（先审查、再安装，随安装包发布）、macOS/Windows/Linux 打包和 tag 自动发布流程均已实现；同一 `DSH_HOME` 下有运行时锁定与遗留进程接管，智能模式会一并探测 profile 补丁层配置的端口。发布流水线会在无系统 Node/pnpm 的环境下启动打包应用并探测 Web UI，阻止遗漏内置运行时的产物发布。当前自动产物尚无正式代码签名：Windows/Linux 使用原生通知，macOS 则将 Web Notification 降级为 Dock 角标、弹跳和应用内提醒；正式签名仍是面向普通用户无警告安装及使用 macOS 通知中心的前置条件。OS Keychain 与语音输入也属于后续工作，见 [TODO](../TODO.md)。

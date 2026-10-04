@@ -76,6 +76,7 @@ webSpawnArgs
 } from './local-web-port.ts'
 import { officialDshPackageVersion } from './official-dsh-bin.ts'
 import { windowsAppUserModelId } from './permission-policy.ts'
+import { createMacFolderAccessController, FILES_AND_FOLDERS_SETTINGS_URL } from './mac-folder-access.ts'
 import { PNPM_ENTRY_VARIABLE } from './runtime-spawn.ts'
 import {
 normalizeSmartRuntimes,
@@ -684,6 +685,40 @@ function onRendererTheme(event: Electron.IpcMainEvent, payload: unknown): void {
   return windowTheme.onRendererTheme(event, payload)
 }
 
+/**
+ * A folder macOS refused is never asked about again, so say so where the fix
+ * is. Only while this client spawned the runtime: a reused instance runs under
+ * whatever app started it, and its folder access is not ours to report.
+ */
+const macFolderAccess = createMacFolderAccessController({
+  home: homedir(),
+  dshHome: childHome,
+  managesRuntime: () => !connection.probeConnected && connection.configuredTarget === undefined,
+  chinese: localeChinese,
+  dismissed: () => loadSettings().macFolderAccessHintDismissed ?? [],
+  dismiss: (folders) => patchSettings({
+    macFolderAccessHintDismissed: [...loadSettings().macFolderAccessHintDismissed ?? [], ...folders],
+  }),
+  ask: async (copy) => {
+    const options: Electron.MessageBoxOptions = {
+      type: 'warning',
+      title: 'DSH Desktop',
+      message: copy.message,
+      detail: copy.detail,
+      buttons: copy.buttons,
+      checkboxLabel: copy.checkboxLabel,
+      defaultId: 0,
+      cancelId: 1,
+    }
+    const owner = mainWindow
+    return owner === null || owner.isDestroyed()
+      ? dialog.showMessageBox(options)
+      : dialog.showMessageBox(owner, options)
+  },
+  // Not openExternal(): that one admits only http(s) on purpose.
+  openSettings: () => { void shell.openExternal(FILES_AND_FOLDERS_SETTINGS_URL) },
+})
+
 /** Create the client window immediately; the official Web UI replaces its loading surface when ready. */
 function createWindow(): void {
   mainWindow = createMainWindow()
@@ -692,7 +727,10 @@ function createWindow(): void {
 function onMainWindowClosed(): void { mainWindow = null; loadingDocumentActive = false; errorDocumentActive = false }
 function markMainWindowUnrequested(): void { mainWindowRequested = false }
 function resetSettingsIntegrationStatus(): void { settingsIntegrationStatus = { state: 'absent' }; reportedSettingsIntegrationFailures.clear() }
-function markWebUiLoaded(): void { webUiEverLoaded = true }
+function markWebUiLoaded(): void {
+  webUiEverLoaded = true
+  void macFolderAccess.onWebUiLoaded()
+}
 function markLoadingDocument(): void { loadingDocumentActive = true; errorDocumentActive = false }
 function createMainWindow(): BrowserWindow {
   return mainWindowFactory.createMainWindow()
