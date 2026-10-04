@@ -951,6 +951,12 @@ try {
   const prompt = await prompted.app.waitForEvent('window', { timeout: 8_000 })
   pageDelayMs = 0
   await prompt.locator('#update-install').waitFor({ state: 'visible', timeout: 3_000 })
+  // The prompt opens at 590 and shrinks to its content with setContentSize.
+  // An X11 window manager applies that resize asynchronously, so a reading
+  // taken the moment the button is visible can still see the opening height
+  // (563 inside the frame on the Linux runner). Give the resize time to land;
+  // a prompt that never shrinks still fails the bound below.
+  await prompt.waitForFunction(() => innerHeight < 540, null, { timeout: 3_000 }).catch(() => {})
   const promptLayout = await prompt.evaluate(() => {
     const notes = document.querySelector('.notes')
     const install = document.getElementById('update-install')
