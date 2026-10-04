@@ -93,12 +93,19 @@ async function findSigningIdentity(keychain) {
   return { hash: hash.toLowerCase(), name }
 }
 
+/** The user keychain search list, as `security list-keychains` prints it. */
+async function userKeychains() {
+  const output = await security(['list-keychains', '-d', 'user'])
+  return [...output.matchAll(/"([^"]+)"/g)].map(match => match[1])
+}
+
 /** Import the certificate into a private keychain, sign, then delete the keychain. */
 async function signWithCertificate(signAsync, opts, p12Base64) {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-mac-sign-'))
   const keychain = join(dir, 'signing.keychain-db')
   const keychainPassword = randomBytes(24).toString('hex')
   const p12 = join(dir, 'signing.p12')
+  const searchList = await userKeychains()
   try {
     await writeFile(p12, Buffer.from(p12Base64, 'base64'), { mode: 0o600 })
     await security(['create-keychain', '-p', keychainPassword, keychain])
@@ -109,6 +116,11 @@ async function signWithCertificate(signAsync, opts, p12Base64) {
     // Lets codesign use the key without a keychain-access dialog no CI can click.
     await security(['set-key-partition-list', '-S', 'apple-tool:,apple:,codesign:', '-s', '-k', keychainPassword, keychain])
     await rm(p12, { force: true })
+    // `--keychain` picks the certificate, but on GitHub's macOS runners
+    // codesign still resolves the private key through the search list and
+    // fails with "The specified item could not be found in the keychain"
+    // unless the keychain is on it. Restored in `finally`.
+    await security(['list-keychains', '-d', 'user', '-s', keychain, ...searchList])
 
     const identity = await findSigningIdentity(keychain)
     const pinned = readPinnedFingerprint()
@@ -123,6 +135,7 @@ async function signWithCertificate(signAsync, opts, p12Base64) {
     console.log('  • signing with pinned certificate  name=' + JSON.stringify(identity.name) + ' sha1=' + identity.hash)
     await signAsync({ ...opts, identity: identity.hash, keychain, identityValidation: false })
   } finally {
+    await security(['list-keychains', '-d', 'user', '-s', ...searchList]).catch(() => {})
     await security(['delete-keychain', keychain]).catch(() => {})
     await rm(dir, { recursive: true, force: true })
   }

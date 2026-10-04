@@ -303,11 +303,20 @@ jobs:
           DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
       # 与发布同样的打包命令与签名设置，否则这里绿了也说明不了发布会绿。
+      # 本作业不在 pull_request 上运行，因此可以使用签名证书；固定证书签名的
+      # 钥匙串处理只有在真实 runner 上才会暴露问题。
       - name: 生成 DMG / Package DMG
         id: package
         run: pnpm exec electron-builder --mac dmg --${{ matrix.arch }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          DSH_MAC_SIGN_REQUIRED: "1"
+          DSH_MAC_SIGN_P12_BASE64: ${{ secrets.MAC_SIGN_P12_BASE64 }}
+          DSH_MAC_SIGN_P12_PASSWORD: ${{ secrets.MAC_SIGN_P12_PASSWORD }}
+
+      - name: 验证 macOS 签名身份 / Verify macOS signing identity
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: pnpm run check:mac-signature
 
       # release.yml 三条腿都在 electron-builder 之后跑这一步，Windows 侧的 CI 腿
       # 也跑；此前只有 macOS 的 CI 腿没跑，于是 CI 与发布在这里不同构。smoke:package
