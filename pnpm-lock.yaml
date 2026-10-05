@@ -90,8 +90,8 @@ importers:
         specifier: 11.16.0
         version: 11.16.0
       safer-dsh-market:
-        specifier: 0.9.0
-        version: 0.9.0(395ce1ee1686ff0171fcd9f1299260dd)
+        specifier: 0.9.1
+        version: 0.9.1(395ce1ee1686ff0171fcd9f1299260dd)
     optionalDependencies:
       '@deepseek-ai/node-addon-system-darwin-arm64':
         specifier: 0.1.2
@@ -4976,8 +4976,8 @@ packages:
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
 
-  safer-dsh-market@0.9.0:
-    resolution: {integrity: sha512-VPr4GAnQyY0TFRfiGJ0ROCEMNSyoPHvMWPHI63la41V/GkeJMNHVoxJWMr3WtkJ3zo4kq9KOo5UqpxwepXNTFg==}
+  safer-dsh-market@0.9.1:
+    resolution: {integrity: sha512-wqtOfWky6GJb+fBwn7lUGznGR5ocscmmRLRLBBKGgpK9rkcknqyZaiSKNicVXEZIvDudgO0ZRCE0Aog/FvIeTg==}
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.4
       '@deepseek-ai/cordis-plugin-loader': ^1.0.5
@@ -11079,7 +11079,7 @@ snapshots:
   safer-buffer@2.1.2:
     optional: true
 
-  safer-dsh-market@0.9.0(395ce1ee1686ff0171fcd9f1299260dd):
+  safer-dsh-market@0.9.1(395ce1ee1686ff0171fcd9f1299260dd):
     dependencies:
       yaml: 2.9.0
       zod: 4.4.3
