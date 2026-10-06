@@ -55,6 +55,9 @@ jobs:
       - name: 校验客户端设置读取诊断 / Verify settings read diagnostics
         run: pnpm run check:client-settings
 
+      - name: 校验窗口状态恢复 / Verify window state
+        run: pnpm run check:window-state
+
       - name: 校验 macOS 文件夹授权提示 / Verify macOS folder-access hint
         run: pnpm run check:mac-folder-access
 
@@ -71,6 +74,10 @@ jobs:
       - name: 验证真实 Electron 取消退出 / Verify Electron quit cancellation
         if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os != 'Linux' }}
         run: node scripts/check-quit-cancellation.cjs
+
+      - name: 验证原生窗口尺寸恢复 / Verify native window state
+        if: runner.os == 'macOS'
+        run: pnpm run check:window-state-native
 
       - name: 验证浏览器认证格式 / Verify browser-session format
         run: pnpm run check:dsh-browser-session

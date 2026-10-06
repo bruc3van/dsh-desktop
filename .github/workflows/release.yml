@@ -82,6 +82,9 @@ jobs:
       - name: 校验 Web UI 权限策略 / Verify Web UI permission policy
         run: pnpm run check:permissions
 
+      - name: 校验窗口状态恢复 / Verify window state
+        run: pnpm run check:window-state
+
       - name: 验证安全故障恢复 / Verify safety regressions
         run: pnpm run check:safety
 
@@ -283,6 +286,10 @@ jobs:
 
       - name: 验证真实 Electron 取消退出 / Verify Electron quit cancellation
         run: node scripts/check-quit-cancellation.cjs
+
+      - name: 验证原生窗口尺寸恢复 / Verify native window state
+        if: runner.os == 'macOS'
+        run: pnpm run check:window-state-native
 
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
         run: pnpm run prepare:runtime && pnpm run check:market-boot

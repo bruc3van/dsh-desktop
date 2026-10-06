@@ -1,9 +1,11 @@
-import { BrowserWindow, clipboard, Menu } from 'electron'
+import { BrowserWindow, clipboard, Menu, screen } from 'electron'
 import { fileURLToPath } from 'node:url'
 import type { createConnectionController } from './connection-controller.ts'
 import { appOrigin, isSecureUpgrade } from './connection-policy.ts'
 import type { ConnectionFailure } from './connection-types.ts'
+import { createWindowStateStore, resolveWindowState, trackWindowState, guardWindowVisibility } from './window-state.ts'
 interface Options {
+  clientHome: () => string
   localeChinese: () => boolean
   openExternal: (url: string) => void
   windowBackgroundColor: () => string
@@ -89,12 +91,11 @@ export function createMainWindowFactory(options: Options) {
 
 
   function createMainWindow(): BrowserWindow {
+    const stateStore = createWindowStateStore(options.clientHome())
+    const { maximized, ...bounds } = resolveWindowState(stateStore.load(), screen.getAllDisplays().map(display => display.workArea), screen.getPrimaryDisplay().workArea)
     let targetNavigationSucceeded = false
     let mainWindow: BrowserWindow | null = new BrowserWindow({
-      width: 1280,
-      height: 820,
-      minWidth: 1024,
-      minHeight: 680,
+      ...bounds,
       title: 'DSH Desktop',
       backgroundColor: windowBackgroundColor(),
       // The official Web UI carries its own header; a hiddenInset title bar
@@ -114,7 +115,13 @@ export function createMainWindowFactory(options: Options) {
     // Re-hooked with every window: a rebuilt window is a new HWND, and the tray
     // outlives both, so the old hook would leave the glyph stuck after a recovery.
     watchTaskbarTheme(mainWindow)
-    mainWindow.once('ready-to-show', () => { mainWindow?.show() })
+    trackWindowState(mainWindow, stateStore.save)
+    guardWindowVisibility(mainWindow, screen)
+    mainWindow.once('ready-to-show', () => {
+      if (maximized) mainWindow?.maximize()
+      mainWindow?.show()
+      if (maximized && mainWindow && !mainWindow.isMaximized()) mainWindow.maximize()
+    })
     mainWindow.on('show', () => { scheduleWindowHealthCheck('window shown') })
     mainWindow.on('focus', () => {
       scheduleWindowHealthCheck('window focused')

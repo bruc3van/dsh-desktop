@@ -5,6 +5,7 @@ import { mainContentHeightScript } from './window-content.ts'
 import { createBridgePolicy,type BridgeCaller } from './bridge-policy.ts'
 import { createDesktopIpc } from './desktop-ipc.ts'
 import { createLocaleController } from './locale-controller.ts'
+import { centeredWindowBounds, guardWindowVisibility } from './window-state.ts'
 import { createMainWindowFactory } from './main-window.ts'
 import { buildApplicationMenu, buildLinuxApplicationMenu, buildTrayMenu } from './native-menus.ts'
 import { createPluginRecoveryController } from './plugin-recovery-controller.ts'
@@ -782,9 +783,10 @@ function openSettingsWindow(): void {
     settingsWindow.focus()
     return
   }
+  const area = mainWindow && !mainWindow.isDestroyed()
+    ? screen.getDisplayMatching(mainWindow.getBounds()).workArea : screen.getPrimaryDisplay().workArea
   settingsWindow = new BrowserWindow({
-    width: 640,
-    height: 720,
+    ...centeredWindowBounds(area, 640, 720),
     title: localeChinese() ? 'DSH Desktop 设置' : 'DSH Desktop settings',
     // Without this the window keeps Electron's own default icon in its title
     // bar and taskbar entry — the one place the client still looked like a
@@ -800,6 +802,7 @@ function openSettingsWindow(): void {
       nodeIntegration: false,
     },
   })
+  guardWindowVisibility(settingsWindow, screen, { minWidth: 320, minHeight: 240 })
   mainWindowFactory.installPageContextMenu(settingsWindow.webContents)
   settingsWindow.on('closed', () => { settingsWindow = null })
   settingsWindow.webContents.on('will-prevent-unload', (event) => {
@@ -1756,6 +1759,7 @@ const windowHealth = createWindowHealth({
 })
 
 const mainWindowFactory = createMainWindowFactory({
+  clientHome,
   localeChinese,
   openExternal,
   windowBackgroundColor,
@@ -1802,15 +1806,7 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow === null) {
-      launchWindow()
-      return
-    }
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
-  })
+  app.on('second-instance', showMainWindow)
 
   // Every webContents, including any the runtime or a dependency creates
   // later, inherits the same rule: nothing opens a second window, http(s)
