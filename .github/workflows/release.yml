@@ -461,7 +461,7 @@ jobs:
         with:
           name: dsh-desktop-${{ matrix.id }}
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 1
           path: |
             release/*.dmg
             release/*.exe

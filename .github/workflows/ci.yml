@@ -265,7 +265,7 @@ jobs:
             release/*.AppImage
             release/*.deb
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   # main/手动运行验证两个架构的 DMG 实际安装。
   # 保留独立打包作业，让安装验证与源码检查并行。
