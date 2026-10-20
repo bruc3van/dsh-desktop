@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
 import { assertClientIdentity } from './check-identity.mjs'
+import { openOfficialSettings } from './lib/open-official-settings.mjs'
 
 // Identity fingerprint guard — see the module comment above. Runs before the
 // version is read: an overwritten manifest has a version too, and reporting it
@@ -95,7 +96,7 @@ const title = await window.title()
 check('official web ui title', /deepseek harness/i.test(title), title)
 const bootManifestType = await window.evaluate(() => typeof window.__DSH_BOOT__)
 check('boot manifest injected', bootManifestType === 'object', bootManifestType)
-check('sidebar rendered', await window.getByRole('button', { name: /设置|Settings/ }).first().isVisible().catch(() => false), 'Settings button')
+check('account menu rendered', await window.getByRole('button', { name: /账号菜单|Account menu/ }).first().isVisible().catch(() => false), 'Account menu')
 const composer = window.locator('[data-composer-input][role="textbox"][aria-multiline="true"]')
 check('composer rendered', await composer.first().isVisible().catch(() => false), 'composer textbox')
 check('session list seat', (await window.getByRole('button', { name: /新建会话|New Session/i }).count()) > 0, 'New Session button')
@@ -147,7 +148,7 @@ await settingsPage.close()
 
 // The official settings dialog remains operable around the client's own
 // Desktop tab. Verify its positive seat and that official tabs stay untouched.
-await window.getByRole('button', { name: /设置|Settings/ }).first().click()
+await openOfficialSettings(window)
 const settingsDialog = window.locator('[role="dialog"]:visible').last()
 const settingsDialogVisible = await settingsDialog.waitFor({ state: 'visible', timeout: 3000 })
   .then(() => true, () => false)

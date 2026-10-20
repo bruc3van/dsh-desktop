@@ -14,15 +14,18 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
   throw 'check-nsis-upgrade.ps1 is Windows-only'
 }
 
-$baselineUrl = 'https://github.com/bruc3van/dsh-desktop/releases/download/v0.3.0/dsh-desktop-0.3.0-win-x64.exe'
-$baselineSha256 = 'd622a9f8a959f24ee5585638ea5f7a275d7b2fcd452521077af3d2e8b864fba7'
+# v0.3.0 remains tagged, but its GitHub Release (and Windows installer) was
+# removed. Use the oldest still-published DSH Desktop NSIS installer.
+$baselineTag = 'v0.4.0'
+$baselineAsset = 'dsh-desktop-0.4.0-win-x64.exe'
+$baselineSha256 = '4b071a86e2c201eb8cc5b504a967b3530ba98a2105b226e288ddc8949dcf81be'
 $productKey = 'HKCU:\Software\986c9051-a721-5678-bb71-26cd03957e6c'
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\986c9051-a721-5678-bb71-26cd03957e6c'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $currentShortcut = Join-Path $desktop 'DSH Desktop.lnk'
 $fixtureRoot = Join-Path $env:RUNNER_TEMP 'dsh-desktop-upgrade-fixtures'
 $testRoot = Join-Path $env:RUNNER_TEMP ('dsh-desktop-upgrade-' + [guid]::NewGuid().ToString('N'))
-$baselineInstaller = Join-Path $fixtureRoot 'dsh-desktop-0.3.0-win-x64.exe'
+$baselineInstaller = Join-Path $fixtureRoot $baselineAsset
 
 if ($Installer -eq '') {
   $releaseDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'release'
@@ -277,7 +280,7 @@ function Invoke-UpgradeScenario(
       throw "Baseline executable was not installed at the custom directory: $baselineExe"
     }
 
-    # Upgrade an intact v0.3.0 installation; pre-0.3 rename/path repair
+    # Upgrade an intact v0.4.0 installation; pre-0.3 rename/path repair
     # scenarios are no longer part of the release validation baseline.
 
     $arguments = @('/S')
@@ -330,7 +333,7 @@ function Invoke-UpgradeScenario(
     }
     node (Join-Path $PSScriptRoot 'smoke-package.mjs') "$currentExe"
     if ($LASTEXITCODE -ne 0) { throw "upgraded runtime smoke failed with code $LASTEXITCODE" }
-    Write-Host "✓ $Name upgraded v0.3.0 to $expectedVersion and passed runtime smoke"
+    Write-Host "✓ $Name upgraded $baselineTag to $expectedVersion and passed runtime smoke"
   } finally {
     $currentUninstaller = Join-Path $targetDir 'Uninstall DSH Desktop.exe'
     $baselineUninstaller = Join-Path $baselineDir 'Uninstall DSH Desktop.exe'
@@ -368,7 +371,7 @@ function Invoke-UpgradeScenario(
 New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
-  Write-Step 'checking the cached v0.3.0 fixture'
+  Write-Step "checking the cached $baselineTag fixture"
   if (Test-Path -LiteralPath $baselineInstaller -PathType Leaf) {
     $cachedSha256 = (Get-FileHash -LiteralPath $baselineInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($cachedSha256 -ne $baselineSha256) {
@@ -376,19 +379,13 @@ try {
     }
   }
   if (-not (Test-Path -LiteralPath $baselineInstaller -PathType Leaf)) {
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
-      try {
-        Write-Step "download attempt $attempt : $baselineUrl"
-        Invoke-WebRequest -Uri $baselineUrl -OutFile $baselineInstaller -UseBasicParsing -TimeoutSec 300
-        Write-Step 'download complete'
-        break
-      } catch {
-        Remove-Item -LiteralPath $baselineInstaller -Force -ErrorAction SilentlyContinue
-        if ($attempt -eq 3) {
-          throw
-        }
-        Start-Sleep -Seconds (2 * $attempt)
-      }
+    if (-not $env:GITHUB_TOKEN) {
+      throw "GITHUB_TOKEN is required to download the $baselineTag NSIS upgrade baseline"
+    }
+    Write-Step "download $baselineTag Windows installer with gh"
+    & gh release download $baselineTag --repo bruc3van/dsh-desktop --pattern $baselineAsset --dir $fixtureRoot --clobber
+    if ($LASTEXITCODE -ne 0) {
+      throw "gh release download $baselineTag failed with code $LASTEXITCODE"
     }
   }
   $actualSha256 = (Get-FileHash -LiteralPath $baselineInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -405,7 +402,7 @@ try {
   Invoke-UpgradeScenario 'in-place' $false
   Invoke-UpgradeScenario 'explicit-target' $true
 
-  Write-Host '✓ v0.3.0 upgrades preserve the selected directory, version and shortcut target'
+  Write-Host "✓ $baselineTag upgrades preserve the selected directory, version and shortcut target"
 } finally {
   Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

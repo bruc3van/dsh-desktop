@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
+import { openOfficialSettings } from './lib/open-official-settings.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const readmeMode = process.argv[2] === '--readme'
@@ -66,9 +67,8 @@ for (let step = 0; step < 8; step += 1) {
 await window.waitForTimeout(800)
 await shot(window, readmeMode ? 'dsh-desktop-home' : '01-empty-state')
 
-// Open the official settings surface (sidebar footer).
-const settings = window.getByRole('button', { name: /设置|Settings/ }).first()
-await settings.click()
+// Open the official settings surface (account menu).
+await openOfficialSettings(window)
 await window.waitForTimeout(600)
 await shot(window, readmeMode ? 'dsh-desktop-setting' : '02-settings')
 await window.keyboard.press('Escape')

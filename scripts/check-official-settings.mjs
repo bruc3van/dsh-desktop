@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
 import { sanitizedElectronEnv } from './lib/electron-env.mjs'
+import { openOfficialSettings } from './lib/open-official-settings.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 for (const language of ['zh', 'en']) {
@@ -22,9 +23,8 @@ try {
       DSH_DESKTOP_SKIP_PROBE: '1', DSH_DESKTOP_SKIP_INSTALLED_DSH: '1', DSH_DESKTOP_SKIP_UPDATE_PROMPT: '1' } })
   const page = await app.firstWindow()
   // Hosted Windows display scaling can leave the 1280-DIP BrowserWindow below
-  // the official UI's desktop breakpoint, where its sidebar Settings seat is
-  // intentionally absent. This check targets the shipped desktop settings
-  // integration, so pin a desktop CSS viewport instead of inheriting runner DPI.
+  // the official UI's desktop breakpoint. Pin a desktop CSS viewport so the
+  // account-menu Settings entry is the wide layout, not the collapsed rail.
   await page.setViewportSize({ width: 1600, height: 1000 })
   await page.waitForFunction(() => document.querySelector('#root')?.children.length > 0, null, { timeout: 60000 }).catch(async error => {
     console.error('Official UI did not load:', (await page.locator('body').innerText()).slice(0, 1500))
@@ -55,13 +55,13 @@ try {
     else await page.keyboard.press('Escape')
     await page.waitForTimeout(500)
   }
-  const settingsButton = page.getByRole('button', { name: /设置|Settings/ }).first()
-  await settingsButton.waitFor({ state: 'visible', timeout: 60_000 }).catch(async error => {
-    console.error('Official settings entry did not become usable:', (await page.locator('body').innerText()).slice(0, 1500))
-    throw error
-  })
   const open = async () => {
-    await settingsButton.click()
+    try {
+      await openOfficialSettings(page)
+    } catch (error) {
+      console.error('Official settings entry did not become usable:', (await page.locator('body').innerText()).slice(0, 1500))
+      throw error
+    }
     await page.waitForSelector('#dsh-desktop-tab')
     assert.equal(await page.locator('#dsh-desktop-tab').innerText(), language === 'en' ? 'Desktop' : '桌面设置')
     await page.locator('#dsh-desktop-tab').click()
