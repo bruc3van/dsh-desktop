@@ -174,7 +174,7 @@ try {
   const badPayload = join(temp, 'incompatible')
   await cp(payload, badPayload, { recursive: true })
   const badManifest = JSON.parse(await readFile(join(badPayload, 'package.json')))
-  badManifest.peerDependencies['@deepseek-ai/dsh-settings'] = '^0.2.0'
+  badManifest.peerDependencies['@deepseek-ai/dsh-settings'] = '^0.3.0'
   await writeFile(join(badPayload, 'package.json'), JSON.stringify(badManifest))
   const badHome = join(temp, 'unsupported')
   await prepareBundledMarket(entry, { home: badHome, pluginDir: badPayload, mode: 'offer' })

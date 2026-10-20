@@ -223,7 +223,7 @@ const AUDITED_INDIRECT = new Map([
     { label: 'speech worker through subprocess', context: 'argv: [\n\t\t\t\t\tprocess.execPath,\n\t\t\t\t\t...runtime.worker', expected: 1 },
   ]],
   ['@deepseek-ai/dsh-ptc-runtime-node/lib/index.js', [
-    { label: 'PTC executable default for subprocess', context: 'nodeExecutable: config.nodeExecutable ?? process.execPath', expected: 1 },
+    { label: 'PTC executable default for subprocess', context: 'kind: "pkg" in process ? "embedded" : "node-script",\n\t\texecutable: process.execPath', expected: 1 },
   ]],
   // This fallback is descriptive skill metadata, guarded by an explicit
   // Electron/SEA rejection unless the application supplies standalone Node.

@@ -17,7 +17,7 @@ minimumReleaseAgeExclude:
   # The bundled market is this project's own package, published from a tagged
   # GitHub Actions run with npm provenance; its release-day version is exempted
   # one version at a time, never by wildcard.
-  - safer-dsh-market@0.9.1
+  - safer-dsh-market@0.10.1
 
 # electron-builder 26.15.3 uses ElectronDownloadCacheMode, which was added in
 # @electron/get 3.1.0, while its published range still allows incompatible 3.0.0.
@@ -41,11 +41,12 @@ allowBuilds:
   node-pty: true
   protobufjs: false
 
-# Electron-specific console, native target environment and ACL probe fixes.
-# Upstream 0.2.0-rc.2 already hides Windows Job helper windows.
+# Electron-specific console, native target environment, ACL probe and bundled
+# pnpm fixes. Upstream 0.2.1-rc.2 still hides Windows Job helper windows and
+# still needs the remaining Electron-only patches below.
 patchedDependencies:
-  '@deepseek-ai/dsh-plugin-manager@0.2.0-rc.2': patches/@deepseek-ai__dsh-plugin-manager@0.2.0-rc.2.patch
-  '@deepseek-ai/dsh-sandbox-local@0.2.0-rc.2': patches/@deepseek-ai__dsh-sandbox-local@0.2.0-rc.2.patch
-  '@deepseek-ai/dsh-sandbox-windows-acl@0.2.0-rc.2': patches/@deepseek-ai__dsh-sandbox-windows-acl@0.2.0-rc.2.patch
-  '@deepseek-ai/dsh-subprocess-local@0.2.0-rc.2': patches/@deepseek-ai__dsh-subprocess-local@0.2.0-rc.2.patch
-  '@deepseek-ai/dsh-win32-process@0.2.0-rc.2': patches/@deepseek-ai__dsh-win32-process@0.2.0-rc.2.patch
+  '@deepseek-ai/dsh-plugin-manager@0.2.1-rc.2': patches/@deepseek-ai__dsh-plugin-manager@0.2.1-rc.2.patch
+  '@deepseek-ai/dsh-sandbox-local@0.2.1-rc.2': patches/@deepseek-ai__dsh-sandbox-local@0.2.1-rc.2.patch
+  '@deepseek-ai/dsh-sandbox-windows-acl@0.2.1-rc.2': patches/@deepseek-ai__dsh-sandbox-windows-acl@0.2.1-rc.2.patch
+  '@deepseek-ai/dsh-subprocess-local@0.2.1-rc.2': patches/@deepseek-ai__dsh-subprocess-local@0.2.1-rc.2.patch
+  '@deepseek-ai/dsh-win32-process@0.2.1-rc.2': patches/@deepseek-ai__dsh-win32-process@0.2.1-rc.2.patch
