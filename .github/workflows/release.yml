@@ -422,6 +422,8 @@ jobs:
       - name: 验证 v0.4.0 升级 / Smoke upgrade from v0.4.0
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/check-nsis-upgrade.ps1
 
       # macOS 侧的等价门禁：挂载刚生成的 DMG，把 .app 拷出来再跑一遍冒烟。

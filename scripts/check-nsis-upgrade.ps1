@@ -379,13 +379,35 @@ try {
     }
   }
   if (-not (Test-Path -LiteralPath $baselineInstaller -PathType Leaf)) {
-    if (-not $env:GITHUB_TOKEN) {
-      throw "GITHUB_TOKEN is required to download the $baselineTag NSIS upgrade baseline"
+    $token = $env:GH_TOKEN
+    if (-not $token) { $token = $env:GITHUB_TOKEN }
+    $downloaded = $false
+    if ($token) {
+      $env:GH_TOKEN = $token
+      Write-Step "download $baselineTag Windows installer with gh"
+      & gh release download $baselineTag --repo bruc3van/dsh-desktop --pattern $baselineAsset --dir $fixtureRoot --clobber
+      if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $baselineInstaller -PathType Leaf)) {
+        $downloaded = $true
+      } else {
+        Remove-Item -LiteralPath $baselineInstaller -Force -ErrorAction SilentlyContinue
+        Write-Step "gh download failed; falling back to HTTPS"
+      }
     }
-    Write-Step "download $baselineTag Windows installer with gh"
-    & gh release download $baselineTag --repo bruc3van/dsh-desktop --pattern $baselineAsset --dir $fixtureRoot --clobber
-    if ($LASTEXITCODE -ne 0) {
-      throw "gh release download $baselineTag failed with code $LASTEXITCODE"
+    if (-not $downloaded) {
+      $baselineUrl = "https://github.com/bruc3van/dsh-desktop/releases/download/$baselineTag/$baselineAsset"
+      for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+          Write-Step "download attempt $attempt : $baselineUrl"
+          Invoke-WebRequest -Uri $baselineUrl -OutFile $baselineInstaller -UseBasicParsing -TimeoutSec 300
+          Write-Step 'download complete'
+          $downloaded = $true
+          break
+        } catch {
+          Remove-Item -LiteralPath $baselineInstaller -Force -ErrorAction SilentlyContinue
+          if ($attempt -eq 3) { throw }
+          Start-Sleep -Seconds (2 * $attempt)
+        }
+      }
     }
   }
   $actualSha256 = (Get-FileHash -LiteralPath $baselineInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
