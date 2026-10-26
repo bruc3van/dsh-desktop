@@ -13,7 +13,7 @@
  * @module desktop/scripts/check-mac-folder-access
  */
 
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -74,14 +74,19 @@ check('the settings link opens Files & Folders',
 console.log('\n# workspace store')
 const dshHome = join(outDir, 'dsh-home')
 mkdirSync(join(dshHome, 'storages'), { recursive: true })
-const writeStore = (workspaces, unit = { name: 'workspace', version: 2 }) => writeFileSync(
-  join(dshHome, 'storages', 'workspace.json'),
-  JSON.stringify({
+const writeStore = (workspaces, unit = { name: 'workspace', version: 2 }) => {
+  const dest = join(dshHome, 'storages', 'workspace.json')
+  const tmp = dest + '.tmp'
+  writeFileSync(tmp, JSON.stringify({
     unit,
     global: { initialized: true, workspaceIds: Object.keys(workspaces) },
     tables: { workspaces: Object.fromEntries(Object.entries(workspaces).map(([id, path]) => [id, { path, title: id, sessionIds: [] }])) },
-  }),
-)
+  }))
+  // The controller watches the storages directory because the runtime replaces
+  // this file by rename. An in-place overwrite does not always notify macOS
+  // FSEvents, which is how CI lost the "new workspace" hint.
+  renameSync(tmp, dest)
+}
 equal('a missing store yields nothing', readWorkspacePaths(join(outDir, 'nowhere')), [])
 writeStore({ a: HOME + '/Documents/app', b: 'relative/path' })
 equal('paths are read and relative ones dropped', readWorkspacePaths(dshHome), [HOME + '/Documents/app'])
@@ -224,7 +229,7 @@ writeStore({ a: HOME + '/Documents/app' })
   await h.controller.onWebUiLoaded()
   equal('no protected workspace, no hint', h.asked.length, 0)
   writeStore({ a: HOME + '/code/app', b: HOME + '/Downloads/site' })
-  await settle(400)
+  for (let i = 0; i < 40 && h.asked.length === 0; i++) await settle(50)
   equal('registering a workspace in a refused folder raises the hint', h.asked.length, 1)
   check('the hint names the new workspace', h.asked[0]?.detail.includes('「site」') === true, h.asked[0]?.detail)
   h.controller.dispose()
