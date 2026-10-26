@@ -1,0 +1,139 @@
+# 每天检查稳定 Electron 内置 Node 是否落后于 Node.js 24 安全发布。
+# 只监控不开自动升级：Electron 大版本要过原生模块指纹和对账清单。
+name: Electron Node 安全监控 / Electron Node watch
+
+on:
+  schedule:
+    # 每天北京时间 10:47 / 18:47（UTC 02:47 / 10:47），错开运行时监控的 :17。
+    - cron: "47 2 * * *"
+    - cron: "47 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: 比对 Electron 内置 Node / Compare Electron Node
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出仓库 / Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: 安装 Node / Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - name: 读取钉住版本并查询发布 / Read pins and query releases
+        id: versions
+        run: |
+          PINNED_ELECTRON="$(node -p "require('./package.json').devDependencies.electron")"
+          curl -fsSL 'https://releases.electronjs.org/releases.json' -o /tmp/electron-releases.json
+          curl -fsSL 'https://nodejs.org/dist/index.json' -o /tmp/node-index.json
+          EVAL="$(node -e "
+            const parse = (v) => {
+              const clean = String(v).trim().replace(/^v/i, '').split('+')[0]
+              const dash = clean.indexOf('-')
+              const core = (dash === -1 ? clean : clean.slice(0, dash)).split('.').map((n) => Number(n) || 0)
+              while (core.length < 3) core.push(0)
+              return { core, pre: dash === -1 ? undefined : clean.slice(dash + 1) }
+            }
+            const cmp = (aRaw, bRaw) => {
+              const a = parse(aRaw), b = parse(bRaw)
+              for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] < b.core[i] ? -1 : 1
+              if (a.pre === undefined && b.pre === undefined) return 0
+              if (a.pre === undefined) return 1
+              if (b.pre === undefined) return -1
+              const p = a.pre.split('.'), q = b.pre.split('.')
+              for (let i = 0; i < Math.max(p.length, q.length); i++) {
+                const x = p[i], y = q[i]
+                if (x === undefined) return -1
+                if (y === undefined) return 1
+                const xn = /^[0-9]+\$/.test(x), yn = /^[0-9]+\$/.test(y)
+                if (xn && yn) { if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1; continue }
+                if (xn !== yn) return xn ? -1 : 1
+                if (x !== y) return x < y ? -1 : 1
+              }
+              return 0
+            }
+            const pinnedElectron = process.argv[1]
+            const electronReleases = require('/tmp/electron-releases.json')
+            const nodeIndex = require('/tmp/node-index.json')
+            const pinned = electronReleases.find((item) => item.version === pinnedElectron)
+            if (!pinned || !pinned.node) {
+              throw new Error('cannot locate Electron ' + pinnedElectron + ' on the release list')
+            }
+            const major = pinnedElectron.split('.')[0]
+            const latestSameMajor = electronReleases
+              .filter((item) => String(item.version).split('.')[0] === major && !String(item.version).includes('-'))
+              .sort((a, b) => cmp(a.version, b.version))
+              .at(-1)
+            const node24 = nodeIndex
+              .filter((item) => String(item.version).startsWith('v24.') && !item.version.includes('-'))
+              .sort((a, b) => cmp(a.version, b.version))
+              .at(-1)
+            if (!node24 || !node24.version) throw new Error('cannot locate latest Node 24')
+            const electronNode = String(pinned.node).replace(/^v/i, '')
+            const latestNode = String(node24.version).replace(/^v/i, '')
+            const latestElectron = latestSameMajor ? latestSameMajor.version : pinnedElectron
+            const nodeBehind = cmp(electronNode, latestNode) < 0 ? '1' : '0'
+            const electronBehind = cmp(pinnedElectron, latestElectron) < 0 ? '1' : '0'
+            const behind = nodeBehind === '1' || electronBehind === '1' ? '1' : '0'
+            process.stdout.write([
+              electronNode, latestElectron, latestNode, nodeBehind, electronBehind, behind,
+            ].join(' '))
+          " "$PINNED_ELECTRON")"
+          ELECTRON_NODE="$(echo "$EVAL" | awk '{print $1}')"
+          LATEST_ELECTRON="$(echo "$EVAL" | awk '{print $2}')"
+          LATEST_NODE="$(echo "$EVAL" | awk '{print $3}')"
+          NODE_BEHIND="$(echo "$EVAL" | awk '{print $4}')"
+          ELECTRON_BEHIND="$(echo "$EVAL" | awk '{print $5}')"
+          BEHIND="$(echo "$EVAL" | awk '{print $6}')"
+          echo "pinned_electron=$PINNED_ELECTRON" >> "$GITHUB_OUTPUT"
+          echo "electron_node=$ELECTRON_NODE" >> "$GITHUB_OUTPUT"
+          echo "latest_electron=$LATEST_ELECTRON" >> "$GITHUB_OUTPUT"
+          echo "latest_node=$LATEST_NODE" >> "$GITHUB_OUTPUT"
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "钉住 Electron $PINNED_ELECTRON / Node $ELECTRON_NODE · 同大版本最新 Electron $LATEST_ELECTRON · Node 24 最新 $LATEST_NODE · behind=$BEHIND"
+          if [ "$BEHIND" != "1" ]; then
+            echo "未落后，不开 issue。"
+          elif [ "$NODE_BEHIND" = "1" ] && [ "$ELECTRON_BEHIND" != "1" ]; then
+            echo "::warning::同大版本 Electron 已是最新，但内置 Node 仍低于 Node.js $LATEST_NODE。"
+          fi
+
+      - name: 需要时开 issue / Open an issue when behind
+        if: steps.versions.outputs.behind == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED_ELECTRON: ${{ steps.versions.outputs.pinned_electron }}
+          ELECTRON_NODE: ${{ steps.versions.outputs.electron_node }}
+          LATEST_ELECTRON: ${{ steps.versions.outputs.latest_electron }}
+          LATEST_NODE: ${{ steps.versions.outputs.latest_node }}
+        run: |
+          TITLE="[Security] 内置 Node.js $ELECTRON_NODE 落后于安全修复版 $LATEST_NODE（Electron $PINNED_ELECTRON）"
+          if gh issue list --state open --limit 100 --json title --jq '.[].title' | grep -Fxq "$TITLE"; then
+            echo "已有同版本的 open issue，跳过。"
+            exit 0
+          fi
+          BODY="$(cat <<'EOF'
+          钉住的 Electron **v__PINNED_ELECTRON__** 内置 Node 为 **v__ELECTRON_NODE__**，Node.js 24 最新安全发布是 **v__LATEST_NODE__**。同大版本最新稳定 Electron 为 **v__LATEST_ELECTRON__**。
+
+          升级时按仓库自己的约束逐项过：
+
+          - [ ] 优先在同一 Electron 大版本内升级（当前是 44.x），核对 `node-addon-require-builtin` 运行时指纹
+          - [ ] 用 `ELECTRON_RUN_AS_NODE=1` 跑内置 node shim，验收 `process.versions.node`
+          - [ ] 更新 `scripts/check-pnpm-engine.mjs` 的安全基线
+          - [ ] 全量门禁：`check:pnpm-engine`、`check:picker`、`check:win32-console`、`check:runtime-env`
+
+          — 本 issue 由 `.github/workflows/electron-node-watch.yml` 每日定时检查自动创建。
+          EOF
+          )"
+          BODY="${BODY//__PINNED_ELECTRON__/$PINNED_ELECTRON}"
+          BODY="${BODY//__ELECTRON_NODE__/$ELECTRON_NODE}"
+          BODY="${BODY//__LATEST_ELECTRON__/$LATEST_ELECTRON}"
+          BODY="${BODY//__LATEST_NODE__/$LATEST_NODE}"
+          gh issue create --title "$TITLE" --body "$BODY"

@@ -1,11 +1,18 @@
 /**
  * Fail the build when Electron's embedded Node is older than the bundled
- * pnpm's `engines.node`.
+ * pnpm's `engines.node`, or older than the pinned Node security baseline.
  *
  * pnpm 11 hard-exits (not a warning) if `process.versions.node` is below its
  * floor — currently `>=22.13`. An Electron upgrade that slipped under that
  * floor would make every `dsh plugin add` fail with no earlier signal. Unparseable
  * range forms also fail here: silently skipping them would hide the coupling.
+ *
+ * The security floor is the newest Node that a *supported* Electron build
+ * currently ships. `node-addon-require-builtin@0.1.9` only fingerprints
+ * Electron 43.0.0 / 44.0.0 / 44.7.0 / 45.0.0-alpha.6, so 44.9.3 (Node
+ * 24.22.0) and 45.0.0 cannot be taken yet. Node 24.22.1 is only in
+ * Electron 46 alpha. Raise this pin when a supported Electron includes a
+ * newer Node.
  *
  * Usage: node scripts/check-pnpm-engine.mjs
  * @module desktop/scripts/check-pnpm-engine
@@ -48,7 +55,14 @@ if (!satisfiesMinimum(actual, minimum)) {
     + JSON.stringify(range) + ' (minimum ' + formatVersion(minimum) + ')')
 }
 
+const securityFloor = { major: 24, minor: 21, patch: 0 }
+if (!satisfiesMinimum(actual, securityFloor)) {
+  throw new Error('Electron Node ' + nodeVersion + ' is below the pinned security baseline '
+    + formatVersion(securityFloor) + '; upgrade Electron before shipping')
+}
+
 console.log('✓ Electron Node ' + nodeVersion + ' satisfies bundled pnpm engines.node ' + JSON.stringify(range)
+  + ' and security baseline ' + formatVersion(securityFloor)
   + '; DSH native internal-module bridge is supported')
 
 /**

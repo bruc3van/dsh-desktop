@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.5.27] - 2026-10-26
+
+- 内置 DSH 升级至 `0.2.1-rc.3`，同步全部 DSH 依赖与锁文件，并重新核对 Windows 沙箱和内置 pnpm 兼容补丁。
+- Electron 固定升级至 `44.7.0`（内置 Node `24.21.0`），覆盖 [#28](https://github.com/bruc3van/dsh-desktop/issues/28) 报告的 24.18.1 安全差距中当前原生模块指纹允许的部分。`node-addon-require-builtin@0.1.9` 尚未收录 `44.9.3` / `45.0.0`；稳定版尚无 Node `24.22.1`。
+- `check:pnpm-engine` 增加内置 Node 安全基线断言；新增每日任务比对 Node 安全发布与 Electron 内置 Node。
+
 ## [0.5.26] - 2026-10-20
 
 `v0.5.24` 与 `v0.5.25` 在发布检查阶段中止，未正式发布。
