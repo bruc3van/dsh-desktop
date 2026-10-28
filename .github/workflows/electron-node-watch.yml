@@ -1,5 +1,11 @@
 # 每天检查稳定 Electron 内置 Node 是否落后于 Node.js 24 安全发布。
 # 只监控不开自动升级：Electron 大版本要过原生模块指纹和对账清单。
+#
+# 是否「可行动」由上游 node-addon-require-builtin 的指纹表决定。该表是
+# packages/native/src/runtime_context/runtime_profile.cc 里手写的 constexpr
+# 数组，按 Node 版本 + V8 版本精确匹配，没有环境变量或配置开关，表里没有的
+# Electron 装上就 fail closed。所以「落后但无可用指纹」只更新已有跟踪项，
+# 不再每升一次 Electron 就开一条新 issue（旧逻辑按标题精确去重，而标题含版本号）。
 name: Electron Node 安全监控 / Electron Node watch
 
 on:
@@ -105,7 +111,83 @@ jobs:
             echo "::warning::同大版本 Electron 已是最新，但内置 Node 仍低于 Node.js $LATEST_NODE。"
           fi
 
-      - name: 需要时开 issue / Open an issue when behind
+      # 上游指纹表决定「能不能升」：表里没有的 Electron 版本装上会 fail closed，
+      # 所以只报「落后」而不区分「可行动」会让跟踪项一直停在不可执行的状态。
+      - name: 读取上游指纹表并判断可行动性 / Read upstream fingerprints
+        id: fingerprint
+        if: steps.versions.outputs.behind == '1'
+        env:
+          PINNED_ELECTRON: ${{ steps.versions.outputs.pinned_electron }}
+          LATEST_NODE: ${{ steps.versions.outputs.latest_node }}
+        run: |
+          if ! curl -fsSL 'https://raw.githubusercontent.com/deepseek-ai/dsh-node-addon-require-builtin/HEAD/packages/native/src/runtime_context/runtime_profile.cc' -o /tmp/runtime_profile.cc; then
+            echo "::warning::无法读取上游指纹表，本次按「未知」处理，不做可行动性判断。"
+            rm -f /tmp/runtime_profile.cc
+          fi
+          cat > /tmp/fingerprint.mjs <<'FINGERPRINT_EOF'
+          import { readFileSync } from 'node:fs'
+
+          const [pinned, latestNode] = process.argv.slice(2)
+          const releases = JSON.parse(readFileSync('/tmp/electron-releases.json', 'utf8'))
+          let source = ''
+          try {
+            source = readFileSync('/tmp/runtime_profile.cc', 'utf8')
+          } catch {
+            source = ''
+          }
+
+          // 表项形如 {"44.7.0", 24, 21, 0, "15.2.124.28-electron.0", "..."}，
+          // 匹配键是 Node major.minor.patch 加完整 V8 串，因此这里按同样的键比对。
+          const v8Core = (value) => String(value).replace(/-electron.*$/, '')
+          const profiles = [...source.matchAll(/\{\s*"([0-9][^"]*)",\s*(\d+),\s*(\d+),\s*(\d+),\s*"([^"]+)"/g)].map((m) => ({
+            electron: m[1],
+            node: m[2] + '.' + m[3] + '.' + m[4],
+            v8: v8Core(m[5]),
+          }))
+
+          const parse = (value) => {
+            const core = String(value).replace(/^v/i, '').split('-')[0].split('.').map((n) => Number(n) || 0)
+            while (core.length < 3) core.push(0)
+            return core
+          }
+          const cmp = (a, b) => {
+            const x = parse(a)
+            const y = parse(b)
+            for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
+            return 0
+          }
+
+          const stable = releases.filter((item) => !String(item.version).includes('-'))
+          const supported = profiles.length === 0
+            ? []
+            : stable.filter((item) => profiles.some((p) => p.node === item.node && p.v8 === v8Core(item.v8)))
+          const pinnedMajor = String(pinned).split('.')[0]
+          const newer = supported.filter((item) => cmp(item.version, pinned) > 0)
+          const byVersion = (a, b) => cmp(a.version, b.version)
+          const sameMajor = newer.filter((item) => String(item.version).split('.')[0] === pinnedMajor).sort(byVersion).at(-1)
+          const higherMajor = newer.filter((item) => Number(String(item.version).split('.')[0]) > Number(pinnedMajor)).sort(byVersion).at(-1)
+          const target = sameMajor ?? higherMajor
+          const supportedSameMajor = supported
+            .filter((item) => String(item.version).split('.')[0] === pinnedMajor)
+            .sort(byVersion)
+            .at(-1)
+
+          process.stdout.write([
+            'fingerprint_known=' + (profiles.length === 0 ? '0' : '1'),
+            'fingerprint_versions=' + profiles.map((p) => p.electron).join(','),
+            'supported_latest=' + (supportedSameMajor ? supportedSameMajor.version : ''),
+            'actionable=' + (newer.length === 0 ? '0' : '1'),
+            'target=' + (target ? target.version : ''),
+            'target_node=' + (target ? target.node : ''),
+            'target_closes_gap=' + (target && cmp(target.node, latestNode) >= 0 ? '1' : '0'),
+          ].join('\n') + '\n')
+          FINGERPRINT_EOF
+          node /tmp/fingerprint.mjs "$PINNED_ELECTRON" "$LATEST_NODE" | tee /tmp/fingerprint.out
+          while IFS='=' read -r key value; do
+            echo "$key=$value" >> "$GITHUB_OUTPUT"
+          done < /tmp/fingerprint.out
+
+      - name: 开或更新跟踪 issue / Open or update the tracking issue
         if: steps.versions.outputs.behind == '1'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -113,18 +195,58 @@ jobs:
           ELECTRON_NODE: ${{ steps.versions.outputs.electron_node }}
           LATEST_ELECTRON: ${{ steps.versions.outputs.latest_electron }}
           LATEST_NODE: ${{ steps.versions.outputs.latest_node }}
+          FINGERPRINT_KNOWN: ${{ steps.fingerprint.outputs.fingerprint_known }}
+          FINGERPRINT_VERSIONS: ${{ steps.fingerprint.outputs.fingerprint_versions }}
+          SUPPORTED_LATEST: ${{ steps.fingerprint.outputs.supported_latest }}
+          ACTIONABLE: ${{ steps.fingerprint.outputs.actionable }}
+          TARGET: ${{ steps.fingerprint.outputs.target }}
+          TARGET_NODE: ${{ steps.fingerprint.outputs.target_node }}
+          TARGET_CLOSES_GAP: ${{ steps.fingerprint.outputs.target_closes_gap }}
         run: |
-          TITLE="[Security] 内置 Node.js $ELECTRON_NODE 落后于安全修复版 $LATEST_NODE（Electron $PINNED_ELECTRON）"
-          if gh issue list --state open --limit 100 --json title --jq '.[].title' | grep -Fxq "$TITLE"; then
-            echo "已有同版本的 open issue，跳过。"
+          set -euo pipefail
+          MAJOR="${PINNED_ELECTRON%%.*}"
+          if [ "$FINGERPRINT_KNOWN" != "1" ]; then
+            STATUS="上游指纹表本次未能读取，无法判断是否存在可行动升级；请人工核对 \`node-addon-require-builtin\` 的收录情况。"
+          elif [ "$ACTIONABLE" = "1" ] && [ "$TARGET_CLOSES_GAP" = "1" ]; then
+            STATUS="**可行动**：上游指纹表已收录 **v$TARGET**（内置 Node **v$TARGET_NODE**），升上去即可补齐安全差距。"
+          elif [ "$ACTIONABLE" = "1" ]; then
+            STATUS="**可行动**：上游指纹表已收录 **v$TARGET**（内置 Node **v$TARGET_NODE**），升级后仍有差距，但比当前更接近。"
+          else
+            STATUS="**当前不可行动**：上游 \`node-addon-require-builtin\` 的指纹表只收录 ${FINGERPRINT_VERSIONS:-（未读取到）}；${MAJOR}.x 线上带指纹的最新稳定版是 **v${SUPPORTED_LATEST:-$PINNED_ELECTRON}**，也就是当前钉住的版本。表里没有的 Electron 装上会 fail closed，因此本条只做跟踪，等上游收录新指纹或发布新版本。"
+          fi
+
+          # 标题含版本号，升级一次就变一次；按前缀找已有跟踪项，避免重复开 issue。
+          # 多条并存时取编号最小的那条，让跟踪项始终落在最早建立的那条上。
+          EXISTING="$(gh issue list --state open --limit 200 --json number,title \
+            --jq '[.[] | select(.title | startswith("[Security] 内置 Node.js")) | .number] | if length == 0 then empty else min end')"
+          EXISTING="${EXISTING%%$'\n'*}"
+
+          if [ -n "$EXISTING" ]; then
+            BODY="$(cat <<'EOF'
+          状态更新（自动）：钉住的 Electron **v__PINNED__** 内置 Node 为 **v__NODE__**，Node.js 24 最新安全发布是 **v__LATEST_NODE__**；同大版本最新稳定 Electron 为 **v__LATEST_ELECTRON__**。
+
+          __STATUS__
+          EOF
+            )"
+            BODY="${BODY//__PINNED__/$PINNED_ELECTRON}"
+            BODY="${BODY//__NODE__/$ELECTRON_NODE}"
+            BODY="${BODY//__LATEST_NODE__/$LATEST_NODE}"
+            BODY="${BODY//__LATEST_ELECTRON__/$LATEST_ELECTRON}"
+            BODY="${BODY//__STATUS__/$STATUS}"
+            gh issue comment "$EXISTING" --body "$BODY"
+            echo "已更新跟踪 issue #$EXISTING。"
             exit 0
           fi
+
+          TITLE="[Security] 内置 Node.js $ELECTRON_NODE 落后于安全修复版 $LATEST_NODE（Electron $PINNED_ELECTRON）"
           BODY="$(cat <<'EOF'
-          钉住的 Electron **v__PINNED_ELECTRON__** 内置 Node 为 **v__ELECTRON_NODE__**，Node.js 24 最新安全发布是 **v__LATEST_NODE__**。同大版本最新稳定 Electron 为 **v__LATEST_ELECTRON__**。
+          钉住的 Electron **v__PINNED__** 内置 Node 为 **v__NODE__**，Node.js 24 最新安全发布是 **v__LATEST_NODE__**。同大版本最新稳定 Electron 为 **v__LATEST_ELECTRON__**。
+
+          __STATUS__
 
           升级时按仓库自己的约束逐项过：
 
-          - [ ] 优先在同一 Electron 大版本内升级（当前是 44.x），核对 `node-addon-require-builtin` 运行时指纹
+          - [ ] 优先在同一 Electron 大版本内升级（当前是 __MAJOR__.x），核对 `node-addon-require-builtin` 运行时指纹
           - [ ] 用 `ELECTRON_RUN_AS_NODE=1` 跑内置 node shim，验收 `process.versions.node`
           - [ ] 更新 `scripts/check-pnpm-engine.mjs` 的安全基线
           - [ ] 全量门禁：`check:pnpm-engine`、`check:picker`、`check:win32-console`、`check:runtime-env`
@@ -132,8 +254,10 @@ jobs:
           — 本 issue 由 `.github/workflows/electron-node-watch.yml` 每日定时检查自动创建。
           EOF
           )"
-          BODY="${BODY//__PINNED_ELECTRON__/$PINNED_ELECTRON}"
-          BODY="${BODY//__ELECTRON_NODE__/$ELECTRON_NODE}"
-          BODY="${BODY//__LATEST_ELECTRON__/$LATEST_ELECTRON}"
+          BODY="${BODY//__PINNED__/$PINNED_ELECTRON}"
+          BODY="${BODY//__NODE__/$ELECTRON_NODE}"
           BODY="${BODY//__LATEST_NODE__/$LATEST_NODE}"
+          BODY="${BODY//__LATEST_ELECTRON__/$LATEST_ELECTRON}"
+          BODY="${BODY//__STATUS__/$STATUS}"
+          BODY="${BODY//__MAJOR__/$MAJOR}"
           gh issue create --title "$TITLE" --body "$BODY"
