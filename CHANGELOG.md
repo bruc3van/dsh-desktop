@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [0.5.28] - 2026-10-31
+
+- 内置 DSH 升级至 `0.2.1-rc.5`，同步全部 DSH 依赖与锁文件，并重新核对 Windows 沙箱和内置 pnpm 兼容补丁（[#30](https://github.com/bruc3van/dsh-desktop/issues/30)）。
+
 ## [0.5.27] - 2026-10-26
 
 - 内置 DSH 升级至 `0.2.1-rc.3`，同步全部 DSH 依赖与锁文件，并重新核对 Windows 沙箱和内置 pnpm 兼容补丁。
