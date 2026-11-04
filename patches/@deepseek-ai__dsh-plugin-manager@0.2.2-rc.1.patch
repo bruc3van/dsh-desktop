@@ -1,10 +1,9 @@
 diff --git a/lib/index.js b/lib/index.js
-index f010583bb639cdbaaeedce029b9df1d95ebe6331..e84a03e83292d0da85131075ddecce860256f8d2 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -9,7 +9,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
+@@ -13,7 +13,7 @@
  import { pluginEntryId, readPluginInventory } from "@deepseek-ai/dsh-host-plugin-inventory";
- import { OFFICIAL_ON_DEMAND_CATALOG, OPTIONAL_BUNDLES, PROFILE_COMPATIBILITY_FILENAME, ResolutionRestartRequired, bundlePatchPaths, composeEntries, evaluatePluginCompatibility, getDshRuntimeVersion, loadOptionalPatches, loadOverlayPatches, pluginCompatibilityWarning, readBundlePatches, readPluginMeta, readProfileCompatibility, readProfileManifest, readProfilePatches, readProfileVersionExemptions, resolveBundleDir, resolveProfileDir, setProfileVersionExemption } from "@deepseek-ai/dsh-app-boot";
+ import { OFFICIAL_ON_DEMAND_CATALOG, OPTIONAL_BUNDLES, PROTECTED_PLUGINS } from "@deepseek-ai/dsh-official-bundles";
  import { once } from "node:events";
 -import { execa } from "execa";
 +import { execa } from "./types/desktop-pnpm.js";
@@ -13,7 +12,6 @@ index f010583bb639cdbaaeedce029b9df1d95ebe6331..e84a03e83292d0da85131075ddecce86
  import { isAlias, isMap, isNode, isScalar, isSeq, parseDocument, visit } from "yaml";
 diff --git a/lib/types/desktop-pnpm.js b/lib/types/desktop-pnpm.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..b26112cef958a3cb1e6377234b9b1c05752e1be0
 --- /dev/null
 +++ b/lib/types/desktop-pnpm.js
 @@ -0,0 +1,15 @@
@@ -33,15 +31,14 @@ index 0000000000000000000000000000000000000000..b26112cef958a3cb1e6377234b9b1c05
 +  return originalExeca(command, args, options);
 +}
 diff --git a/lib/types/operations.js b/lib/types/operations.js
-index 8ce0ed23cb5c59433c4c92384a7ee4009b6a3048..e017bb2e76bf96d1cd8b71cae0b1bee82450f675 100644
 --- a/lib/types/operations.js
 +++ b/lib/types/operations.js
-@@ -55,7 +55,7 @@ import { once } from 'node:events';
+@@ -55,7 +55,7 @@
  import { existsSync, readFileSync } from 'node:fs';
  import { mkdir, mkdtemp, open, rm } from 'node:fs/promises';
  import { join, resolve } from 'node:path';
 -import { execa } from 'execa';
 +import { execa } from './desktop-pnpm.js';
  import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write';
- import { DEFAULT_PROFILE_BUNDLES, bundlePatchPaths, initProfile, PROFILE_TEMPLATES, readProfileManifest, resolveBundleDir, resolveProfileDir, loadOverlayPatches, composeEntries, readProfileVersionExemptions, evaluatePluginCompatibility, pluginCompatibilityWarning, } from '@deepseek-ai/dsh-app-boot';
- import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess';
+ import { assertBundlePlatform, UnsupportedBundlePlatformError, bundlePatchPaths, initProfile, readProfileManifest, resolveBundleDir, resolveProfileDir, loadOverlayPatches, composeEntries, readProfileVersionExemptions, evaluatePluginCompatibility, pluginCompatibilityWarning, } from '@deepseek-ai/dsh-app-boot';
+ import { PROFILE_TEMPLATES, DEFAULT_PROFILE_BUNDLES } from '@deepseek-ai/dsh-official-bundles';

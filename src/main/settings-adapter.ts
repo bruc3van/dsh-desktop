@@ -24,6 +24,10 @@ export function findSettingsDialog(): Element | null {
 }
 
 export function findOptions(dialog: Element): Element | null {
+  // 0.2.2 places the options directly in the settings panel's grid.
+  if (dialog.getAttribute('data-shortcut-modal') === 'settings') {
+    return [...dialog.children].find(c => String(c.className ?? '').includes('options')) ?? null
+  }
   const content = [...dialog.children].find(c => String(c.className ?? '').includes('content'))
   if (content === undefined) return null
   return [...content.children].find(c => String(c.className ?? '').includes('options')) ?? null

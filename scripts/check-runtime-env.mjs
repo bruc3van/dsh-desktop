@@ -225,6 +225,19 @@ const AUDITED_INDIRECT = new Map([
   ['@deepseek-ai/dsh-ptc-runtime-node/lib/index.js', [
     { label: 'PTC executable default for subprocess', context: 'kind: "pkg" in process ? "embedded" : "node-script",\n\t\texecutable: process.execPath', expected: 1 },
   ]],
+  // LiveShare passes both commands to TunnelWorker, which uses patched spawn().
+  ['@deepseek-ai/dsh-experimental-liveshare/lib/index.js', [
+    {
+      label: 'source LiveShare gateway worker',
+      context: 'if (fileURLToPath(moduleUrl).endsWith(".ts")) return {\n\t\texecutable: process.execPath,',
+      expected: 1,
+    },
+    {
+      label: 'built LiveShare gateway worker',
+      context: 'return {\n\t\texecutable: process.execPath,\n\t\targs: [fileURLToPath(new URL("./owner-gateway/cli.js", moduleUrl))]',
+      expected: 1,
+    },
+  ]],
   // This fallback is descriptive skill metadata, guarded by an explicit
   // Electron/SEA rejection unless the application supplies standalone Node.
   ['@deepseek-ai/dsh-skill-office/lib/index.js', [

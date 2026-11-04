@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.5.29] - 2026-11-05
+
+- 内置 DSH 升级至 `0.2.2-rc.1`，同步 Cordis、全部 DSH 依赖与锁文件，并迁移 Electron／Windows 沙箱和内置 pnpm 兼容补丁。
+- 内置安全市场升级至 `safer-dsh-market@0.10.2`，适配上游 profile 模板导出的新位置，保留旧运行时接入支持。
+- 适配官方 Web UI 新版设置弹窗布局，恢复“桌面设置”标签；更新首次启动账户登录／API Key 流程的界面检查。
+
 ## [0.5.28] - 2026-10-31
 
 - 内置 DSH 升级至 `0.2.1-rc.5`，同步全部 DSH 依赖与锁文件，并重新核对 Windows 沙箱和内置 pnpm 兼容补丁（[#30](https://github.com/bruc3van/dsh-desktop/issues/30)）。

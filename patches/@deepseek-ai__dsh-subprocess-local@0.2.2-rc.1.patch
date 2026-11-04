@@ -1,8 +1,7 @@
 diff --git a/lib/runner-launch-B2zsQ1Dz.js b/lib/runner-launch-B2zsQ1Dz.js
-index 538e41477639a4bebaf1137eed7b3cdd97201fd0..7df641bde44cea1919206bf0b04c9df93c9f09c9 100644
 --- a/lib/runner-launch-B2zsQ1Dz.js
 +++ b/lib/runner-launch-B2zsQ1Dz.js
-@@ -1519,6 +1519,11 @@ function targetEnvironment(spec) {
+@@ -1519,6 +1519,11 @@
  	});
  	validateNoNullByte("options.cwd", spec.cwd);
  	const env = Object.fromEntries(Object.entries(childEnv(spec.env)).filter((entry) => entry[1] !== void 0));

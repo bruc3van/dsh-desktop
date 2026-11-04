@@ -68,9 +68,14 @@ export async function prepareBundledMarket(entry: string, request: MarketBootReq
       loadProfileDirectory(bin: string, dir: string, anchor: string): unknown
       healProfilesModuleFallback?(options: { installAnchor: string; profile: unknown; home: string }): Promise<void>
       createRuntimeResolution?(options: { installAnchor: string; profile: unknown; home: string }): Promise<unknown>
-      PROFILE_TEMPLATES: { web: { bundles: string[]; patchReload: string } }
+      PROFILE_TEMPLATES?: { web: { bundles: string[]; patchReload: string } }
     }
-    const template = appBoot.PROFILE_TEMPLATES.web
+    // 0.2.2 moved templates out of app-boot; older installed runtimes still
+    // expose them there. Resolve both from the selected CLI installation.
+    const templates = appBoot.PROFILE_TEMPLATES ?? (await import(pathToFileURL(
+      createRequire(anchor).resolve('@deepseek-ai/dsh-official-bundles'),
+    ).href) as { PROFILE_TEMPLATES: { web: { bundles: string[]; patchReload: string } } }).PROFILE_TEMPLATES
+    const template = templates.web
     // The selected version owns defaults and pnpm settings; never copy templates.
     appBoot.initProfile(join(home, 'profiles', 'web'), template.bundles, template.patchReload)
     // Heal an existing user installation before checking a reversible takeover.

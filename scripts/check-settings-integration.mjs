@@ -87,8 +87,8 @@ try {
   await waitStatus('absent')
   assert.equal(warnings.length, 0, 'closed settings must not produce compatibility warnings')
 
-  const openDialog = async (english = false) => {
-    await page.evaluate(english => {
+  const openDialog = async (english = false, grid = false) => {
+    await page.evaluate(({ english, grid }) => {
       document.querySelector('[role=dialog]')?.remove()
       const dialog = document.createElement('section')
       dialog.setAttribute('role', 'dialog')
@@ -96,8 +96,12 @@ try {
         + '<div class="content"><nav class="navList"><button class="active_test">'
         + (english ? 'General' : '通用设置') + '</button><button>Models</button></nav>'
         + '<div class="options"><div id="official-panel" style="display:flex">Official settings</div></div></div>'
+      if (grid) {
+        dialog.setAttribute('data-shortcut-modal', 'settings')
+        dialog.querySelector('.content').replaceWith(...dialog.querySelector('.content').children)
+      }
       document.body.append(dialog)
-    }, english)
+    }, { english, grid })
     await page.waitForSelector('#dsh-desktop-tab')
     await waitStatus('mounted')
     assert.equal(await page.locator('#dsh-desktop-tab').count(), 1)
@@ -251,6 +255,21 @@ try {
   await waitStatus('unsupported', 'missing-general-tab')
   await page.evaluate(() => document.querySelector('[role=dialog]').remove())
   await waitStatus('absent')
+  await openDialog(true, true)
+  await page.locator('#dsh-desktop-tab').click()
+  await page.waitForSelector('#dsh-desktop-panel')
+  assert.equal(await page.locator('#official-panel').evaluate(el => el.style.display), 'none')
+  await page.locator('.navList button').first().click()
+  await page.waitForSelector('#dsh-desktop-panel', { state: 'detached' })
+  assert.equal(await page.locator('#official-panel').evaluate(el => el.style.display), 'flex')
+  await page.evaluate(() => {
+    const options = document.querySelector('.options')
+    const wrapper = document.createElement('div')
+    options.replaceWith(wrapper)
+    wrapper.append(options)
+  })
+  await waitStatus('unsupported', 'missing-content')
+  console.log('✓ 0.2.2 grid settings mounts and restores official panels; unknown content wrappers are rejected')
   await openDialog()
   assert.equal(warnings.filter(text => text.includes('missing-content')).length, 1)
   assert.equal(warnings.filter(text => text.includes('missing-navigation')).length, 1)

@@ -74,7 +74,7 @@ await window.waitForTimeout(1500)
 let keyPromptReached = false
 for (let step = 0; step < 8; step += 1) {
   const dialog = window.locator('[role="dialog"]:visible').last()
-  if (!await dialog.isVisible().catch(() => false)) break
+  await dialog.waitFor({ state: 'visible', timeout: 30_000 })
   const keyInput = dialog.locator('input[type="password"]')
   if (await keyInput.count() > 0) {
     keyPromptReached = true
@@ -82,6 +82,13 @@ for (let step = 0; step < 8; step += 1) {
     const later = dialog.getByRole('button', { name: /稍后配置|Configure later/i })
     if (await later.count() > 0) await later.click()
     break
+  }
+  // 0.2.2 offers account sign-in before opening the API-key editor.
+  const apiKey = dialog.getByRole('button', { name: /API Key/i })
+  if (await apiKey.count() > 0) {
+    await apiKey.click()
+    await window.waitForTimeout(500)
+    continue
   }
   const next = dialog.getByRole('button', { name: /继续|Continue/i })
   if (await next.count() === 0) break
