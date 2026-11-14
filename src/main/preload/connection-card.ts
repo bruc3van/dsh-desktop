@@ -1,5 +1,4 @@
 import { choiceControlsCss } from '../choice-controls.ts'
-import { installRestartAction } from '../restart-action.ts'
 import { installRuntimeSelection } from '../runtime-selection.ts'
 import { connection, type ConnectionStatus } from './bridge.ts'
 import { releaseNotesCss } from '../release-notes.ts'
@@ -33,23 +32,10 @@ export function injectEnhance(panel: Element): void {
       '#' + ENHANCE_ID + ' .dsh-enhance-switch{background:var(--dsw-alias-label-primary,#0F1115);border-color:var(--dsw-alias-label-primary,#0F1115);color:var(--dsw-alias-bg-layer-1,#fff)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-switch:hover{opacity:.88;background:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-note{margin:10px 0 0;font-size:13px;color:var(--dsw-alias-label-secondary,#6E7480)}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-marketBlock{margin:16px 0 0;padding:16px 0 0;'
-        + 'border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-marketRow{justify-content:space-between;gap:12px}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-marketLabel{font-size:14px;font-weight:500;color:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-dataBlock{margin:16px 0 0;padding:16px 0 0;'
         + 'border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-dataModes{flex-wrap:wrap;margin-top:8px}',
       '#' + ENHANCE_ID + ' .dsh-enhance-dataPath{margin:8px 0 0;font-size:12px;color:var(--dsw-alias-label-tertiary,#8A9099);overflow-wrap:anywhere;word-break:break-word}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-toggle{position:relative;flex-shrink:0;width:40px;height:22px;padding:0;'
-        + 'border:none;border-radius:999px;background:var(--dsw-alias-border-l2,#D8D8D4);cursor:pointer;'
-        + 'transition:background .15s ease,opacity .15s ease}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-toggle[aria-checked="true"]{background:var(--dsw-alias-label-primary,#0F1115)}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-toggle:disabled{cursor:default;opacity:.55}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-toggle-thumb{position:absolute;top:2px;left:2px;width:18px;height:18px;'
-        + 'border-radius:50%;background:var(--dsw-alias-bg-layer-1,#fff);pointer-events:none;'
-        + 'transition:transform .15s ease}',
-      '#' + ENHANCE_ID + ' .dsh-enhance-toggle[aria-checked="true"] .dsh-enhance-toggle-thumb{transform:translateX(18px)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-modes{flex-wrap:wrap;margin:0 0 4px}',
       '#' + ENHANCE_ID + ' .dsh-enhance-smart[hidden],#' + ENHANCE_ID + ' .dsh-enhance-custom[hidden],'
         + '#' + ENHANCE_ID + ' #dsh-enhance-port-block[hidden]{display:none}',
@@ -135,15 +121,6 @@ export function injectEnhance(panel: Element): void {
     + '<p class="dsh-enhance-note">直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。</p>'
     + '</div>'
     + '<p class="dsh-enhance-note" id="dsh-enhance-note"></p>'
-    + '<div class="dsh-enhance-marketBlock">'
-    + '<div class="dsh-enhance-row dsh-enhance-marketRow">'
-    + '<span class="dsh-enhance-marketLabel" id="dsh-enhance-marketLabel">安全市场</span>'
-    + '<button class="dsh-enhance-toggle" id="dsh-enhance-market" type="button" role="switch" aria-checked="false" aria-labelledby="dsh-enhance-marketLabel">'
-    + '<span class="dsh-enhance-toggle-thumb"></span></button>'
-    + '</div>'
-    + '<p class="dsh-enhance-note" id="dsh-enhance-marketNote" role="status" aria-live="polite"></p>'
-    + '<button class="dsh-enhance-button dsh-enhance-switch" style="margin-top:12px" id="dsh-enhance-restart" type="button" hidden>立即重启</button>'
-    + '</div>'
     + '<div class="dsh-enhance-dataBlock">'
     + '<div class="dsh-enhance-title">数据环境</div>'
     + '<div class="dsh-enhance-row dsh-enhance-dataModes" role="radiogroup" aria-label="DSH 数据环境">'
@@ -309,53 +286,6 @@ export function injectEnhance(panel: Element): void {
         : ('保存失败：' + (result.error ?? '未知错误'))
     } catch (error) {
       noteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
-    }
-  })
-  const marketEl = block.querySelector('#dsh-enhance-market') as HTMLButtonElement
-  const marketNoteEl = block.querySelector('#dsh-enhance-marketNote') as HTMLElement
-  const restartEl = block.querySelector('#dsh-enhance-restart') as HTMLButtonElement
-  installRestartAction({
-    button: restartEl,
-    chinese: true,
-    request: () => connection.restart(),
-    setBusy: busy => { marketEl.disabled = busy },
-    showError: message => { marketNoteEl.textContent = message },
-  })
-  const paintMarket = (enabled: boolean): void => {
-    marketEl.setAttribute('aria-checked', enabled ? 'true' : 'false')
-  }
-  void connection.getMarket().then((state) => { paintMarket(state.enabled) }, () => {
-    // The row is an enhancement; a bridge that will not answer just leaves it
-    // out rather than putting a switch nobody can trust in front of anyone.
-    ;(block.querySelector('.dsh-enhance-marketBlock') as HTMLElement | null)?.remove()
-  })
-  marketEl.addEventListener('click', async () => {
-    const wanted = marketEl.getAttribute('aria-checked') !== 'true'
-    marketEl.disabled = true
-    restartEl.disabled = true
-    try {
-      const result = await connection.setMarket(wanted)
-      paintMarket(result.enabled)
-      if (result.enabled !== wanted) {
-        marketNoteEl.textContent = '已取消更改。'
-      } else {
-        marketNoteEl.textContent = (result.enabled ? '已开启。' : '已关闭。')
-          + '下次由客户端启动本地服务时生效。'
-        restartEl.hidden = true
-        restartEl.textContent = '立即重启'
-        // Read fresh ownership after saving; an unknown status must not promise application.
-        const status = await connection.getStatus().catch(() => undefined)
-        if (status?.marketRestartAvailable === true) {
-          marketNoteEl.textContent += '可立即重启，尝试应用更改。'
-          restartEl.hidden = false
-        }
-      }
-    } catch (error) {
-      paintMarket(!wanted)
-      marketNoteEl.textContent = '保存失败：' + (error instanceof Error ? error.message : String(error))
-    } finally {
-      marketEl.disabled = false
-      restartEl.disabled = false
     }
   })
   const runtimeEditor = installRuntimeSelection({

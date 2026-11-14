@@ -196,13 +196,11 @@ for (const [key, value] of Object.entries(process.env)) {
   if (upper === 'PATH' || upper === 'ELECTRON_RUN_AS_NODE' || upper.startsWith('DSH_DESKTOP_')) continue
   childEnv[key] = value
 }
-// Start with no profile: the managed launcher must initialize and seat the
-// market before DSH composes its first plugin tree.
+// Start with no profile: the managed launcher must initialize the profile and
+// offer the preset index before DSH composes its first plugin tree.
 const resources = packagedResourcesDir(executable)
-const packagedMarket = join(resources, 'bundled-plugins', 'safer-dsh-market')
-if (!existsSync(join(packagedMarket, 'package.json'))) throw new Error('packaged market payload missing')
-if (existsSync(join(resources, 'dsh-runtime', 'node_modules', 'safer-dsh-market'))) {
-  throw new Error('market payload must not be visible from the DSH installation anchor')
+if (existsSync(join(resources, 'bundled-plugins'))) {
+  throw new Error('packaged app must not ship a bundled plugin payload')
 }
 // This is the one caller that runs a PACKAGED build, where every DSH_* override
 // is ignored by design — the whole point of that gate is that a stray variable
@@ -355,38 +353,30 @@ try {
       && typeof descriptor?.hasDocument === 'boolean'
       && Array.isArray(descriptor?.namespaces)
   if (!response.ok || body?.result?.ok !== true || !valid) throw new Error('packaged Web UI probe failed')
-  // A healthy settings endpoint does not prove the bundled market loaded:
-  // its guarded entry deliberately lets the Web UI survive an incompatible API.
+  // A healthy settings endpoint does not prove the preset subscription landed:
+  // ask the official market service which index sources it serves.
   if (cookie === undefined) throw new Error('bundled runtime must support browser-session authentication')
-  for (const method of ['describe', 'getSettings', 'listInstalled']) {
-    const route = 'saferMarket/' + method
-    const request = () => fetch(url + '/api/' + route, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', cookie: cookie.header },
-      body: JSON.stringify({ type: 'client-request', rpcId: 'market-smoke-' + method,
-        method: route, payload: { args: {} } }),
-      signal: AbortSignal.timeout(10_000),
-    })
-    // The market's guarded body imports asynchronously during profile startup.
-    let marketResponse = await request()
-    const deadline = Date.now() + 30_000
-    while (marketResponse.status === 404 && Date.now() < deadline) {
-      await marketResponse.text()
-      await new Promise(resolveWait => setTimeout(resolveWait, 500))
-      marketResponse = await request()
-    }
-    const marketText = await marketResponse.text()
-    if (!marketResponse.ok) throw new Error('packaged safer-dsh-market ' + method + ' HTTP '
-      + marketResponse.status + ': ' + marketText)
-    const marketBody = JSON.parse(marketText)
-    if (!marketResponse.ok || marketBody?.result?.ok !== true) {
-      throw new Error('packaged safer-dsh-market ' + method + ' failed: ' + JSON.stringify(marketBody))
-    }
-    if (method === 'describe' && marketBody.result.value?.version !== JSON.parse(
-      await readFile(join(packagedMarket, 'package.json'), 'utf8'),
-    ).version) throw new Error('packaged market version differs from the running service')
+  const listIndexes = () => fetch(url + '/api/pluginMarket/listIndexes', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: cookie.header },
+    body: JSON.stringify({ type: 'client-request', rpcId: 'preset-smoke', method: 'pluginMarket/listIndexes', payload: { args: {} } }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  // The market service mounts asynchronously during profile startup.
+  let marketResponse = await listIndexes()
+  const marketDeadline = Date.now() + 30_000
+  while (marketResponse.status === 404 && Date.now() < marketDeadline) {
+    await marketResponse.text()
+    await new Promise(resolveWait => setTimeout(resolveWait, 500))
+    marketResponse = await listIndexes()
   }
-  console.log('✓ bundled safer-dsh-market describe / settings / installed APIs loaded on the new runtime')
+  const marketText = await marketResponse.text()
+  const marketBody = marketResponse.ok ? JSON.parse(marketText) : undefined
+  if (marketBody?.result?.ok !== true
+    || !marketBody.result.value?.some?.(source => source?.url === 'https://bruc3van.com/dsh-plugins/index.json')) {
+    throw new Error('packaged runtime does not serve the preset index: HTTP ' + marketResponse.status + ' ' + marketText)
+  }
+  console.log('✓ official Discover market serves the preset index on a first launch')
   console.log('✓ packaged app selected its bundled @deepseek-ai/dsh runtime')
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
   console.log('✓ packaged resources include dsh-cli.mjs')

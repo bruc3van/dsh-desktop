@@ -10,7 +10,6 @@ interface Options {
   bridgeDenied: () => Error
   getStatusJson: (includeLocalDetail?: boolean) => Record<string, unknown>
   loadSettings: () => ClientSettings
-  setBundledMarketEnabled: (enabled: unknown, remoteCaller: boolean) => Promise<{ enabled: boolean }>
   localeChinese: () => boolean
   confirmSensitiveAction: (message: string, detail: string) => Promise<boolean>
   currentTarget: () => string | undefined
@@ -32,7 +31,7 @@ interface Options {
 }
 
 export function createDesktopIpc(options: Options) {
-  const { bridgeCaller, bridgeDenied, getStatusJson, loadSettings, setBundledMarketEnabled, localeChinese, confirmSensitiveAction, currentTarget, requestSmartRuntimesSave, requestLocalWebPortSave, selectedDshDataMode, requestDshDataModeSave, probeDefaultWebUi, requestServerUrlSave, switchConnectionMode, openSettingsWindow, localDocumentCaller, retryConnection, useSmartFromLocalDocument, updateStateForCaller, installDesktopUpdate, scheduleQuitAfterWindowsInstall } = options
+  const { bridgeCaller, bridgeDenied, getStatusJson, localeChinese, confirmSensitiveAction, currentTarget, requestSmartRuntimesSave, requestLocalWebPortSave, selectedDshDataMode, requestDshDataModeSave, probeDefaultWebUi, requestServerUrlSave, switchConnectionMode, openSettingsWindow, localDocumentCaller, retryConnection, useSmartFromLocalDocument, updateStateForCaller, installDesktopUpdate, scheduleQuitAfterWindowsInstall } = options
 
 
   function registerDesktopIpc(): void {
@@ -53,19 +52,6 @@ export function createDesktopIpc(options: Options) {
       const caller = bridgeCaller(event)
       if (!caller.trusted) throw bridgeDenied()
       return getStatusJson(!caller.remote)
-    })
-    // The marketplace opt-out. Read and write only: taking the seat back is
-    // the client's own job on the next spawn, and doing it here would fight
-    // whatever the running child already loaded.
-    ipcMain.handle('desktop:market:status', (event) => {
-      const caller = bridgeCaller(event)
-      if (!caller.trusted) throw bridgeDenied()
-      return { enabled: loadSettings().bundledMarketDisabled !== true }
-    })
-    ipcMain.handle('desktop:market:set', async (event, enabled: unknown) => {
-      const caller = bridgeCaller(event)
-      if (!caller.trusted) throw bridgeDenied()
-      return setBundledMarketEnabled(enabled, caller.remote)
     })
     ipcMain.handle('desktop:connection:smartRuntimes', async (event, runtimes: unknown) => {
       const caller = bridgeCaller(event)

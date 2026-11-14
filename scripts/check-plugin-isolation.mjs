@@ -362,7 +362,7 @@ process.exit(1)
   console.log('✓ an npx-only plugin failure isolates before its diagnostic can be overwritten')
 
   // A raw external CLI has no verifiable package anchor. It must start once
-  // without injecting the market, despite advertising a high version.
+  // without the preset subscription editing its profile, despite advertising a high version.
   const seatHome = join(work, 'bundled-seat')
   const seatDshHome = join(seatHome, '.dsh')
   const seatClientHome = join(seatHome, '.bruc3van-dsh-desktop')
@@ -391,8 +391,8 @@ if (process.argv.includes('--version')) {
   process.exit(0)
 }
 const manifest = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'profiles', 'web', 'package.json'), 'utf8'))
-if (manifest.dsh.profile.bundles.includes('safer-dsh-market')) {
-  process.stderr.write('Error: plugin(s) failed to activate: safer-dsh-market\\n')
+if (manifest.dsh.profile.bundles.includes('@deepseek-ai/dsh-experimental-plugin-market-bundle')) {
+  process.stderr.write('Error: plugin(s) failed to activate: @deepseek-ai/dsh-experimental-plugin-market-bundle\\n')
   process.exit(1)
 }
 const server = createServer((req, res) => {
@@ -449,12 +449,12 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.clos
   const manifestAfterRetry = JSON.parse(readFileSync(seatManifest, 'utf8'))
   const installedStarts = seatLog.match(/dsh runtime: installed/g)?.length ?? 0
   if (seatSettings.dshDataMode === 'isolated'
-    || manifestAfterRetry.dsh.profile.bundles.includes('safer-dsh-market')
-    || installedStarts != 1
-    || seatLog.includes('retrying the same dsh runtime without the bundled plugin seat')) {
-    throw new Error('the unverified external runtime received a bundled market seat\n' + seatLog)
+    || manifestAfterRetry.dsh.profile.bundles.includes('@deepseek-ai/dsh-experimental-plugin-market-bundle')
+    || existsSync(join(seatDshHome, '.dsh-desktop-preset.json'))
+    || installedStarts != 1) {
+    throw new Error('the unverified external runtime had its profile edited\n' + seatLog)
   }
-  console.log('✓ an unverified external runtime starts once without injecting the bundled market')
+  console.log('✓ an unverified external runtime starts once without the preset subscription')
   await app.close()
   app = undefined
 } finally {

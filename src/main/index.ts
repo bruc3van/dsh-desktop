@@ -57,12 +57,11 @@ import { parseSettingsIntegrationStatus,type SettingsIntegrationStatus } from '.
 
 import { app,BrowserWindow,dialog,ipcMain,Menu,nativeImage,nativeTheme,powerMonitor,screen,session,shell,Tray } from 'electron'
 import { spawnSync } from 'node:child_process'
-import { existsSync,readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import {join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { abandonBundledPlugin,BUNDLED_PLUGIN_NAME,inspectBundledPlugin,inspectMarketInstallation,withdrawBundledPlugin } from './bundled-plugin.ts'
-import { MARKET_BOOT_VARIABLE, type MarketBootRequest } from './bundled-market-boot.ts'
+import { PRESET_SUBSCRIPTION_VARIABLE, type PresetSubscriptionRequest } from './preset-subscription-boot.ts'
 import {
 dshHomeForMode,
 migrateLegacyClientHome,
@@ -107,7 +106,7 @@ const connection = createConnectionController({
   runtime: () => webUi, catalog: runtimeCatalog, probe: webProbe, survivor: runtimeSurvivor,
   childHome, loadSettings, sharedDshDiscoveryEnabled, localeChinese,
   isQuitting: () => quitting, isInstallerHandoff,
-  plugins: { releaseBundledPluginSeat, reseatForAdoptedRuntime, onManagedReady, withdrawFailedSeat, schedulePluginCompatibilityFallback },
+  plugins: { onManagedReady, schedulePluginCompatibilityFallback },
   presentation: {
     windowRequested: () => mainWindowRequested, isLoading: () => loadingDocumentActive,
     launchWindow, loadMainWindow, showLoadingDocument, updateLoadingStatus, showConnectionError,
@@ -172,75 +171,17 @@ function runtimeSupportsNoOpen(version: string | undefined): boolean {
 }
 
 /**
- * Whether the client-owned seat is on the profile this boot (added now, or
- * already present). A runtime that then never reaches readiness has the
- * entry taken back before the retry — a plugin that throws while loading
- * fails the whole plugin tree, not just itself, including after upgrades
- * where the name is no longer a first write.
+ * Only a managed launcher may edit a profile, after occupancy checks. A raw
+ * executable has no verifiable package anchor, so it gets no offer.
  */
-let bundledPluginSeatInUse = false
-/**
- * Session-scoped: this process already withdrew a seat after a failed boot.
- * Retries must not put the name back, or a deterministic bad plugin burns
- * the whole launch budget without ever trying the one config that can work
- * (the bundled runtime with no plugin).
- */
-let bundledPluginSuppressed = false
-
-/** Offline payload outside the deployed DSH dependency tree; dev prepares it too. */
-function bundledPluginDir(): string | undefined {
-  try {
-    if (app.isPackaged) {
-      const dir = join(process.resourcesPath, 'bundled-plugins', BUNDLED_PLUGIN_NAME)
-      return existsSync(join(dir, 'package.json')) ? dir : undefined
-    }
-    const dir = join(APP_DIR, '.runtime', 'bundled-plugins', BUNDLED_PLUGIN_NAME)
-    return existsSync(join(dir, 'package.json')) ? dir : undefined
-  } catch {
-    return undefined
-  }
-}
-
-/** Only a managed launcher may prepare a profile, after occupancy checks. */
-function marketBootRequest(dsh: DshCommand): string | undefined {
-  bundledPluginSeatInUse = false
-  const mode = loadSettings().bundledMarketDisabled === true ? 'disabled'
-    : bundledPluginSuppressed ? 'suppressed' : 'offer'
-  if (dsh.entry === undefined) {
-    // A raw executable has no verifiable package anchor. This is a confirmed
-    // managed spawn, so withdraw our entry before it can boot an unknown ABI.
-    if (mode === 'disabled') abandonBundledPlugin(childHome(), bundledPluginDir())
-    else withdrawBundledPlugin(childHome())
-    return undefined
-  }
-  const request: MarketBootRequest = { home: childHome(), pluginDir: bundledPluginDir(), mode }
-  // A startup failure can withdraw only an actually listed, client-owned seat.
-  bundledPluginSeatInUse = mode === 'offer'
+function presetSubscriptionRequest(dsh: DshCommand): string | undefined {
+  if (dsh.entry === undefined) return undefined
+  const request: PresetSubscriptionRequest = { home: childHome() }
   return JSON.stringify(request)
 }
 
-/** Resolving or connecting to another server must not mutate a local profile. */
-function releaseBundledPluginSeat(_reason: string): void {
-  bundledPluginSeatInUse = false
-}
-
-function reseatForAdoptedRuntime(): void {
-  bundledPluginSeatInUse = false
-}
-
 function onManagedReady(_command: DshCommand | undefined): void {
-  bundledPluginSeatInUse = inspectBundledPlugin(childHome()).owned === true
   pluginRecovery.promptPluginCompatibilityFallback()
-}
-
-function withdrawFailedSeat(): boolean {
-  if (!bundledPluginSeatInUse) return false
-  bundledPluginSeatInUse = false
-  if (!withdrawBundledPlugin(childHome())) return false
-  bundledPluginSuppressed = true
-  console.warn('[desktop] dsh web did not start with ' + BUNDLED_PLUGIN_NAME
-    + ' seated; the seat was withdrawn and will not be offered again this session')
-  return true
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -285,7 +226,6 @@ const settingsServer = createSettingsServer({
   requestRestart,
   updater: () => desktopUpdater,
   getStatusJson,
-  setBundledMarketEnabled,
   probeDefaultWebUi,
   desktopClientVersion,
   updateStateForPage,
@@ -988,31 +928,6 @@ function trayImage(): Electron.NativeImage {
   return nativeImage.createFromPath(join(APP_DIR, 'resources', 'iconTrayWhite.png'))
 }
 
-/** Shared by the trusted native settings page and the origin-checked IPC bridge. */
-async function setBundledMarketEnabled(enabled: unknown, remoteCaller: boolean): Promise<{ enabled: boolean }> {
-  if (typeof enabled !== 'boolean') return { enabled: loadSettings().bundledMarketDisabled !== true }
-  // A state change asked for by a REMOTE origin gets the same native
-  // confirmation an address change does. Turning the seat off schedules removal of
-  // the client-owned copy at the next managed launch; a page served from
-  // somewhere else must not be able to do that quietly just because the
-  // window happens to be pointed at it.
-  if (remoteCaller) {
-    const confirmed = await confirmSensitiveAction(
-      enabled ? '接入内置安全市场？' : '移除内置安全市场？',
-      enabled
-        ? '当前页面来自远端来源，它请求让本客户端在下次启动时接入内置安全市场。'
-        : '当前页面来自远端来源，它请求停用客户端内置市场；下次由客户端启动运行时时会移除客户端拥有的副本，用户自行安装的市场不受影响。',
-    )
-    if (!confirmed) return { enabled: loadSettings().bundledMarketDisabled !== true }
-  }
-  patchSettings({ bundledMarketDisabled: !enabled })
-  if (!enabled) {
-    // Never swap/delete files underneath a live or adopted runtime.
-    bundledPluginSeatInUse = false
-  }
-  return { enabled }
-}
-
 const nativeMenuActions = {
   openSettings: openSettingsWindow,
   showWindow: showMainWindow,
@@ -1116,9 +1031,6 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     targetUrl: currentTarget() ?? '',
     desktopVersion: desktopClientVersion(),
     settingsIntegration: settingsIntegrationStatus,
-    bundledMarketEnabled: settings.bundledMarketDisabled !== true,
-    marketRestartAvailable: !usesConfiguredServer(settings) && runtimeSurvivor.canAttemptRuntimeRestart(),
-    bundledMarketInstallation: includeLocalDetail ? inspectMarketInstallation(childHome()) : undefined,
     dshVersion: bundledDshVersion(),
     // NOT gated by includeLocalDetail: in Connect mode the saved address IS
     // the caller's own origin (targetUrl is not redacted either), so hiding
@@ -1587,7 +1499,7 @@ function boot(): void {
     home: childHome,
     resolveCommand: resolveDshCommand,
     prepareCommand(dsh) {
-      const marketBoot = marketBootRequest(dsh)
+      const presetSubscription = presetSubscriptionRequest(dsh)
       const pnpm = bundledPnpmEntry()
       const version = dsh.version ?? (dsh.source === 'bundled' ? bundledDshVersion() ?? undefined : undefined)
       return {
@@ -1595,7 +1507,7 @@ function boot(): void {
         env: {
           ...process.env,
           DSH_HOME: childHome(),
-          [MARKET_BOOT_VARIABLE]: marketBoot,
+          [PRESET_SUBSCRIPTION_VARIABLE]: presetSubscription,
           PATH: childPath(),
           ...dsh.entry !== undefined && { DSH_DESKTOP_RUNTIME_ENTRY: dsh.entry },
           ...pnpm !== undefined && { [PNPM_ENTRY_VARIABLE]: pnpm },
@@ -1677,7 +1589,6 @@ const desktopIpc = createDesktopIpc({
   bridgeDenied,
   getStatusJson,
   loadSettings,
-  setBundledMarketEnabled,
   localeChinese,
   confirmSensitiveAction,
   currentTarget,

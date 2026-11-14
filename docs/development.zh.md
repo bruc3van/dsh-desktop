@@ -39,7 +39,7 @@ pnpm run build          # 构建 Electron 主进程与 preload
 pnpm run prepare:runtime # 准备内置 dsh 运行时闭包
 pnpm run check:picker   # 验证内置 Win32 目录选择器兼容补丁
 pnpm run check:runtime-env # 验证 Agent 执行环境不继承 Electron Node 模式变量
-pnpm run check:bundled-plugin # 验证内置市场接入/撤回/版本闸契约
+pnpm run check:preset-subscription # 验证预置插件订阅只添加一次、不覆盖用户配置
 pnpm run check:local-web-port # 验证本地服务端口与 --no-open spawn 参数
 pnpm run check:runtime-lock # 验证运行时锁定与更新安装时序
 pnpm run check:restart  # 验证托盘「重启」允许杀掉谁
@@ -55,21 +55,18 @@ pnpm run shot:readme    # 更新 README 使用的隐私安全截图
 pnpm run e2e            # 发送真实请求并验证流式回复
 ```
 
-除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:smart-runtimes`（智能连接来源开关）、`check:local-web-port`（本地服务端口）、`check:bundled-plugin`（内置市场接入 / 撤回）、`check:runtime-lock`（运行时锁定与更新时序）、`check:restart`（托盘「重启」允许杀掉谁）、`check:auto-fallback`（关掉复用或改用本机已安装 / npx / 内置会撞上占用时的拒绝，以及失联自动回落）与 `check:error-surface`（错误界面）。
+除上述命令外，`scripts/` 里还有一组针对连接与运行时行为的回归检查：`check:connection`（连接切换）、`check:installed-runtime`（已安装运行时）、`check:runtime-resolution`（运行时解析）、`check:smart-runtimes`（智能连接来源开关）、`check:local-web-port`（本地服务端口）、`check:preset-subscription`（预置插件订阅）、`check:runtime-lock`（运行时锁定与更新时序）、`check:restart`（托盘「重启」允许杀掉谁）、`check:auto-fallback`（关掉复用或改用本机已安装 / npx / 内置会撞上占用时的拒绝，以及失联自动回落）与 `check:error-surface`（错误界面）。
 
 `pnpm run e2e` 需要有效的 API Key（`export DEEPSEEK_API_KEY=…`，或在「设置 → 凭据」添加一次）。没有 Key 时它有意以退出码 2 失败：被跳过的真实往返不能显示为绿色。它还会在一次性临时 `DSH_HOME` 上运行，绝不会碰到你的真实会话。生产窗口直接加载官方 Web UI；仓库不维护第二套产品 renderer。`pnpm run check:updater` 用本地更新清单夹具验证检查、下载校验和忽略版本。
 
-### 内置安全市场（开发）
+### 预置插件订阅（开发）
 
-- 市场精确版本、lockfile 与发布年龄豁免同步更新。`prepare:runtime` 将载荷放到 `.runtime/bundled-plugins`，打包到 `resources/bundled-plugins`；DSH 安装目录不再能覆盖用户 profile 中的市场 patch。
-- 受管理的 launcher 校验所选安装中各个 peer 包的实际版本，使用所选版本的官方 `initProfile()`，然后登记市场，首次启动即可加载。缺少 optional peer 可跳过，已存在但不兼容则拒绝；无可验证 package anchor 的原始 CLI 不自动接入。
-- 客户端只升级 `<DSH_HOME>/profiles/web/node_modules` 内带所有权标记的副本，保留所有用户依赖、本地安装和锁文件。旧共享副本迁移到 web，其他 profile 仍引用时保留旧副本。
-- 复用运行实例、连接固定地址不改写 profile。关闭内置开关后在下次受管理的启动移除客户端自己的登记与副本，用户安装不受影响。卸载客户端后，市场已安装面板仍能根据所有权标记移除该副本。
-- `check:bundled-plugin` 覆盖所有权、迁移与禁用；`check:market-boot` 使用实际官方加载器和 launcher 验证冷启动、peer 范围、patch/模块一致性；`smoke:package` 从空 home 启动真实应用并调用市场 API。CI 与发布包含这些门禁。
-- 可识别的官方 PATH 包装脚本、符号链接与 npx 缓存入口使用用户 Node 进入 launcher；无法验证的原始 CLI 不注入市场。开发启动会先执行 `prepare:runtime`。
-- 有效用户安装可触发旧共享副本清理，但只移除带客户端标记且其他 profile 未引用的副本，或目标明确为当前载荷的链接。缺失用户安装、未知/断开的链接与其他 profile 的依赖均保留。
-- 官方 fallback 准备后，从市场真实目录检查 peer；用户依赖漂移写入启动日志，不改用户包或锁文件。客户端自有市场遇到漂移会撤销自己的登记，避免带不兼容依赖启动。
-- 市场目录与审查提示词由市场仓库维护；本仓库负责载荷发布和 profile 准备，见 `src/main/bundled-market-boot.ts`、`src/main/bundled-plugin.ts`。
+- 只有客户端受管理的 `dsh web` 启动才会带上订阅请求（`DSH_DESKTOP_PRESET_SUBSCRIPTION`），由 `runtime-launcher` 在 DSH 读取 profile 之前处理。普通 `dsh` / `plugin` / `pnpm` shim 调用、复用已运行的实例、连接固定地址、无法验证 package anchor 的原始 CLI，都不会改 profile。
+- launcher 先调用所选 DSH 版本自己的 `initProfile()`，因此首次启动也能带上订阅；再确认该安装提供 `@deepseek-ai/dsh-experimental-plugin-market-bundle`，没有则不改动、也不记账。
+- 改动只有两处：在 `dsh.profile.bundles` 追加该组合包；在 `cordis.patch.yml` 写入 `plugin-market` 行及其 `config.indexes`。patch 文件按文本编辑，不重新序列化：只处理官方模板 `[]` 和顶层块序列两种形态，保留注释、`!!js` 与换行风格，改完必须仍能解析。profile 里已有 `plugin-market` 行即视为用户配置，原样保留。
+- 每个 `DSH_HOME` 下的 `.dsh-desktop-preset.json` 记录已提供过的地址；记录存在就不再改动，用户删掉订阅或关掉市场后不会被加回。
+- 从源码运行时，运行时跑在你自己的 Node 上。Node 26.0 与 DSH 的 undici 分发器组合时，`fetch` 不会解压 Brotli 响应，「发现」页会显示「此索引的格式无效」；打包版用 Electron 内置的 Node 24，不受影响。README 截图请用 `DSH_DESKTOP_SHOT_APP=<打包后的可执行文件> pnpm run shot:readme` 从打包版截取。
+- `check:preset-subscription` 覆盖各种 profile 形态；`check:preset-runtime` 额外用已准备的运行时跑真实 `initProfile()` 与 `--dump-config`；`smoke:package` 从空 home 启动打包应用，并通过官方 `pluginMarket/listIndexes` 确认订阅生效。见 `src/main/preset-subscription.ts`、`src/main/preset-subscription-boot.ts`。
 
 ## Linux x64
 
@@ -180,7 +177,7 @@ git add scripts/mac-signing-cert.sha1
 | `runtime-survivor.ts`、`runtime-process.ts` | 遗留进程的身份核对、接管和停止，以及异常退出时的同步清理 |
 | `connection-controller.ts` | 连接代际、当前目标、每次启动的端口选择、主动替换、来源回退和重试预算 |
 
-`connection-controller` 对窗口层提供只读状态和显式操作。异步探测与就绪结果仍须匹配发起时的连接代际；退出状态由应用层提供。初次启动和三条重试路径（内置插件撤回、来源失败、崩溃重启）都会重新选择自动端口。窗口层通过 `readyForConnection()` 等待就绪，不直接发布子进程的目标地址。
+`connection-controller` 对窗口层提供只读状态和显式操作。异步探测与就绪结果仍须匹配发起时的连接代际；退出状态由应用层提供。初次启动和两条重试路径（来源失败、崩溃重启）都会重新选择自动端口。窗口层通过 `readyForConnection()` 等待就绪，不直接发布子进程的目标地址。
 
 `npm run check:connection-controller` 验证延迟端口探测、过期就绪、并发主动停止、三条重试路径和遗留进程优先级。`npm run check:runtime-survivor` 启动隔离的真实子进程，验证无归属记录和已复用 PID 不会被结束、可用遗留进程会被接管、重启会停止经核实归属的进程。两项检查均接入 CI。
 

@@ -15,7 +15,7 @@ let app
 try {
   const desktopHome = join(home, 'desktop')
   mkdirSync(desktopHome)
-  writeFileSync(join(desktopHome, 'settings.json'), JSON.stringify({ connectionMode: 'smart', smartRuntimes: ['bundled'], localWebPort: 0, bundledMarketDisabled: true }))
+  writeFileSync(join(desktopHome, 'settings.json'), JSON.stringify({ connectionMode: 'smart', smartRuntimes: ['bundled'], localWebPort: 0 }))
   mkdirSync(join(home, 'dsh'))
   writeFileSync(join(home, 'dsh/settings.yaml'), 'locale:\n  preference: ' + language + '\n')
   app = await electron.launch({ args: [join(root, '.build/main.mjs'), '--user-data-dir=' + join(home, 'chromium')],

@@ -7,7 +7,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertNoTsEntryPoints } from './ts-entry-guard.mjs'
@@ -88,8 +88,8 @@ async function prune(directory) {
 }
 
 const runtimeModules = join(destination, 'node_modules')
-// A successful peer resolution can still retain older DSH packages for the
-// bundled market. Reject that mixed graph before it reaches an installer.
+// Every official DSH package in the closure must come from the pinned
+// release. Reject a mixed graph before it reaches an installer.
 const runtimeManifest = JSON.parse(await readFile(join(APP_DIR, 'dsh-runtime', 'package.json'), 'utf8'))
 const expectedDshVersion = runtimeManifest.dependencies['@deepseek-ai/dsh']
 let dshPackages = 0
@@ -170,13 +170,6 @@ if (!existsSync(pnpmBin)) {
 // runtime; this invariant fails the release job with the offending package
 // name if a future dependency starts shipping one. See ts-entry-guard.mjs.
 await assertNoTsEntryPoints(runtimeModules)
-// The market must resolve only from the profile, for both its bundle patch
-// and Loader module. Leaving it beside DSH makes installation-first bundle
-// resolution disagree with a user's profile-local upgrade.
-const bundledPlugins = join(destination, 'bundled-plugins')
-await mkdir(bundledPlugins, { recursive: true })
-await rename(join(runtimeModules, 'safer-dsh-market'), join(bundledPlugins, 'safer-dsh-market'))
-console.log('[runtime] market payload isolated from DSH installation module lookup')
 console.log('[runtime] no manifest resolves to a pruned .ts entry point')
 
 /**

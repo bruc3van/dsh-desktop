@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, net } from 'electron'
-import { WEB_PROFILE } from './bundled-plugin.ts'
+import { WEB_PROFILE } from './web-profile.ts'
 import { webProbeOrigins } from './web-discovery.ts'
 import { createDshBrowserSessionCookie } from './dsh-browser-session.ts'
 import { selectAutomaticLocalWebPort } from './local-web-port.ts'

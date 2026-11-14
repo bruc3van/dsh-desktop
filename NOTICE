@@ -1,0 +1,13 @@
+DSH Desktop
+Copyright 2026 bruc3van
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+Releases up to and including 0.5.29 were published under the MIT License.
+
+DSH Desktop is an independent community project and is not affiliated with,
+endorsed by, or sponsored by DeepSeek. "DeepSeek" and "DeepSeek Harness" are
+trademarks of their respective owners; "DSH" is used only to describe
+compatibility.
+
+The bundled official @deepseek-ai/dsh runtime and other third-party
+dependencies are distributed under their own licenses.

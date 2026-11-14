@@ -199,7 +199,7 @@ const AUDITED_INDIRECT = new Map([
   // The built/source/pkg invocation arrays feed spawn() in subprocess-local's
   // Linux scope and Windows Job launchers. The actual Electron runner path is
   // exercised by check:win32-console; do not allow the whole chunk wholesale.
-  ['@deepseek-ai/dsh-subprocess-local/lib/runner-launch-B2zsQ1Dz.js', [
+  ['@deepseek-ai/dsh-subprocess-local/lib/runner-launch-CKTiL8M8.js', [
     {
       label: 'Electron target environment across Job IPC',
       context: 'if (process.versions.electron && process.platform === "win32" && spec.argv[0].toLowerCase() === process.execPath.toLowerCase()) {',
@@ -238,12 +238,20 @@ const AUDITED_INDIRECT = new Map([
       expected: 1,
     },
   ]],
-  // This fallback is descriptive skill metadata, guarded by an explicit
-  // Electron/SEA rejection unless the application supplies standalone Node.
-  ['@deepseek-ai/dsh-skill-office/lib/index.js', [
-    { label: 'standalone Office Node metadata', context: 'const node = config.node ?? process.execPath;', expected: 1 },
+  // A documented shell-environment VALUE, not a spawn: since 0.2.2-rc.3 every
+  // shell call receives DSH_NODE_EXECUTABLE. Upstream states that under Desktop
+  // it is the Electron binary and runs scripts only with ELECTRON_RUN_AS_NODE=1,
+  // the same contract the official desktop client gives its Agent.
+  ['@deepseek-ai/dsh-shell-env/lib/index.js', [
+    {
+      label: 'documented DSH_NODE_EXECUTABLE shell value',
+      context: 'if (sea === void 0 || !sea.isSea()) values[DSH_NODE_EXECUTABLE_KEY] = process.execPath;',
+      expected: 1,
+    },
   ]],
-  ['@deepseek-ai/dsh-tool-fs-search/lib/index.js', [
+  // Ripgrep resolution moved here from tool-fs-search in 0.2.2-rc.3. The
+  // executable path only derives a pkg sidecar name; nothing spawns it.
+  ['@deepseek-ai/dsh-util-ripgrep/lib/index.js', [
     {
       label: 'pkg ripgrep executable parsing',
       context: 'const executable = parse(process.execPath);',
@@ -305,7 +313,7 @@ function auditExecPathSource(relative, source) {
   return { offenders, sites }
 }
 
-const fsSearchAuditPath = '@deepseek-ai/dsh-tool-fs-search/lib/index.js'
+const fsSearchAuditPath = '@deepseek-ai/dsh-util-ripgrep/lib/index.js'
 const fsSearchExpectedContext = AUDITED_INDIRECT.get(fsSearchAuditPath)
   .map(rule => rule.context)
   .join('\n')

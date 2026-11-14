@@ -131,10 +131,10 @@ export function npxCacheRoot(
  * (`0.2.7`, `v0.2.7`), and a line prefixed by this CLI's own names
  * (`dsh 0.2.7`, `dsh/0.3.1 darwin-arm64`, `@deepseek-ai/dsh/0.1.0-rc.6`).
  * Everything else is noise, not a version: a build stamp or a Node banner
- * misread as a bogus HIGH version would sail through the bundled-plugin
- * version gate and seat the plugin into a runtime too old to load it, while
- * a bogus low or missing version merely sends the user back to the bundled
- * runtime — safe, but still wrong.
+ * misread as a bogus HIGH version would pass version gates (such as
+ * `--no-open` support) on a runtime too old to honour them, while a bogus low
+ * or missing version merely sends the user back to the bundled runtime —
+ * safe, but still wrong.
  */
 export function parseVersionOutput(stdout: string): string | undefined {
   const versionToken = '\\d+\\.\\d+(?:\\.\\d+)?(?:-[0-9A-Za-z][\\w.-]*)?(?:\\+[0-9A-Za-z][\\w.-]*)?'

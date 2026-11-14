@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog } from 'electron'
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { WEB_PROFILE } from './bundled-plugin.ts'
+import { WEB_PROFILE } from './web-profile.ts'
 import { type ClientSettings } from './client-settings.ts'
 import {
   isPluginCompatibilityFailure,

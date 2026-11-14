@@ -27,10 +27,7 @@ interface ConnectionOptions {
   isInstallerHandoff(): boolean
   localeChinese(): boolean
   plugins: {
-    releaseBundledPluginSeat(reason: string): void
-    reseatForAdoptedRuntime(): void
     onManagedReady(command: DshCommand | undefined): void
-    withdrawFailedSeat(): boolean
     schedulePluginCompatibilityFallback(code: number | null, signal: NodeJS.Signals | null): boolean
   }
   presentation: {
@@ -52,7 +49,7 @@ export function createConnectionController(options: ConnectionOptions) {
   const { detectInstalledDsh } = runtimeCatalog
   const { probeSmartTargets, inspectWebUi, prepareLocalWebPort } = options.probe
   const { adoptOrClearSurvivingRuntime } = options.survivor
-  const { releaseBundledPluginSeat, reseatForAdoptedRuntime, schedulePluginCompatibilityFallback } = plugins
+  const { schedulePluginCompatibilityFallback } = plugins
   const { launchWindow, loadMainWindow, showLoadingDocument, updateLoadingStatus, showConnectionError,
     showPinnedPortStartupFailure, showLocalRuntimeStartupFailure, rememberSmartBridgeHandoff } = presentation
   const enabledSmartRuntimes = (): SmartRuntimeId[] => normalizeSmartRuntimes(loadSettings().smartRuntimes)
@@ -189,9 +186,6 @@ export function createConnectionController(options: ConnectionOptions) {
       configuredTarget = url
       probeConnected = false
       childTarget = undefined
-      // This process will not spawn its bundled runtime; a leftover entry would
-      // hand the next `dsh web` (or a later local spawn) a second Service copy.
-      releaseBundledPluginSeat('connecting to a pinned address')
       launchWindow(generation, force)
     })()
   }
@@ -235,7 +229,6 @@ export function createConnectionController(options: ConnectionOptions) {
       configuredTarget = survivor.url
       probeConnected = true
       childTarget = undefined
-      reseatForAdoptedRuntime()
       launchWindow(generation, force)
       return true
     }
@@ -270,9 +263,6 @@ export function createConnectionController(options: ConnectionOptions) {
   function markLocalRuntimeReady(url: string): void {
     childTarget = url
     // The manager has persisted the credential-free origin before resolving readiness.
-    // A first-ever DSH_HOME has no web profile until the child creates it
-    // during boot, so the pre-spawn offer is a no-op. Take the seat now so
-    // the next start actually loads the plugin (this process will not).
     plugins.onManagedReady(options.runtime()?.lastCommand)
     if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
     launchBudgetResetTimer = setTimeout(() => {
@@ -312,7 +302,6 @@ export function createConnectionController(options: ConnectionOptions) {
         if (previous.kind === 'verified') {
           configuredTarget = previous.url
           probeConnected = true
-          reseatForAdoptedRuntime()
           launchWindow(generation, true)
           return
         }
@@ -407,9 +396,6 @@ export function createConnectionController(options: ConnectionOptions) {
   function resolveRuntime(force = false): void {
     const generation = ++connectionGeneration
     resetRuntimeRecoveryBudget()
-    // Clear only this connection's bookkeeping. A profile is prepared by the
-    // managed child after occupancy checks, never while adopting a server.
-    releaseBundledPluginSeat('resolving which runtime will serve')
     const startLocal = async (): Promise<void> => {
       if (!runtimeCatalog.detectionStarted) updateLoadingStatus('正在检查本机 dsh 运行时…', 'Looking for a dsh runtime on this machine…')
       await detectInstalledDsh()
@@ -478,7 +464,6 @@ export function createConnectionController(options: ConnectionOptions) {
         console.log('[desktop] reusing running dsh web: ' + probed.url)
         childTarget = undefined
         probedRecoveryReloads = 0
-        reseatForAdoptedRuntime()
         launchWindow(generation, force)
         return
       }
@@ -587,14 +572,6 @@ export function createConnectionController(options: ConnectionOptions) {
     childTarget = undefined
     if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
     launchBudgetResetTimer = undefined
-    // A runtime that never came up while this client's seat was on the
-    // profile is the one failure the client can undo by itself: a plugin
-    // that throws while loading fails the WHOLE plugin tree. The seat goes
-    // back before the retry, and this session will not reseat — otherwise
-    // spawn() puts the name back and a bad plugin (especially one shipped
-    // by a client upgrade, when the entry is already present) burns the
-    // launch budget without ever trying the runtime alone.
-    const bundledSeatWithdrawn = !wasReady && plugins.withdrawFailedSeat()
     // A user-installed runtime that never reached readiness is not a base
     // this session can build on, and the client does not control it. Skip
     // that source for the rest of the session and try the next enabled one
@@ -607,24 +584,6 @@ export function createConnectionController(options: ConnectionOptions) {
       showLocalRuntimeStartupFailure(code, signal)
       return
     }
-    // The client-owned plugin is the one boot failure we can remove
-      // without touching user state. Retry the SAME source once after a
-      // successful withdrawal: rejecting an installed-only source here
-      // would overwrite the actionable plugin diagnostic with "no enabled
-      // runtime" before the data-home fallback could inspect it.
-      if (!wasReady && bundledSeatWithdrawn) {
-        const generation = connectionGeneration
-        console.warn('[desktop] retrying the same dsh runtime without the bundled plugin seat')
-        if (presentation.windowRequested()) {
-          showLoadingDocument()
-          updateLoadingStatus(
-            '桌面端插件加载失败，已撤回并正在重试…',
-            'The desktop plugin failed to load; retrying without it…',
-          )
-        }
-        void respawnLocalRuntime(generation)
-        return
-      }
       // Loader import/apply errors are deterministic for this data home.
       // Preserve and act on that diagnosis before source rejection, command
       // resolution, or generic retries can replace it with a secondary

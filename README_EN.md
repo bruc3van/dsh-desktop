@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-**A third-party DSH desktop client that uses the official Web UI and adds background operation, notifications, runtime selection, and a bundled safe marketplace.**
+**A third-party DSH desktop client that uses the official Web UI and adds background operation, notifications, runtime selection, and a curated plugin index subscribed out of the box.**
 
 DSH Desktop is an independent Electron client for DeepSeek Harness (`dsh`). It loads the official Web UI. The desktop client manages runtime startup and connection, the tray, notifications, updates, and security controls.
 
@@ -20,7 +20,7 @@ Release installers include a pinned version of the official `@deepseek-ai/dsh` r
 - Includes the official runtime in the installer.
 - Can reuse a running dsh or use a PATH installation, npx cache, or the bundled runtime.
 - Can share `~/.dsh` with the CLI or use an isolated desktop data environment.
-- Includes a safe marketplace. Its plugin catalog stays offline until enabled by the user; installation uses the official plugin manager, with optional AI review afterwards.
+- On first launch, turns on the official Custom plugin market and subscribes it to a curated plugin index. This happens once; a removed subscription is not added back.
 - Verifies update packages with SHA-256 before installation.
 - Uses Electron sandboxing, context isolation, navigation restrictions, and permission controls.
 
@@ -98,7 +98,7 @@ In the shared data environment, if the client detects a running official instanc
 
 Open **Desktop settings** from the tray menu, the macOS/Linux application menu, or with `Cmd+,` on macOS and `Ctrl+,` on Windows/Linux.
 
-![Desktop settings: connection mode, runtime sources, Safe Market, and version information](docs/images/dsh-desktop-setting.png)
+![Desktop settings: connection mode, runtime sources, and version information](docs/images/dsh-desktop-setting.png)
 
 Connection status values:
 
@@ -128,13 +128,13 @@ When the new directory does not exist, the client migrates legacy `~/.dsh-deskto
 
 Security controls include:
 
-- Starts services through the official `dsh web` CLI and interacts through the Web UI's `/api` interfaces. Preparing the bundled market also calls runtime profile-loading modules and adjusts plugin configuration.
+- Starts services through the official `dsh web` CLI and interacts through the Web UI's `/api` interfaces. The one-time preset subscription calls the runtime's own profile initialisation and edits two settings in the web profile.
 - Enables Electron sandboxing and context isolation and disables Node integration.
 - Restricts navigation to the current Web UI origin and opens external links in the system browser.
 - Ignores environment overrides for update sources, data directories, and connection probes in packaged builds by default, unless unsafe debugging is explicitly enabled.
 - Validates update metadata and installer filenames and verifies installer SHA-256.
 - Allows capabilities such as file picking and voice input for client-managed local Web UIs; reused instances and Custom addresses receive more restricted permissions. Cross-origin frames, USB/HID/serial, geolocation, display capture, and storage escalation are denied by default.
-- Keeps Safe Market's plugin catalog offline until the user enables it.
+- The preset subscription only writes an index address. The plugin list is fetched only when you open the Discover page, and the client never installs a plugin for you.
 
 Windows installers support system notifications. Linux uses Chromium notifications. Current macOS packages are not fully signed, so notifications fall back to Dock badges, Dock attention, and in-app notices.
 
@@ -169,43 +169,27 @@ On Linux, updates download and verify the current package format (DEB or AppImag
 
 See [Desktop client architecture](docs/desktop-client-architecture.md) and the [development guide](docs/development.md) for implementation details.
 
-## Bundled Safe Market
+## Preset plugin subscription
 
-Bundled versions: DSH `0.2.2-rc.1` and `safer-dsh-market@0.10.2`. Client-owned copies of the old `dsh-desktop-safe-market` name migrate automatically; user installations are preserved. Re-enable the catalog after upgrading because the previous setting is not migrated. Screenshots below show an earlier version.
+Official DSH ships a Custom plugin market (the **Discover** tab on the Plugins page), but it is off by default and has no index sources. The first time the client starts a local runtime, it does two things for you:
 
-The [Safe Market](https://github.com/bruc3van/safer-dsh-market) ships offline with the installer. The desktop setting to load the bundled market at startup is on by default. The client prepares the plugin for client-started runtimes with compatible dependencies, without an online installation. Reusing a running local instance or connecting to a Custom address does not modify its plugin configuration.
+1. turns on the Custom plugin market;
+2. adds the index `https://bruc3van.com/dsh-plugins/index.json`.
 
-The **Enable Safe Market** control inside the market page governs network access to the plugin catalog. It is off by default and independent of the desktop startup setting. Enabling it saves that choice and caches the last successful catalog. Turning off the desktop startup setting removes the client-owned copy and registration on the next client-managed runtime launch. User installations that have not been transferred to client management are unaffected by this switch.
+You can then browse, filter, and install plugins under **Plugins** → **Discover**; installation is done by the official plugin manager.
 
-When starting a local runtime, the client can upgrade an older market enabled in the Web profile from a regular package installation or a GitHub release tag from the market's official repository. It replaces that version offline with the bundled copy, takes over management, and removes the old dependency pin and pnpm lockfile entry. Equal or newer versions, other custom sources (such as file/link/git), and unrecognized versions or lockfiles are preserved. Connecting to an existing service does not replace its market. A migrated market follows client updates and the desktop startup setting.
+![After the first launch, the Plugins page's Discover tab already lists the curated plugins](docs/images/dsh-desktop-discover.png)
 
-Dependency checks use the runtime selected for this launch. Stale automatic links to optional dependencies in a shared data directory do not block the market when the selected runtime does not provide those dependencies. Required dependencies and explicitly installed user dependencies still undergo compatibility checks.
+The index comes from [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin): repositories tagged `dsh-plugin` are collected daily, archived, disabled, and ineligible projects are excluded, and the top 1000 by stars are listed. **Being listed is not a security endorsement; review the source and permissions before installing.**
 
-The desktop startup setting controls the next runtime launch. The adjacent local installation and registration status does not prove the market is loaded in the current session. After the market uninstalls itself, its UI may remain for that session. With the startup setting enabled, the next client-started local service attempts to restore the bundled copy; with it disabled, no restoration is attempted. Any remaining user installation is reported rather than treated as a restored bundled copy.
+Rules:
 
-Open **Safe Market** from the start page to browse the plugin catalog in the right pane, filter by name or category, and view installed plugins.
+- **Added once.** Once per data environment (the shared `~/.dsh` and the desktop-only environment). If you remove the subscription or turn the Custom plugin market off, the client does not add it back.
+- **Your configuration wins.** If the profile already configures the Custom plugin market, the client changes nothing.
+- **Only for runtimes the client starts.** Reusing a running local instance or connecting to a Custom address leaves that service's configuration alone.
+- The edits are the bundle list in `~/.dsh/profiles/web/package.json` and one commented block appended to `cordis.patch.yml`; existing content and comments are kept as they are.
 
-![Opening the bundled Safe Market from the start page to browse plugins](docs/images/marketplace-start-view.png)
-
-![Safe Market](docs/images/marketplace.png)
-
-Catalog data comes from [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin):
-
-- Repositories tagged `dsh-plugin` are collected daily.
-- Archived, discontinued, and ineligible projects are excluded.
-- A maintained exclusion list is applied, and catalog data is validated before display.
-
-The marketplace installs selected plugins directly through the official plugin manager. AI review of the installed version is optional.
-
-AI review does not guarantee safety.
-
-**Catalog inclusion is not a security endorsement. Review the result before installation.**
-
-Installed plugins can be viewed, enabled, disabled, or removed. Installed but unloaded plugins are also listed.
-
-![Installed plugin management](docs/images/marketplace-installed.png)
-
-If the marketplace is incompatible with the active runtime, the client stops loading it without disabling other plugins. See the [Safe Market repository](https://github.com/bruc3van/safer-dsh-market) for configuration, protocol, and limitations.
+**Upgrading from an earlier version:** from 0.6.0 the installer no longer bundles safer-dsh-market. A copy that is already installed stays in your profile, but the client no longer updates it; uninstall it from the Plugins page if you do not need it. For features such as AI review after installation, install [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market) from npm yourself.
 
 ## FAQ
 
@@ -221,18 +205,18 @@ The browser workflow normally requires Node.js, a running `dsh web` terminal pro
 
 Update the official `dsh` on PATH or the npx-cached runtime and enable that source in Smart mode. You can also reuse an updated local instance or connect to a Web UI you manage through a Custom address. Smart mode follows source order; it does not compare every source and select the newest version. The bundled runtime is fixed at release time and is updated with the desktop client.
 
-**Q: Does Safe Market install plugins automatically?**
+**Q: Does the preset subscription install plugins automatically?**
 
-Installation is performed by the official plugin manager after the user chooses a plugin. AI review is optional and follows installation.
+No. The client only adds the index address. Whether and what to install is your choice on the Discover page, and installation is done by the official plugin manager.
 
 ## Related projects
 
-- [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin): catalog data for Safe Market. It collects plugin repositories daily and maintains exclusion records.
-- [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market): the Safe Market implementation bundled with this client.
+- [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin): source of the preset index. It collects plugin repositories daily and maintains exclusion records.
+- [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market): a standalone review-before-install market plugin you can install yourself.
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness): the upstream project for the official dsh and Web UI.
 
 ## License
 
-[MIT](LICENSE)
+[Apache-2.0](LICENSE)
 
-The MIT License covers only code and assets maintained in this repository. Official `@deepseek-ai/dsh` and other third-party dependencies use their own licenses. “DSH” identifies the compatible product and does not imply an official relationship.
+From 0.6.0 this repository is licensed under the Apache License 2.0; releases up to and including 0.5.29 remain under the MIT License. The license covers only code and assets maintained in this repository. Official `@deepseek-ai/dsh` and other third-party dependencies use their own licenses. “DSH” identifies the compatible product and does not imply an official relationship.

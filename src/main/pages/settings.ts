@@ -81,11 +81,6 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + 'body{--choice-text:#0f1115;--choice-muted:#6e7480;--choice-border:#d8d8d4;--choice-surface:#f5f6f7;--choice-inverse:#fff}'
     + '@media(prefers-color-scheme:dark){body{--choice-text:#f4f5f6;--choice-muted:#aeb3bb;--choice-border:#3a3d42;--choice-surface:#232529;--choice-inverse:#17181a}}'
     + choiceControlsCss('body', 'primary')
-    + '#market-toggle{position:relative;flex-shrink:0;width:40px;height:22px;padding:0;border:0;border-radius:999px;background:var(--choice-border)}'
-    + '#market-toggle[aria-checked="true"]{background:var(--choice-text)}'
-    + '#market-toggle::before{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--choice-inverse);transition:transform .15s ease;pointer-events:none}'
-    + '#market-toggle[aria-checked="true"]::before{transform:translateX(18px)}'
-    + '#market-toggle:focus-visible{outline:2px solid var(--choice-text);outline-offset:3px}'
     // Reduced motion
     + '@media(prefers-reduced-motion:reduce){*{transition:none!important}}'
     + '</style></head><body><div class="container">'
@@ -146,13 +141,6 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + '<p class="note" id="data-note" aria-live="polite">' + h('正在读取数据环境…', 'Reading data environment…') + '</p>'
     + '</div>'
     + '<hr class="divider">'
-    // The native settings window remains complete when official DOM integration is unavailable.
-    + '<div class="section"><div class="section-title"><span id="market-label">' + h('启动时接入内置安全市场', 'Load bundled marketplace on startup') + '</span>'
-    + '<div class="actions"><button id="market-toggle" type="button" role="switch" aria-checked="false" aria-labelledby="market-label" disabled>'
-    + '</button></div></div>'
-    + '<p class="status-text" id="market-status" aria-live="polite"></p>'
-    + '<p class="status-text" id="market-note" aria-live="polite"></p>'
-    + '<button id="market-restart" class="primary" type="button" hidden>' + h('立即重启', 'Restart now') + '</button></div><hr class="divider">'
     // Update section
     + '<div class="section">'
     + '<div class="section-title">' + h('应用更新', 'App updates')

@@ -37,7 +37,7 @@ pnpm run build          # build the Electron main process and preload
 pnpm run prepare:runtime # prepare the bundled dsh runtime closure
 pnpm run check:picker   # verify the bundled Win32 picker compatibility patch
 pnpm run check:runtime-env # verify the Agent environment does not inherit Electron's Node-mode variable
-pnpm run check:bundled-plugin # verify the market seat / withdraw / version-gate contract
+pnpm run check:preset-subscription # verify the preset subscription is offered once and never overrides the user
 pnpm run check:local-web-port # verify the local-bind port and --no-open spawn args
 pnpm run check:runtime-lock # verify the runtime lock and update-install ordering
 pnpm run check:restart  # verify who the tray Restart may stop
@@ -53,26 +53,18 @@ pnpm run shot:readme    # refresh the privacy-safe README screenshots
 pnpm run e2e            # send a real prompt and verify the streamed response
 ```
 
-In addition, `scripts/` contains a family of regression checks for connection and runtime behavior: `check:connection` (mode switching), `check:installed-runtime` (installed runtime), `check:runtime-resolution` (runtime resolution), `check:smart-runtimes` (Smart-mode source toggles), `check:local-web-port` (local-bind port), `check:bundled-plugin` (in-box market seat / withdraw), `check:runtime-lock` (runtime lock and update ordering), `check:restart` (who the tray Restart may stop), `check:auto-fallback` (occupancy refusal when reuse is turned off or managed sources would spawn beside a live instance, then loss-of-instance fallback), and `check:error-surface` (error UI).
+In addition, `scripts/` contains a family of regression checks for connection and runtime behavior: `check:connection` (mode switching), `check:installed-runtime` (installed runtime), `check:runtime-resolution` (runtime resolution), `check:smart-runtimes` (Smart-mode source toggles), `check:local-web-port` (local-bind port), `check:preset-subscription` (preset plugin subscription), `check:runtime-lock` (runtime lock and update ordering), `check:restart` (who the tray Restart may stop), `check:auto-fallback` (occupancy refusal when reuse is turned off or managed sources would spawn beside a live instance, then loss-of-instance fallback), and `check:error-surface` (error UI).
 
 `pnpm run e2e` needs a valid API key (export `DEEPSEEK_API_KEY=…`, or add one once via 设置 → 凭据). Without one it exits with code 2 on purpose: a skipped live round trip must not look green. It also runs against a throwaway `DSH_HOME`, so it never touches your real sessions. The production window loads the official Web UI; this repository does not maintain a second product renderer. `pnpm run check:updater` drives a local update-feed fixture through check, hash verification, and dismiss.
 
-### The bundled safe marketplace (development)
+### Preset plugin subscription (development)
 
-- Update the exact market version, lockfile and release-age exemption together. `prepare:runtime` places the payload in `.runtime/bundled-plugins`, packaged as `resources/bundled-plugins`, outside installation-first DSH lookup.
-- The managed launcher checks each installed peer package against its own range, calls that version's official `initProfile()`, then registers the market before the first profile load. Missing optional peers are allowed; incompatible present peers are rejected. Raw CLIs without a verifiable package anchor receive no injected market.
-- Only marked copies in `<DSH_HOME>/profiles/web/node_modules` are upgraded. All user dependencies, local installs and lockfiles remain untouched. Legacy shared copies migrate to web; copies referenced by other profiles remain.
-- Adopting a running server or connecting to a pinned address does not edit profiles. Disabling the client switch removes owned state on the next managed launch, preserving user installs. The market's installed panel can still remove its marked copy after the client is uninstalled.
-- `check:bundled-plugin` covers ownership/migration/disable; `check:market-boot` exercises the actual official loader and launcher, cold startup, peers and patch/module identity; `smoke:package` starts the packaged application from an empty home and calls market APIs. CI and release gates include these checks.
-- The market repository owns its catalog and review prompts. This repository owns distribution and profile preparation; see `src/main/bundled-market-boot.ts` and `src/main/bundled-plugin.ts`.
-
-### Legacy market migration and dependency diagnostics
-
-Recognized official PATH shims/symlinks and npx entries run the launcher on the user's Node. `pnpm run dev` prepares the separated runtime and market payload before starting Electron.
-
-A valid user installation allows cleanup of an unused shared copy marked as client-owned. Other profiles, incomplete user installations, foreign links and links with unknown targets are preserved. A legacy link can be removed when its target is the current payload; its target is never deleted.
-
-After official fallback preparation, peer checks start from the market's real directory. User dependency drift is reported in startup logs without changing user packages or lockfiles. Drift in a client-owned market withdraws only its registration.
+- Only a client-managed `dsh web` spawn carries the request (`DSH_DESKTOP_PRESET_SUBSCRIPTION`); `runtime-launcher` handles it before DSH reads the profile. Ordinary `dsh` / `plugin` / `pnpm` shim calls, adopted instances, pinned addresses, and raw CLIs without a verifiable package anchor never edit a profile.
+- The launcher first calls the selected DSH version's own `initProfile()`, so a first-ever launch already gets the subscription; it then checks that the installation provides `@deepseek-ai/dsh-experimental-plugin-market-bundle`, and makes no edit and no record when it does not.
+- There are exactly two edits: the bundle is appended to `dsh.profile.bundles`, and a `plugin-market` row with `config.indexes` is written to `cordis.patch.yml`. The patch layer is edited as text, never re-serialised: only the official `[]` template and a top-level block sequence are handled, comments, `!!js` and line endings are kept, and the result must still parse. An existing `plugin-market` row is the user's configuration and is left as is.
+- `.dsh-desktop-preset.json` in each `DSH_HOME` records offered addresses; once recorded, the client never edits again, so a removed subscription or a disabled market stays that way.
+- From source the runtime runs on your own Node. With Node 26.0 behind DSH's undici dispatcher, `fetch` leaves Brotli bodies undecoded and Discover reports the index as invalid; packaged builds run on Electron's Node 24 and are unaffected. Capture README images from a packaged build with `DSH_DESKTOP_SHOT_APP=<packaged executable> pnpm run shot:readme`.
+- `check:preset-subscription` covers the profile shapes; `check:preset-runtime` also runs the real `initProfile()` and `--dump-config` against the prepared runtime; `smoke:package` starts the packaged app from an empty home and confirms the subscription through the official `pluginMarket/listIndexes`. See `src/main/preset-subscription.ts` and `src/main/preset-subscription-boot.ts`.
 
 ## Linux x64
 
@@ -164,7 +156,7 @@ The entry point assembles services and retains startup, shutdown, and coordinati
 | `runtime-survivor.ts`, `runtime-process.ts` | Survivor identity, adoption and termination, plus synchronous emergency disposal |
 | `connection-controller.ts` | Connection intent generation, targets, per-spawn port selection, intentional replacement, fallback, and retry budget |
 
-The controller exposes read-only state and explicit operations to the window layer. Delayed probes and readiness results must still match the initiating connection generation; the application supplies its quit state. Initial starts and all three retry paths (bundled-plugin withdrawal, failed source, and crash restart) select an automatic port again. Windows await `readyForConnection()` instead of directly publishing child readiness URLs.
+The controller exposes read-only state and explicit operations to the window layer. Delayed probes and readiness results must still match the initiating connection generation; the application supplies its quit state. Initial starts and both retry paths (failed source and crash restart) select an automatic port again. Windows await `readyForConnection()` instead of directly publishing child readiness URLs.
 
 `npm run check:connection-controller` covers delayed port probes, stale readiness, overlapping intentional stops, the three retry paths, and survivor precedence. `npm run check:runtime-survivor` starts an isolated real child to verify that unowned/recycled processes survive, a serving leftover is adopted, and restart stops the verified owned process. Both run in CI.
 

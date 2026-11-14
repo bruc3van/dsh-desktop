@@ -21,16 +21,6 @@ export interface ClientSettings {
   /** Epoch ms of the last completed update check (auto-check throttle). */
   updateLastCheckedAt?: number
   /**
-   * The user asked this client to stop seating the bundled marketplace.
-   *
-   * Durable, and kept HERE rather than in the profile: opting out is a
-   * statement about this client, and the profile is the user's own file. It
-   * has to be durable at all because the seat is re-offered on every start —
-   * without a record, removing the market would simply undo itself the next
-   * time the app opened, which reads as "it will not go away".
-   */
-  bundledMarketDisabled?: boolean
-  /**
    * Which Smart-mode sources this client will try, in ladder order.
    * Missing means all four (legacy). An empty list is refused on save.
    */
@@ -129,9 +119,6 @@ export function createClientSettingsStore(home: string) {
     const next: ClientSettings = {}
     if (!skip.has('serverUrl') && merged.serverUrl !== undefined) next.serverUrl = merged.serverUrl
     if (!skip.has('connectionMode') && merged.connectionMode !== undefined) next.connectionMode = merged.connectionMode
-    if (!skip.has('bundledMarketDisabled') && merged.bundledMarketDisabled !== undefined) {
-      next.bundledMarketDisabled = merged.bundledMarketDisabled
-    }
     if (!skip.has('smartRuntimes')) {
       const parsed = validateSmartRuntimes(merged.smartRuntimes)
       if (parsed !== undefined) next.smartRuntimes = parsed

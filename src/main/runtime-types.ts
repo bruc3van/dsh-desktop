@@ -16,8 +16,7 @@ export interface DshCommand {
   source: 'override' | 'installed' | 'npx' | 'bundled' | 'checkout' | 'path'
   /**
    * The runtime's own dsh version, when this client could read one. It gates
-   * the bundled-plugin seat: the plugin is built against the runtime we ship,
-   * and an older one may not export what it imports.
+   * version-dependent spawn flags such as `--no-open`.
    */
   version?: string
 }

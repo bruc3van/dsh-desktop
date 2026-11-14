@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
-  "description": "让 Agent 安全常驻桌面的独立 DeepSeek Harness 客户端：官方 Web UI 原封不动，长任务常驻后台，内置插件市场与可选 AI 审查 / Independent desktop client that keeps dsh agents resident and secure: the official Web UI untouched, long tasks alive in the tray, a bundled plugin market with optional AI review",
-  "version": "0.5.29",
+  "description": "让 Agent 安全常驻桌面的独立 DeepSeek Harness 客户端：官方 Web UI 原封不动，长任务常驻后台，开箱即订阅精选插件 / Independent desktop client that keeps dsh agents resident and secure: the official Web UI untouched, long tasks alive in the tray, a curated plugin index subscribed out of the box",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "main": ".build/main.mjs",
@@ -12,7 +12,7 @@
     "type": "git",
     "url": "https://github.com/bruc3van/dsh-desktop.git"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
@@ -42,8 +42,8 @@
     "check:pnpm-engine": "node scripts/check-pnpm-engine.mjs",
     "check:pnpm-runtime": "node scripts/check-pnpm-runtime.mjs",
     "check:nsis-details": "node scripts/patch-nsis-install-details.mjs",
-    "pack": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:win32-console && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:runtime-selection && npm run check:local-web-port && npm run check:data-home && npm run check:plugin-isolation && npm run check:plugin-recovery && npm run check:window-state && npm run check:safety && npm run check:browser-admission && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:bundled-plugin && npm run check:market-boot && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --dir && npm run check:pnpm-runtime",
-    "dist": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:win32-console && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:runtime-selection && npm run check:local-web-port && npm run check:data-home && npm run check:plugin-isolation && npm run check:plugin-recovery && npm run check:window-state && npm run check:safety && npm run check:browser-admission && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:bundled-plugin && npm run check:market-boot && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --publish never && npm run check:pnpm-runtime",
+    "pack": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:win32-console && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:runtime-selection && npm run check:local-web-port && npm run check:data-home && npm run check:plugin-isolation && npm run check:plugin-recovery && npm run check:window-state && npm run check:safety && npm run check:browser-admission && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:preset-runtime && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --dir && npm run check:pnpm-runtime",
+    "dist": "npm run build && npm run prepare:runtime && npm run check:picker && npm run check:win32-console && npm run check:runtime-env && npm run check:runtime-spawn && npm run check:dsh-cli && npm run check:smart-runtimes && npm run check:runtime-selection && npm run check:local-web-port && npm run check:data-home && npm run check:plugin-isolation && npm run check:plugin-recovery && npm run check:window-state && npm run check:safety && npm run check:browser-admission && npm run check:dsh-browser-session && npm run check:auth-occupancy && npm run check:preset-runtime && npm run check:runtime-lock && npm run check:restart && npm run check:pnpm-engine && npm run check:nsis-details && electron-builder --publish never && npm run check:pnpm-runtime",
     "dev": "npm run build && npm run prepare:runtime && electron .",
     "start": "electron .",
     "shot": "node scripts/shot.mjs",
@@ -60,7 +60,8 @@
     "check:connection": "node scripts/check-connection-switch.mjs",
     "check:installed-runtime": "node scripts/check-installed-runtime.mjs",
     "check:runtime-resolution": "node scripts/check-runtime-resolution.mjs",
-    "check:bundled-plugin": "node scripts/check-bundled-plugin.mjs && node scripts/check-market-unicode.mjs",
+    "check:preset-subscription": "node scripts/check-preset-subscription.mjs",
+    "check:preset-runtime": "node scripts/check-preset-subscription.mjs --runtime",
     "check:auto-fallback": "node scripts/check-auto-fallback.mjs",
     "check:error-surface": "node scripts/check-error-surface.mjs",
     "check:mac-update": "node scripts/check-mac-update.mjs",
@@ -78,7 +79,6 @@
     "check:win32-console": "node scripts/check-win32-console.mjs",
     "check:safety": "node scripts/check-safety-regressions.mjs",
     "check:browser-admission": "node scripts/check-browser-admission.mjs",
-    "check:market-boot": "node scripts/check-bundled-market-boot.mjs",
     "check:lifecycle": "node scripts/check-lifecycle-races.cjs && node scripts/check-update-survivor.cjs && node scripts/check-quit-cancellation.cjs"
   },
   "devDependencies": {
