@@ -40,6 +40,8 @@ try {
     requestLocalWebPortSave: save('port'),
     requestDshDataModeSave: value => ({ saved: value === 'isolated' }),
     switchConnectionMode: async () => ({ switched: true }),
+    enterpriseSkills: async () => ({ ok: true, skills: [{ id: 'weekly', installed: true }] }),
+    setEnterpriseSkill: async (value) => { calls.push({ name: 'skill', value }); return value?.id === 'weekly' ? { saved: true, skills: [] } : { saved: false, error: 'invalid request' } },
   })
   await server.start()
   const request = (path, body, headers = {}) => fetch(server.url + path, {
@@ -113,6 +115,10 @@ try {
   assert.equal((await request('desktop/dsh-data-mode', { dshDataMode: 'isolated' })).status, 200)
   assert.deepEqual(await (await request('desktop/settings')).json(), { connectionMode: 'smart', localWebPort: 3080 })
   assert.equal((await request('desktop/market/enable', {})).status, 404, 'the bundled-market route is gone')
+  assert.deepEqual((await (await request('desktop/enterprise/skills')).json()).skills, [{ id: 'weekly', installed: true }])
+  assert.equal((await request('desktop/enterprise/skills', { skill: { id: 'weekly', installed: false } })).status, 200)
+  assert.deepEqual(calls.at(-1), { name: 'skill', value: { id: 'weekly', installed: false } })
+  assert.equal((await request('desktop/enterprise/skills', { skill: { id: 'other', installed: true } })).status, 400)
   assert.equal((await request('desktop/update/check', {})).status, 503)
   assert.equal((await (await request('desktop/update')).json()).error, 'updater not ready')
   let reset = false

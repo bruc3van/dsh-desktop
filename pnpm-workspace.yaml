@@ -1,6 +1,8 @@
 packages:
   - .
   - dsh-runtime
+  - packages/*
+  - apps/*
 
 # Use pnpm's isolated deploy implementation. The legacy implementation prunes
 # the workspace root to production dependencies as a side effect.

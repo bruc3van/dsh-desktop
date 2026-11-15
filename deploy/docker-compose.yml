@@ -1,0 +1,61 @@
+# DSH Desktop Pro management server with PostgreSQL.
+#   cp .env.example .env               # then edit it
+#   cp litellm.env.example litellm.env # only with the litellm profile
+#   docker compose up -d                       # server + database
+#   docker compose --profile litellm up -d     # also a LiteLLM gateway
+# Put a TLS-terminating reverse proxy in front for anything beyond a trial.
+name: dsh-desktop-pro
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: apps/server/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://dsh:${POSTGRES_PASSWORD}@postgres:5432/dsh
+    ports:
+      - "${DSH_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dsh
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: dsh
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      # LiteLLM keeps its own database beside the server's.
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-litellm.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dsh -d dsh"]
+      interval: 5s
+      retries: 20
+
+  # Optional model gateway. Configure real provider keys in litellm.yaml;
+  # the management server only ever sees the master key.
+  litellm:
+    profiles: ["litellm"]
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    # Provider keys stay in their own file, never in the server's environment.
+    env_file: litellm.env
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      DATABASE_URL: postgres://dsh:${POSTGRES_PASSWORD}@postgres:5432/litellm
+    volumes:
+      - ./litellm.yaml:/app/config.yaml:ro
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres:

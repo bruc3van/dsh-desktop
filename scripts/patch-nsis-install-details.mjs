@@ -187,7 +187,7 @@ export function fastPathInstDirBudget(longestRelativePath) {
  * and fails the build if the budget was computed against anything shorter.
  *
  * For scale: the default per-user target
- * `C:\\Users\\<name>\\AppData\\Local\\Programs\\DSH Desktop` is 49 characters
+ * `C:\\Users\\<name>\\AppData\\Local\\Programs\\DSH Desktop Pro` is 49 characters
  * for a 5-character user name, against a 188-character deepest path — 238
  * total, comfortably inside. A pre-rename install directory, or a user name
  * past ~26 characters, is what tips over into the staged copy.

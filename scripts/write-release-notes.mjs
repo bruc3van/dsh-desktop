@@ -55,7 +55,7 @@ ${downloadRows}
 ### macOS
 
 1. 下载对应芯片的 \`.dmg\` 并打开。
-2. 将 **DSH Desktop** 拖入「应用程序」。
+2. 将 **DSH Desktop Pro** 拖入「应用程序」。
 3. 从「应用程序」打开。若系统阻止启动，前往「系统设置 → 隐私与安全性」，确认应用名称后点击「仍要打开」。
 4. 从 0.2.4 或更早版本升级时，「应用程序」里会同时留着旧的 **DeepSeek Harness Desktop**（改名前的名字，不会被新版覆盖），可以删掉——两者共用同一份设置和会话记录。新版首次启动也会提示一次。
 
@@ -67,16 +67,16 @@ ${downloadRows}
 
 ### Linux x64
 
-Ubuntu 24.04 可选择安装版 \`dsh-desktop-${version}-linux-amd64.deb\`，在下载目录执行 \`sudo apt install ./dsh-desktop-${version}-linux-amd64.deb\`。从应用菜单或 \`dsh-desktop\` 命令打开。安装会配置桌面入口和限定应用路径的 AppArmor 策略，无需 FUSE。升级前请退出客户端，再用同一命令安装新包；\`sudo apt remove dsh-desktop\` 卸载程序并保留用户数据。DEB 应用内更新会下载同格式的安装包供手动安装。
+Ubuntu 24.04 可选择安装版 \`dsh-desktop-pro-${version}-linux-amd64.deb\`，在下载目录执行 \`sudo apt install ./dsh-desktop-pro-${version}-linux-amd64.deb\`。从应用菜单或 \`dsh-desktop\` 命令打开。安装会配置桌面入口和限定应用路径的 AppArmor 策略，无需 FUSE。升级前请退出客户端，再用同一命令安装新包；\`sudo apt remove dsh-desktop\` 卸载程序并保留用户数据。DEB 应用内更新会下载同格式的安装包供手动安装。
 
 AppImage 便携版：
 
-1. 下载 \`dsh-desktop-${version}-linux-x86_64.AppImage\`。
-2. 在文件属性中允许执行，或运行 \`chmod +x dsh-desktop-${version}-linux-x86_64.AppImage\`，然后打开文件。
-3. Ubuntu 24.04 若提示缺少 FUSE 2，可安装 \`libfuse2t64\`；也可用 \`./dsh-desktop-${version}-linux-x86_64.AppImage --appimage-extract-and-run\` 解压运行。
-4. Ubuntu 24.04 若限制沙箱所需的用户命名空间，请按 [Linux 安装说明](https://github.com/bruc3van/dsh-desktop/blob/v${version}/docs/development.zh.md#linux-x64) 安装限定应用路径的 AppArmor 配置。
+1. 下载 \`dsh-desktop-pro-${version}-linux-x86_64.AppImage\`。
+2. 在文件属性中允许执行，或运行 \`chmod +x dsh-desktop-pro-${version}-linux-x86_64.AppImage\`，然后打开文件。
+3. Ubuntu 24.04 若提示缺少 FUSE 2，可安装 \`libfuse2t64\`；也可用 \`./dsh-desktop-pro-${version}-linux-x86_64.AppImage --appimage-extract-and-run\` 解压运行。
+4. Ubuntu 24.04 若限制沙箱所需的用户命名空间，请按 [Linux 安装说明](https://github.com/bruc3van/dsh-desktop-pro/blob/v${version}/docs/development.zh.md#linux-x64) 安装限定应用路径的 AppArmor 配置。
 5. 应用内更新会下载、校验并打开文件位置。请先退出客户端，再用新 AppImage 替换原文件并重新打开；下载期间不会中断任务。
-6. 某些桌面环境不显示托盘图标。关闭窗口后可再次启动同一 AppImage 恢复主窗口；需要退出时，在窗口菜单「DSH Desktop」中选择「退出」。
+6. 某些桌面环境不显示托盘图标。关闭窗口后可再次启动同一 AppImage 恢复主窗口；需要退出时，在窗口菜单「DSH Desktop Pro」中选择「退出」。
 
 > 当前安装包尚未使用注册开发者证书签名。Release 同时提供 \`SHA256SUMS.txt\`，用于核对下载文件是否完整；校验值不一致时请勿安装。
 `

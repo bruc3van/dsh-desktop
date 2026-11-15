@@ -215,7 +215,7 @@ FunctionEnd
 ; on that same directory with only `--updated` dropped removes all 13814 files
 ; and exits 0, so nothing there is locked or unmovable — the atomic-rename step
 ; is simply what does not survive. Reported from a real upgrade in
-; https://github.com/bruc3van/dsh-desktop/issues/11, and reproduced by
+; https://github.com/bruc3van/dsh-desktop-pro/issues/11, and reproduced by
 ; `pnpm run check:nsis-upgrade`.
 ;
 ; The uninstaller that fails already sits on the user's machine, so nothing
@@ -315,7 +315,7 @@ FunctionEnd
 ; in-place upgrade passes) first renames every entry into $PLUGINSDIR\old-install
 ; so a locked file can be rolled back, and aborts the whole uninstall when any
 ; entry will not move. That rename step is what fails — see
-; https://github.com/bruc3van/dsh-desktop/issues/11 and the single-variable
+; https://github.com/bruc3van/dsh-desktop-pro/issues/11 and the single-variable
 ; control in `pnpm run check:nsis-upgrade`: the same uninstaller on the same
 ; directory exits 2 and removes nothing with `--updated`, and exits 0 removing
 ; all 13814 files without it. Nothing there is locked; the detour is.

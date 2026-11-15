@@ -2,14 +2,14 @@
 
 [English](development.md)
 
-本文收录从 README 迁出的开发者内容：从源码运行、开发与验证、版本发布与当前状态。安装使用与连接说明见 [README](../README.md)；进程模型、信任边界和设计取舍见[桌面客户端架构](desktop-client-architecture.zh.md)。
+本文收录从 README 迁出的开发者内容：从源码运行、开发与验证、版本发布与当前状态。安装使用与连接说明见[使用指南](user-guide.zh.md)；进程模型、信任边界和设计取舍见[桌面客户端架构](desktop-client-architecture.zh.md)。
 
 ## 从源码运行
 
 源码开发需要 Node.js `^22.19.0 || >=24.0.0` 和 [pnpm](https://pnpm.io/)；不需要另外安装 `dsh`。
 
 ```sh
-git clone https://github.com/bruc3van/dsh-desktop.git
+git clone https://github.com/bruc3van/dsh-desktop-pro.git
 cd dsh-desktop
 pnpm install
 pnpm run dev          # 构建并准备与 DSH 安装树分离的离线载荷
@@ -28,7 +28,7 @@ pnpm run dev          # 构建并准备与 DSH 安装树分离的离线载荷
 
 第 2、3 步都跑在**你自己的 Node** 上，且只使用**已经存在**的包——不联网、不下载、不替你安装 Node.js；缓存里没有就直接跳过。客户端读取缓存包的 `package.json` 校验其确实是 `@deepseek-ai/dsh` 并取用真实版本号，不会误启动同路径下的其他东西。npx 缓存不会自行更新：若缓存版本低于内置运行时，客户端仍优先使用你的缓存，但会在连接设置里提示；重新运行一次 `npx @deepseek-ai/dsh web` 即可把缓存刷新到最新版。
 
-启动的都是纯后台服务进程（自动端口依次尝试 3080、13080，再退到 `dsh web --port 0`；也可在连接设置里改成固定端口），rc.8 及以上会带 `--no-open`，不会打开浏览器窗口；退出桌面端时，客户端启动的服务会被一并关闭。若选中的运行时启动失败，客户端会按仍启用的来源依次回退（默认最后是内置运行时）。固定端口被占用时不会换口、也不会把三个来源各失败一遍。连接设置里会显示当前用的是哪一种（本机已安装 / npx 缓存 / 客户端内置）及其版本。内置安全市场会接入客户端启动且可验证依赖兼容的运行时（复用实例与自定义地址除外——那两种不由客户端启动），见下文「开发与验证」与 README 的[「内置安全市场」](../README.md#内置安全市场)。
+启动的都是纯后台服务进程（自动端口依次尝试 3080、13080，再退到 `dsh web --port 0`；也可在连接设置里改成固定端口），rc.8 及以上会带 `--no-open`，不会打开浏览器窗口；退出桌面端时，客户端启动的服务会被一并关闭。若选中的运行时启动失败，客户端会按仍启用的来源依次回退（默认最后是内置运行时）。固定端口被占用时不会换口、也不会把三个来源各失败一遍。连接设置里会显示当前用的是哪一种（本机已安装 / npx 缓存 / 客户端内置）及其版本。首次预置插件订阅只在客户端自己启动运行时时生效（复用实例与自定义地址除外——那两种不由客户端启动），见[使用指南的「预置插件订阅」](user-guide.zh.md#预置插件订阅)。
 
 如果内置运行时无法启动，或希望使用其他实例，请打开**「设置 → 桌面设置」**修改连接；页面完全加载不出来时，启动界面会直接给出**「Web UI 连接…」**按钮。
 
@@ -59,6 +59,15 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 
 `pnpm run e2e` 需要有效的 API Key（`export DEEPSEEK_API_KEY=…`，或在「设置 → 凭据」添加一次）。没有 Key 时它有意以退出码 2 失败：被跳过的真实往返不能显示为绿色。它还会在一次性临时 `DSH_HOME` 上运行，绝不会碰到你的真实会话。生产窗口直接加载官方 Web UI；仓库不维护第二套产品 renderer。`pnpm run check:updater` 用本地更新清单夹具验证检查、下载校验和忽略版本。
 
+### 企业模式与管理服务端（开发）
+
+- 协议在 `packages/protocol`（期望状态、签名、注册文件、场景包合并、设备证明），客户端和服务端共用。桌面端经 esbuild 打包；服务端由 Node 24 直接运行 TypeScript 源码，所以只能用可擦除的语法（不能用参数属性、enum）。
+- 客户端：`src/main/enterprise/`。`managed-source.ts` 判断模式，`reconcile.ts` 是只改文件的对账器，`managed-boot.ts` 在 launcher 里启动前应用，`plugin-sync.ts` 在运行时就绪后装卸插件，`server-session.ts` 负责登录与设备身份，`controller.ts` 把它们串起来，`policy-plugin.ts` 是随客户端发布的工具策略插件（`.build/policy-plugin.mjs`）。
+- 开发时用 `DSH_DESKTOP_MANAGED_DIR` 指向一个临时目录，代替系统目录（打包版忽略这个变量）。
+- 服务端：`pnpm run server`（默认 SQLite，存在 `./data`）。需要的环境变量见 `deploy/.env.example`；试用时可以加 `DSH_DEV_LOGIN=1 DSH_BOOTSTRAP_TOKEN=…`。控制台在 `/console/`。
+- 检查：`check:protocol`（协议）、`check:enterprise`（对账、托管来源、签名文件）、`check:server`（服务端全流程；设置 `DSH_CHECK_DATABASE_URL=postgres://…` 时跑 PostgreSQL）、`check:gateway`（内置模型网关）、`check:enterprise-file` 和 `check:enterprise-server`（真实 Electron 窗口里的文件模式与服务端模式，包括通过官方界面发出第一条消息）。
+- 文件模式签名：`node scripts/org-key.mjs generate|sign`。
+
 ### 预置插件订阅（开发）
 
 - 只有客户端受管理的 `dsh web` 启动才会带上订阅请求（`DSH_DESKTOP_PRESET_SUBSCRIPTION`），由 `runtime-launcher` 在 DSH 读取 profile 之前处理。普通 `dsh` / `plugin` / `pnpm` shim 调用、复用已运行的实例、连接固定地址、无法验证 package anchor 的原始 CLI，都不会改 profile。
@@ -72,7 +81,7 @@ pnpm run e2e            # 发送真实请求并验证流式回复
 
 构建目标为 x64 AppImage 和 DEB，以 Ubuntu 24.04 为验证基线。暂未提供 ARM64、RPM、Snap 或 Flatpak 安装包；其他发行版和完整 GNOME/KDE 桌面体验仍需独立验证。
 
-DEB 安装：`sudo apt install ./dsh-desktop-<版本>-linux-amd64.deb`。程序位于 `/opt/DSH Desktop/`，命令为 `dsh-desktop`。包自带桌面入口、图标及 `/etc/apparmor.d/dsh-desktop-deb` 策略，只允许安装路径对应的程序创建用户命名空间；不会关闭系统沙箱限制。升级前通过菜单“退出”结束客户端，再用同一命令安装新版。`sudo apt remove dsh-desktop` 保留 `~/.bruc3van-dsh-desktop` 和 `~/.dsh` 中的数据。
+DEB 安装：`sudo apt install ./dsh-desktop-<版本>-linux-amd64.deb`。程序位于 `/opt/DSH Desktop Pro/`，命令为 `dsh-desktop`。包自带桌面入口、图标及 `/etc/apparmor.d/dsh-desktop-deb` 策略，只允许安装路径对应的程序创建用户命名空间；不会关闭系统沙箱限制。升级前通过菜单“退出”结束客户端，再用同一命令安装新版。`sudo apt remove dsh-desktop` 保留 `~/.bruc3van-dsh-desktop` 和 `~/.dsh` 中的数据。
 
 AppImage 与 DEB 均已包含 Node/pnpm/dsh。下载后允许执行，再启动文件；Ubuntu 24.04 缺少 FUSE 2 时可安装 `libfuse2t64`，或使用 `--appimage-extract-and-run` 解压运行。仍需系统图形库及允许 Chromium 沙箱运行的内核/系统策略，应用不会以关闭沙箱作为自动降级。
 
@@ -83,9 +92,9 @@ sudo install -m 0644 dsh-desktop.apparmor /etc/apparmor.d/dsh-desktop
 sudo apparmor_parser -r /etc/apparmor.d/dsh-desktop
 ```
 
-该配置只匹配上述目录中的 DSH Desktop AppImage。它允许该应用创建沙箱所需的命名空间，不关闭系统的 AppArmor 限制。WSL 的内核/策略不同，不能代替这一配置在真实 Ubuntu 桌面上的验证。系统没有配置 Documents 目录时，上游首次创建默认工作区可能提示失败；可通过「选择工作区」选择现有项目文件夹。
+该配置只匹配上述目录中的 DSH Desktop Pro AppImage。它允许该应用创建沙箱所需的命名空间，不关闭系统的 AppArmor 限制。WSL 的内核/策略不同，不能代替这一配置在真实 Ubuntu 桌面上的验证。系统没有配置 Documents 目录时，上游首次创建默认工作区可能提示失败；可通过「选择工作区」选择现有项目文件夹。
 
-关闭窗口保留页面和后台任务。没有托盘图标的桌面环境可再次启动同一 AppImage 恢复窗口；窗口菜单「DSH Desktop → 退出」或 `Ctrl+Q` 可结束客户端。应用内更新只下载、校验并打开文件位置；请先退出，再手动替换原 AppImage 并重新打开。
+关闭窗口保留页面和后台任务。没有托盘图标的桌面环境可再次启动同一 AppImage 恢复窗口；窗口菜单「DSH Desktop Pro → 退出」或 `Ctrl+Q` 可结束客户端。应用内更新只下载、校验并打开文件位置；请先退出，再手动替换原 AppImage 并重新打开。
 
 DEB 更新只下载并校验安装包，然后提示退出并通过 `apt` 手动安装，不自动提权或中断任务。
 
@@ -98,7 +107,7 @@ DSH_RUNTIME_TARGET=linux-x64 corepack pnpm run prepare:runtime
 corepack pnpm exec electron-builder --linux AppImage deb --x64 --publish never
 ```
 
-AppImage 产物名称为 `dsh-desktop-<版本>-linux-x86_64.AppImage`，更新清单保留 `linux-x64` 以兼容旧客户端；DEB 为 `dsh-desktop-<版本>-linux-amd64.deb`，使用独立的 `linux-deb-x64`。FPM 仅向 DEB 添加 dpkg 所有的 `resources/package-type` 标记，应用据此选择更新格式；不根据用户环境变量判断。`check:linux` 验证 Koffi、Sharp、ripgrep、PTY、Landlock 读权限以及真实窗口关闭/恢复；`smoke:appimage` 解压实际 AppImage 并验证其载荷、离线插件安装和 AppRun 启动，再验证真实镜像启动及菜单重启后的客户端与后台运行时交接。默认使用解压运行；设置 `DSH_SMOKE_APPIMAGE_FUSE=1` 可验证 FUSE 模式。无桌面的构建环境可在 Xvfb/D-Bus 会话中运行：
+AppImage 产物名称为 `dsh-desktop-pro-<版本>-linux-x86_64.AppImage`，更新清单保留 `linux-x64` 以兼容旧客户端；DEB 为 `dsh-desktop-pro-<版本>-linux-amd64.deb`，使用独立的 `linux-deb-x64`。FPM 仅向 DEB 添加 dpkg 所有的 `resources/package-type` 标记，应用据此选择更新格式；不根据用户环境变量判断。`check:linux` 验证 Koffi、Sharp、ripgrep、PTY、Landlock 读权限以及真实窗口关闭/恢复；`smoke:appimage` 解压实际 AppImage 并验证其载荷、离线插件安装和 AppRun 启动，再验证真实镜像启动及菜单重启后的客户端与后台运行时交接。默认使用解压运行；设置 `DSH_SMOKE_APPIMAGE_FUSE=1` 可验证 FUSE 模式。无桌面的构建环境可在 Xvfb/D-Bus 会话中运行：
 
 ```sh
 xvfb-run -a dbus-run-session -- corepack pnpm run check:linux

@@ -28,10 +28,10 @@ const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
  * string arriving with the rest of the default_app manifest.
  */
 const EXPECTED = {
-  name: 'dsh-desktop',
+  name: 'dsh-desktop-pro',
   main: '.build/main.mjs',
   appId: 'io.github.bruc3van.dsh-desktop',
-  productName: 'DSH Desktop',
+  productName: 'DSH Desktop Pro',
 }
 
 /**

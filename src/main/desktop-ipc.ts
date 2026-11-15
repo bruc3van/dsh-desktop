@@ -6,6 +6,7 @@ import type { DesktopUpdater, UpdateState } from './updater.ts'
 interface BridgeCaller { trusted: boolean; remote: boolean }
 interface Options {
   requestRestart: () => { started: boolean; error?: string }
+  enterpriseAction: (action: unknown) => Promise<{ ok: boolean; error?: string }>
   bridgeCaller: (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) => BridgeCaller
   bridgeDenied: () => Error
   getStatusJson: (includeLocalDetail?: boolean) => Record<string, unknown>
@@ -24,6 +25,9 @@ interface Options {
   localDocumentCaller: (event: Electron.IpcMainEvent) => boolean
   retryConnection: () => void
   useSmartFromLocalDocument: () => void
+  /** Organisation gate: opt out to personal mode (when allowed) / save a support bundle. */
+  personalFromGate: () => void
+  diagnosticsFromGate: () => void
   getDesktopUpdater: () => Pick<DesktopUpdater, 'getState' | 'resetDismiss' | 'check' | 'dismiss'> | undefined
   updateStateForCaller: (state: UpdateState, remote: boolean) => UpdateState
   installDesktopUpdate: () => Promise<{ started: boolean; error?: string }>
@@ -52,6 +56,12 @@ export function createDesktopIpc(options: Options) {
       const caller = bridgeCaller(event)
       if (!caller.trusted) throw bridgeDenied()
       return getStatusJson(!caller.remote)
+    })
+    // Organisation actions are for this machine's person, never a remote page.
+    ipcMain.handle('desktop:enterprise:action', async (event, action: unknown) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted || caller.remote) throw bridgeDenied()
+      return options.enterpriseAction(action)
     })
     ipcMain.handle('desktop:connection:smartRuntimes', async (event, runtimes: unknown) => {
       const caller = bridgeCaller(event)
@@ -132,6 +142,14 @@ export function createDesktopIpc(options: Options) {
     ipcMain.on('desktop:local:use-smart', (event) => {
       if (!localDocumentCaller(event)) return
       useSmartFromLocalDocument()
+    })
+    ipcMain.on('desktop:local:personal', (event) => {
+      if (!localDocumentCaller(event)) return
+      options.personalFromGate()
+    })
+    ipcMain.on('desktop:local:diagnostics', (event) => {
+      if (!localDocumentCaller(event)) return
+      options.diagnosticsFromGate()
     })
     ipcMain.handle('desktop:update:status', (event) => {
       const caller = bridgeCaller(event)

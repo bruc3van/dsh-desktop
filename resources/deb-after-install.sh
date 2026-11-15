@@ -2,11 +2,11 @@
 set -eu
 
 # This hook runs as root; the application itself always runs as the desktop user.
-update-alternatives --install /usr/bin/dsh-desktop dsh-desktop '/opt/DSH Desktop/dsh-desktop' 100
+update-alternatives --install /usr/bin/dsh-desktop dsh-desktop '/opt/DSH Desktop Pro/dsh-desktop' 100
 # Ubuntu 24.04 uses user namespaces with the application-scoped AppArmor grant.
-chmod 0755 '/opt/DSH Desktop/chrome-sandbox'
+chmod 0755 '/opt/DSH Desktop Pro/chrome-sandbox'
 
-profile_source='/opt/DSH Desktop/resources/apparmor-profile'
+profile_source='/opt/DSH Desktop Pro/resources/apparmor-profile'
 profile_target='/etc/apparmor.d/dsh-desktop-deb'
 # Keep the profile on disk even when installing into an offline image. On older
 # AppArmor versions, do not install a profile using an unsupported ABI.

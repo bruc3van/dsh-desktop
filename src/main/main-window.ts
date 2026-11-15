@@ -96,7 +96,7 @@ export function createMainWindowFactory(options: Options) {
     let targetNavigationSucceeded = false
     let mainWindow: BrowserWindow | null = new BrowserWindow({
       ...bounds,
-      title: 'DSH Desktop',
+      title: 'DSH Desktop Pro',
       backgroundColor: windowBackgroundColor(),
       // The official Web UI carries its own header; a hiddenInset title bar
       // would overlap it. The standard title bar keeps the traffic lights away

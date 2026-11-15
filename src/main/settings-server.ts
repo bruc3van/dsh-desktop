@@ -7,6 +7,11 @@ type SaveResult = { saved: boolean; error?: string }
 
 export interface SettingsServerOptions {
   requestRestart: () => { started: boolean; error?: string }
+  enterpriseAction: (action: unknown) => Promise<{ ok: boolean; error?: string }>
+  /** The organisation's skill library for the signed-in person. */
+  enterpriseSkills: () => Promise<{ ok: boolean; skills?: unknown; error?: string }>
+  /** Install or remove one optional company skill: `{ id, installed }`. */
+  setEnterpriseSkill: (value: unknown) => Promise<SaveResult & { skills?: unknown }>
   updater: () => Pick<DesktopUpdater, 'getState' | 'check' | 'resetDismiss' | 'dismiss'> | undefined
   getStatusJson: () => unknown
   probeDefaultWebUi: () => Promise<unknown>
@@ -127,6 +132,25 @@ export function createSettingsServer(options: SettingsServerOptions) {
       if (pathname === '/desktop/restart' && req.method === 'POST') {
         const result = options.requestRestart()
         writeJson(res, result.started ? 200 : 409, result)
+        return
+      }
+      const enterpriseRoute = /^\/desktop\/enterprise\/(sync|diagnostics|sign-out|use-personal|use-organisation)$/.exec(pathname)
+      if (enterpriseRoute !== null && req.method === 'POST') {
+        void options.enterpriseAction(enterpriseRoute[1]).then(
+          result => { writeJson(res, result.ok ? 200 : 409, result) },
+          (error: unknown) => { writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+        )
+        return
+      }
+      if (pathname === '/desktop/enterprise/skills') {
+        if (req.method === 'POST') {
+          readSettingsBody(req, res, 'skill', options.setEnterpriseSkill)
+          return
+        }
+        void options.enterpriseSkills().then(
+          result => { writeJson(res, result.ok ? 200 : 409, result) },
+          (error: unknown) => { writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
+        )
         return
       }
       if (pathname === '/desktop/status') {

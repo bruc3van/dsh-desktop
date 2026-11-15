@@ -1,0 +1,14 @@
+{
+  "name": "@dsh-desktop-pro/protocol",
+  "version": "1.0.0",
+  "description": "Desired-state, enrollment and signing contract shared by DSH Desktop Pro and its management server",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  }
+}

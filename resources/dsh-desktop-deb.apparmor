@@ -2,7 +2,7 @@
 abi <abi/4.0>,
 include <tunables/global>
 
-profile dsh-desktop-deb "/opt/DSH Desktop/dsh-desktop" flags=(unconfined) {
+profile dsh-desktop-deb "/opt/DSH Desktop Pro/dsh-desktop" flags=(unconfined) {
   userns,
   include if exists <local/dsh-desktop>
 }

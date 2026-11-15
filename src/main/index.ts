@@ -16,7 +16,7 @@ import { createUpdateController } from './update-controller.ts'
 import { createWindowHealth } from './window-health.ts'
 import { createWindowTheme } from './window-theme.ts'
 /**
- * Electron main process for the DSH Desktop client.
+ * Electron main process for the DSH Desktop Pro client.
  *
  * The client consumes the official dsh Web UI and its documented browser-
  * session record: it manages a local `dsh web` child (or connects to a
@@ -49,19 +49,24 @@ import { WebUiManager } from './web-ui-manager.ts'
 import { createWebUiProbe } from './web-ui-probe.ts'
 
 import { renderErrorPageUrl } from './pages/error.ts'
+import { renderGatePageUrl } from './pages/gate.ts'
 import { renderLoadingPageUrl } from './pages/loading.ts'
 import { renderClientNoticePageUrl } from './pages/notice.ts'
 import { renderSettingsPageScript } from './pages/settings-script.ts'
 import { renderSettingsPageHtml } from './pages/settings.ts'
 import { parseSettingsIntegrationStatus,type SettingsIntegrationStatus } from './settings-integration.ts'
 
-import { app,BrowserWindow,dialog,ipcMain,Menu,nativeImage,nativeTheme,powerMonitor,screen,session,shell,Tray } from 'electron'
-import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { app,BrowserWindow,dialog,ipcMain,Menu,nativeImage,nativeTheme,powerMonitor,safeStorage,screen,session,shell,Tray } from 'electron'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import {join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PRESET_SUBSCRIPTION_VARIABLE, type PresetSubscriptionRequest } from './preset-subscription-boot.ts'
+import { createEnterpriseController, MANAGED_STATE_VARIABLE, type Readiness } from './enterprise/controller.ts'
+import { systemManagedDir } from './enterprise/managed-source.ts'
+import { PLAIN_CODEC, type SecretCodec } from './enterprise/server-session.ts'
+import { killProcessTree } from './process-tree.ts'
 import {
 dshHomeForMode,
 migrateLegacyClientHome,
@@ -90,7 +95,87 @@ type UpdateState
 
 /** The built bundle sits at <project>/.build/main.mjs. */
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
-const { loadSettings, patchSettings } = createClientSettingsStore(clientHome())
+const { loadSettings: loadStoredSettings, patchSettings } = createClientSettingsStore(clientHome())
+
+/**
+ * Organisation management. Inert in personal mode; with an enrollment or a
+ * managed file present it fixes the runtime and data home and applies the
+ * organisation's desired state around every launch.
+ */
+const enterprise = createEnterpriseController({
+  clientHome: clientHome(),
+  managedDir: devOverride('DSH_DESKTOP_MANAGED_DIR') ?? systemManagedDir(),
+  clientVersion: desktopClientVersion(),
+  chinese: () => localeChinese(),
+  policyPluginPath,
+  secrets: secretCodec,
+  openBrowser: url => shell.openExternal(url),
+  // The browser holds the user's attention after sign-in; take it back.
+  focusApp: () => {
+    if (process.platform === 'darwin') app.focus({ steal: true })
+    if (mainWindow !== null && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  },
+  runPluginCommand: runProfilePluginCommand,
+  dshVersion: () => bundledDshVersion() ?? undefined,
+  log: line => { console.log(line) },
+})
+
+/** Saved settings, with the organisation's fixed choices laid over them. */
+function loadSettings(): ClientSettings {
+  return enterprise.overlaySettings(loadStoredSettings())
+}
+
+/** The tool-policy plugin shipped beside the runtime launcher, outside app.asar. */
+function policyPluginPath(): string | undefined {
+  const file = app.isPackaged ? join(process.resourcesPath, 'policy-plugin.mjs') : join(APP_DIR, '.build', 'policy-plugin.mjs')
+  return existsSync(file) ? file : undefined
+}
+
+/** OS-backed encryption for the organisation session, where the OS offers it. */
+function secretCodec(): SecretCodec {
+  if (!safeStorage.isEncryptionAvailable()) return PLAIN_CODEC
+  return {
+    encrypted: true,
+    seal: plain => safeStorage.encryptString(plain).toString('base64'),
+    open: sealed => safeStorage.decryptString(Buffer.from(sealed, 'base64')),
+  }
+}
+
+/** `dsh <args>` with the runtime that serves this home, the way a person's own `dsh plugin` runs. */
+function runProfilePluginCommand(args: string[]): Promise<{ ok: boolean; output: string }> {
+  const command = webUi?.lastCommand ?? runtimeEnvironment.resolveBundledDsh()
+  if (command === undefined) return Promise.resolve({ ok: false, output: 'no runtime command is available' })
+  return new Promise((resolve) => {
+    const pnpm = bundledPnpmEntry()
+    const detached = process.platform !== 'win32'
+    const child = spawn(command.command, [...command.args, ...args], {
+      cwd: childHome(),
+      env: {
+        ...process.env,
+        DSH_HOME: childHome(),
+        PATH: childPath(),
+        ...command.entry !== undefined && { DSH_DESKTOP_RUNTIME_ENTRY: command.entry },
+        ...pnpm !== undefined && { [PNPM_ENTRY_VARIABLE]: pnpm },
+        ...app.isPackaged && command.command === process.execPath && { ELECTRON_RUN_AS_NODE: '1' },
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...SPAWN_NO_WINDOW,
+      detached,
+      ...command.shell === true && { shell: true },
+    })
+    let output = ''
+    const collect = (chunk: Buffer): void => { output = (output + chunk.toString()).slice(-8_000) }
+    child.stdout?.on('data', collect)
+    child.stderr?.on('data', collect)
+    const timer = setTimeout(() => { killProcessTree(child, detached) }, 10 * 60 * 1000)
+    child.on('error', (error) => { clearTimeout(timer); resolve({ ok: false, output: error.message }) })
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ ok: code === 0, output: sanitizeRuntimeOutput(output) }) })
+  })
+}
 const webProbe = createWebUiProbe({ childHome, configuredLocalWebPort })
 const { defaultWebProbeUrl, inspectWebUi, probeWebUi, waitForWebUiReady } = webProbe
 const runtimeSurvivor = createRuntimeSurvivor({
@@ -137,7 +222,9 @@ function clientHome(): string {
 let activeDshHome: string | undefined
 let activeDshDataMode: DshDataMode | undefined
 function childHome(): string {
-  return activeDshHome ?? devOverride('DSH_HOME')
+  if (activeDshHome !== undefined) return activeDshHome
+  if (enterprise.active()) return enterprise.dshHome()
+  return devOverride('DSH_HOME')
     ?? dshHomeForMode(normalizeDshDataMode(loadSettings().dshDataMode), homedir(), clientHome())
 }
 
@@ -147,7 +234,7 @@ function selectedDshDataMode(settings: ClientSettings = loadSettings()): DshData
 
 /** A development DSH_HOME override is an explicit fixture and wins over the UI. */
 function dshDataModeSelectable(): boolean {
-  return devOverride('DSH_HOME') === undefined
+  return devOverride('DSH_HOME') === undefined && !enterprise.active()
 }
 
 /** Generic localhost discovery is meaningful only for the shared official home. */
@@ -175,13 +262,18 @@ function runtimeSupportsNoOpen(version: string | undefined): boolean {
  * executable has no verifiable package anchor, so it gets no offer.
  */
 function presetSubscriptionRequest(dsh: DshCommand): string | undefined {
-  if (dsh.entry === undefined) return undefined
+  if (dsh.entry === undefined || enterprise.active()) return undefined
   const request: PresetSubscriptionRequest = { home: childHome() }
   return JSON.stringify(request)
 }
 
 function onManagedReady(_command: DshCommand | undefined): void {
   pluginRecovery.promptPluginCompatibilityFallback()
+  // Plugin packages need the serving runtime's package manager; the launcher
+  // already applied the profile files before this runtime read them.
+  void enterprise.afterRuntimeReady().catch((error: unknown) => {
+    console.warn('[enterprise] post-launch sync failed: ' + (error instanceof Error ? error.message : String(error)))
+  })
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -224,6 +316,9 @@ let errorDocumentActive = false
 let settingsWindow: BrowserWindow | null = null
 const settingsServer = createSettingsServer({
   requestRestart,
+  enterpriseAction,
+  enterpriseSkills,
+  setEnterpriseSkill,
   updater: () => desktopUpdater,
   getStatusJson,
   probeDefaultWebUi,
@@ -555,7 +650,9 @@ function bindErrorPageSeats(window: BrowserWindow): void {
     + ' bind("error-retry", () => { window.desktop?.local?.retry?.() });'
     + ' bind("error-use-smart", () => { window.desktop?.local?.useSmart?.() });'
     + ' bind("error-settings", () => { window.desktop?.openConnectionSettings?.() });'
-    + ' bind("error-quit", () => { window.desktop?.local?.quit?.() }) })();',
+    + ' bind("error-quit", () => { window.desktop?.local?.quit?.() });'
+    + ' bind("gate-personal", () => { window.desktop?.local?.personal?.() });'
+    + ' bind("gate-diagnostics", () => { window.desktop?.local?.diagnostics?.() }) })();',
     true,
   ).catch(() => {})
 }
@@ -583,7 +680,7 @@ function reportConnectionFailureWithoutWindow(failure: ConnectionFailure): void 
       : failure.description + ' (' + String(failure.code) + ')')
   void dialog.showMessageBox({
     type: 'error',
-    title: 'DSH Desktop',
+    title: 'DSH Desktop Pro',
     message: failure.kind === 'runtime'
       ? failure.headline
       : (chinese ? '无法连接 Web UI' : 'Could not reach the Web UI'),
@@ -612,6 +709,11 @@ function retryConnection(): void {
   showLoadingDocument()
   updateLoadingStatus('正在重新连接…', 'Reconnecting…')
   resetRuntimeRecoveryBudget()
+  if (enterpriseGateActive) {
+    // The gate's main button: sign in (or retry the organisation server).
+    void startConnection(loadSettings(), true, true)
+    return
+  }
   applyConnectionSettings(loadSettings(), true)
 }
 function windowBackgroundColor(): string {
@@ -643,7 +745,7 @@ const macFolderAccess = createMacFolderAccessController({
   ask: async (copy) => {
     const options: Electron.MessageBoxOptions = {
       type: 'warning',
-      title: 'DSH Desktop',
+      title: 'DSH Desktop Pro',
       message: copy.message,
       detail: copy.detail,
       buttons: copy.buttons,
@@ -726,8 +828,12 @@ function openSettingsWindow(): void {
   const area = mainWindow && !mainWindow.isDestroyed()
     ? screen.getDisplayMatching(mainWindow.getBounds()).workArea : screen.getPrimaryDisplay().workArea
   settingsWindow = new BrowserWindow({
-    ...centeredWindowBounds(area, 640, 720),
-    title: localeChinese() ? 'DSH Desktop 设置' : 'DSH Desktop settings',
+    ...centeredWindowBounds(area, 860, 640),
+    minWidth: 640,
+    minHeight: 460,
+    title: localeChinese() ? 'DSH Desktop Pro 设置' : 'DSH Desktop Pro settings',
+    // Like System Settings: the traffic lights sit over the page's sidebar.
+    ...process.platform === 'darwin' && { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 18 } },
     // Without this the window keeps Electron's own default icon in its title
     // bar and taskbar entry — the one place the client still looked like a
     // generic Electron app.
@@ -793,7 +899,7 @@ function createTray(): void {
   const icon = trayImage()
   if (icon.isEmpty()) return
   tray = new Tray(icon)
-  tray.setToolTip('DSH Desktop')
+  tray.setToolTip('DSH Desktop Pro')
   // Windows emits this too, and used to have nobody listening: a left-click on
   // the notification-area icon did nothing at all, and the window could only be
   // reached through the right-click menu. A double-click emits two clicks plus
@@ -934,6 +1040,11 @@ const nativeMenuActions = {
   checkUpdates: () => { void updateController.handleManualUpdateCheck(true) },
   restart: restartApp,
   quit: () => { app.quit() },
+  ...enterprise.active() && { exportDiagnostics: () => { void exportDiagnostics() } },
+  ...enterprise.source.kind === 'server' && enterprise.active() && { signOut: () => { void signOutOfOrganisation() } },
+  ...enterprise.personalOption() !== undefined && { switchMode: enterprise.active()
+    ? { zh: '改用个人模式…', en: 'Use Personal Mode…', click: () => { void switchPersonalMode(true) } }
+    : { zh: '使用 ' + (enterprise.personalOption() ?? '') + ' 账号登录…', en: 'Sign In to ' + (enterprise.personalOption() ?? '') + '…', click: () => { void switchPersonalMode(false) } } },
 }
 
 function trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
@@ -981,7 +1092,7 @@ async function prepareRestart(): Promise<void> {
     if (image) await scheduleAppImageRestart(image, app.getPath('home'))
     else app.relaunch()
   } catch (error) {
-    dialog.showErrorBox('DSH Desktop', (localeChinese() ? '重启失败：' : 'Restart failed: ')
+    dialog.showErrorBox('DSH Desktop Pro', (localeChinese() ? '重启失败：' : 'Restart failed: ')
       + (error instanceof Error ? error.message : String(error)))
     throw error
   }
@@ -1005,8 +1116,8 @@ function refreshTrayMenu(): void {
   if (tray === null) return
   const state = desktopUpdater?.getState()
   const tip = state?.phase === 'available' && state.info !== null && !state.dismissed
-    ? 'DSH Desktop · v' + state.info.availableVersion
-    : 'DSH Desktop'
+    ? 'DSH Desktop Pro · v' + state.info.availableVersion
+    : 'DSH Desktop Pro'
   tray.setToolTip(tip)
   const menu = Menu.buildFromTemplate(trayMenuTemplate())
   if (process.platform === 'darwin') return
@@ -1031,6 +1142,7 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     targetUrl: currentTarget() ?? '',
     desktopVersion: desktopClientVersion(),
     settingsIntegration: settingsIntegrationStatus,
+    enterprise: enterprise.status(),
     dshVersion: bundledDshVersion(),
     // NOT gated by includeLocalDetail: in Connect mode the saved address IS
     // the caller's own origin (targetUrl is not redacted either), so hiding
@@ -1170,7 +1282,7 @@ async function confirmSensitiveAction(message: string, detail: string): Promise<
   const chinese = localeChinese()
   const options: Electron.MessageBoxOptions = {
     type: 'warning',
-    title: 'DSH Desktop',
+    title: 'DSH Desktop Pro',
     message,
     detail,
     buttons: [chinese ? '取消' : 'Cancel', chinese ? '继续' : 'Continue'],
@@ -1379,8 +1491,9 @@ async function refuseOccupiedLocalSpawn(
   return occupied
 }
 
-function requestSmartRuntimesSave(value: unknown): Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string; }> {
-  return settingsCommands.requestSmartRuntimesSave(value, false)
+function requestSmartRuntimesSave(value: unknown, remoteCaller = false): Promise<{ saved: boolean; smartRuntimes: SmartRuntimeId[]; error?: string; }> {
+  if (enterprise.active()) return Promise.resolve({ saved: false, smartRuntimes: enabledSmartRuntimes(), error: managedRefusal() })
+  return settingsCommands.requestSmartRuntimesSave(value, remoteCaller)
 }
 
 function requestLocalWebPortSave(value: unknown, remoteCaller: boolean): Promise<{ saved: boolean; localWebPort: number; applied?: boolean; error?: string; }> {
@@ -1388,15 +1501,24 @@ function requestLocalWebPortSave(value: unknown, remoteCaller: boolean): Promise
 }
 
 function requestDshDataModeSave(value: unknown): { saved: boolean; dshDataMode: DshDataMode; applied?: boolean; error?: string; } {
+  if (enterprise.active()) return { saved: false, dshDataMode: 'isolated', error: managedRefusal() }
   return settingsCommands.requestDshDataModeSave(value)
 }
 
 function requestServerUrlSave(serverUrl: unknown, remoteCaller: boolean): Promise<{ saved: boolean; mode?: "smart" | "connect"; error?: string; }> {
+  if (enterprise.active()) return Promise.resolve({ saved: false, error: managedRefusal() })
   return settingsCommands.requestServerUrlSave(serverUrl, remoteCaller)
 }
 
 function switchConnectionMode(): Promise<{ switched: boolean; mode?: "smart" | "connect"; error?: string; }> {
+  if (enterprise.active()) return Promise.resolve({ switched: false, error: managedRefusal() })
   return settingsCommands.switchConnectionMode()
+}
+
+/** Connection, runtime source and data environment are the organisation's in enterprise mode. */
+function managedRefusal(): string {
+  const organization = enterprise.status().organization ?? ''
+  return localeChinese() ? '由 ' + organization + ' 统一管理，不能在此修改' : 'Managed by ' + organization + '; it cannot be changed here'
 }
 
 
@@ -1508,6 +1630,7 @@ function boot(): void {
           ...process.env,
           DSH_HOME: childHome(),
           [PRESET_SUBSCRIPTION_VARIABLE]: presetSubscription,
+          ...dsh.entry !== undefined && { [MANAGED_STATE_VARIABLE]: enterprise.launchRequest() },
           PATH: childPath(),
           ...dsh.entry !== undefined && { DSH_DESKTOP_RUNTIME_ENTRY: dsh.entry },
           ...pnpm !== undefined && { [PNPM_ENTRY_VARIABLE]: pnpm },
@@ -1520,7 +1643,180 @@ function boot(): void {
     onExit: connection.onExit,
   })
 
-  applyConnectionSettings(settings)
+  void startConnection(settings, false, false)
+}
+
+/** The organisation sign-in or failure surface currently fills the main window. */
+let enterpriseGateActive = false
+
+/**
+ * Connect, after the organisation (if any) has said the runtime may start.
+ * `interactive` is a person's click: only then does sign-in open the browser.
+ */
+async function startConnection(settings: ClientSettings, force: boolean, interactive: boolean): Promise<void> {
+  if (enterprise.active()) {
+    if (mainWindowRequested) {
+      showLoadingDocument()
+      updateLoadingStatus(
+        interactive ? '请在浏览器中完成企业账号登录…' : '正在获取企业配置…',
+        interactive ? 'Finish signing in with your organisation account in the browser…' : 'Getting your organisation configuration…',
+      )
+    }
+    let readiness: Readiness
+    try {
+      readiness = await enterprise.prepare(interactive)
+    } catch (error) {
+      readiness = { kind: 'blocked', title: localeChinese() ? '企业配置无法应用' : 'The organisation configuration could not be applied', reason: error instanceof Error ? error.message : String(error) }
+    }
+    if (readiness.kind !== 'ready') {
+      showEnterpriseGate(readiness)
+      return
+    }
+    enterpriseGateActive = false
+    refreshTrayMenu()
+    await enterprise.beforeLaunch((message) => { if (mainWindowRequested) updateLoadingStatus(message, message) }).catch((error: unknown) => {
+      console.warn('[enterprise] plugin sync before launch failed: ' + (error instanceof Error ? error.message : String(error)))
+    })
+    // A retired device or an expired session takes effect on a clean start.
+    enterprise.startPolling(() => { restartApp() })
+  }
+  applyConnectionSettings(settings, force)
+}
+
+/** Sign-in or a blocking organisation failure, in the same surface as connection failures. */
+function showEnterpriseGate(readiness: Exclude<Readiness, { kind: 'ready' }>): void {
+  if (quitting) return
+  enterpriseGateActive = true
+  const window = mainWindow
+  if (window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
+  const chinese = localeChinese()
+  errorDocumentActive = true
+  loadingDocumentActive = false
+  resetPageAppearance()
+  const signIn = readiness.kind === 'sign-in'
+  const organization = signIn ? readiness.organization : (enterprise.status().organization ?? '')
+  const zh = (chineseText: string, english: string): string => (chinese ? chineseText : english)
+  const personalAllowed = readiness.personalAllowed === true
+  void window.loadURL(renderGatePageUrl({
+    kind: readiness.kind,
+    title: signIn ? zh('登录' + organization, 'Sign in to ' + organization) : readiness.title,
+    lead: signIn
+      ? zh('这台电脑由组织统一管理。用企业账号登录后，下面这些会自动配好：', 'Your organisation manages this computer. Sign in and these are set up for you:')
+      : zh('可以稍后重试；如果问题一直存在，请导出诊断信息发给 IT。', 'Retry in a moment; if it persists, export diagnostics and send them to IT.'),
+    ...signIn && { benefits: [
+      zh('公司提供的模型，不用自己填 API Key', 'Your organisation\'s models, no API key to enter'),
+      zh('部门需要的插件和 Skill', 'The plugins and skills your team uses'),
+      zh('工具权限和更新设置', 'Tool permissions and update settings'),
+    ] },
+    primary: signIn ? zh('使用企业账号登录', 'Sign in with organisation account') : zh('重试', 'Retry'),
+    ...signIn && { primaryNote: zh('会在浏览器中打开登录页：', 'Opens the sign-in page in your browser: ') + new URL(readiness.server).host },
+    ...(signIn ? readiness.reason !== undefined && readiness.reason !== '' && { problem: readiness.reason, problemLabel: zh('上次登录没有完成', 'The last sign-in did not finish') } : { problem: readiness.reason }),
+    ...personalAllowed && { personal: {
+      title: zh('不用企业账号？', 'Not using the organisation account?'),
+      text: zh('改用个人模式：用你自己的模型 Key，数据和组织分开。', 'Use personal mode with your own model key; your data stays apart.'),
+      action: zh('改用个人模式', 'Use personal mode'),
+    } },
+    diagnostics: zh('导出诊断信息', 'Export diagnostics'),
+    settings: zh('桌面设置', 'Desktop settings'),
+    quit: zh('退出', 'Quit'),
+  }, organization, chinese, loadingIconTag())).catch(() => {})
+}
+
+/** Tray action: a support bundle with names and states, never secrets. */
+async function exportDiagnostics(): Promise<void> {
+  const chinese = localeChinese()
+  const result = await dialog.showSaveDialog({
+    title: chinese ? '导出诊断信息' : 'Export Diagnostics',
+    defaultPath: join(app.getPath('downloads'), 'dsh-desktop-pro-diagnostics-' + new Date().toISOString().slice(0, 10) + '.json'),
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  })
+  if (result.canceled || result.filePath === undefined) return
+  const report = {
+    generatedAt: new Date().toISOString(),
+    platform: process.platform,
+    arch: process.arch,
+    osRelease: process.getSystemVersion(),
+    electron: process.versions.electron,
+    status: getStatusJson(false),
+    enterprise: enterprise.diagnostics(),
+  }
+  writeFileSync(result.filePath, JSON.stringify(report, undefined, 2) + '\n', { mode: 0o600 })
+  shell.showItemInFolder(result.filePath)
+}
+
+/** Actions the settings surfaces offer in enterprise mode. */
+async function enterpriseAction(action: unknown): Promise<{ ok: boolean; error?: string }> {
+  if (action === 'use-organisation' && !enterprise.active()) { await switchPersonalMode(false); return { ok: true } }
+  if (!enterprise.active()) return { ok: false, error: 'not managed' }
+  if (action === 'sync') {
+    if (enterprise.source.kind !== 'server') return { ok: false, error: localeChinese() ? '文件模式的配置由 IT 放在本机，修改后重启客户端生效' : 'File-mode configuration is read at start-up; restart the client after IT updates it' }
+    await enterprise.checkNow()
+    return { ok: true }
+  }
+  if (action === 'diagnostics') { await exportDiagnostics(); return { ok: true } }
+  if (action === 'sign-out') { await signOutOfOrganisation(); return { ok: true } }
+  if (action === 'use-personal') { await switchPersonalMode(true); return { ok: true } }
+  return { ok: false, error: 'unknown action' }
+}
+
+async function enterpriseSkills(): Promise<{ ok: boolean; skills?: unknown; error?: string }> {
+  try {
+    return { ok: true, skills: await enterprise.companySkills() }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function setEnterpriseSkill(value: unknown): Promise<{ saved: boolean; error?: string; skills?: unknown }> {
+  const request = value !== null && typeof value === 'object' ? value as { id?: unknown; installed?: unknown } : {}
+  if (typeof request.id !== 'string' || typeof request.installed !== 'boolean') return { saved: false, error: 'invalid request' }
+  try {
+    return { saved: true, skills: await enterprise.setCompanySkill(request.id, request.installed) }
+  } catch (error) {
+    return { saved: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * Personal mode on an enrolled machine that allows it, or back. Either way
+ * the client restarts: runtime, data home and policy are chosen at start-up.
+ * Nothing is deleted — the organisation's data home waits for the return.
+ */
+async function switchPersonalMode(personal: boolean, confirm = true): Promise<void> {
+  const organization = enterprise.personalOption()
+  if (organization === undefined) return
+  const chinese = localeChinese()
+  if (confirm) {
+    const answer = await dialog.showMessageBox({
+      type: 'question',
+      buttons: personal ? [chinese ? '改用个人模式' : 'Use Personal Mode', chinese ? '取消' : 'Cancel'] : [chinese ? '切换并登录' : 'Switch and Sign In', chinese ? '取消' : 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      message: personal
+        ? (chinese ? '改用个人模式？' : 'Use personal mode?')
+        : (chinese ? '使用 ' + organization + ' 账号登录？' : 'Sign in to ' + organization + '?'),
+      detail: personal
+        ? (chinese ? '客户端会重启，之后使用你自己的模型 Key 和个人数据目录，不再应用组织配置。组织的会话和配置原样保留，随时可以从托盘菜单或桌面设置切回来。' : 'The client restarts and uses your own model key and personal data directory, without the organisation configuration. The organisation\'s sessions and configuration are kept; switch back any time from the tray or Desktop settings.')
+        : (chinese ? '客户端会重启并回到企业账号。你的个人会话和设置原样保留。' : 'The client restarts with your organisation account. Your personal sessions and settings are kept.'),
+    })
+    if (answer.response !== 0) return
+  }
+  if (await enterprise.choosePersonal(personal)) restartApp()
+}
+
+async function signOutOfOrganisation(): Promise<void> {
+  const chinese = localeChinese()
+  const answer = await dialog.showMessageBox({
+    type: 'warning',
+    buttons: [chinese ? '退出登录' : 'Sign Out', chinese ? '取消' : 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    message: chinese ? '退出企业账号？' : 'Sign out of your organisation account?',
+    detail: chinese ? '会移除组织下发的模型凭据、插件配置和 Skill，并重启客户端。你的会话记录保留。' : 'This removes the organisation\'s model credentials, plugin settings and skills, then restarts the client. Your sessions are kept.',
+  })
+  if (answer.response !== 0) return
+  await enterprise.signOut()
+  restartApp()
 }
 
 const settingsCommands = createSettingsCommands({
@@ -1585,6 +1881,7 @@ function registerDesktopIpc(): void {
 
 const desktopIpc = createDesktopIpc({
   requestRestart,
+  enterpriseAction,
   bridgeCaller,
   bridgeDenied,
   getStatusJson,
@@ -1592,7 +1889,7 @@ const desktopIpc = createDesktopIpc({
   localeChinese,
   confirmSensitiveAction,
   currentTarget,
-  requestSmartRuntimesSave: settingsCommands.requestSmartRuntimesSave,
+  requestSmartRuntimesSave,
   requestLocalWebPortSave,
   selectedDshDataMode,
   requestDshDataModeSave,
@@ -1603,6 +1900,8 @@ const desktopIpc = createDesktopIpc({
   localDocumentCaller,
   retryConnection,
   useSmartFromLocalDocument,
+  personalFromGate: () => { void switchPersonalMode(true) },
+  diagnosticsFromGate: () => { void exportDiagnostics() },
   getDesktopUpdater: () => desktopUpdater,
   updateStateForCaller,
   installDesktopUpdate,
@@ -1644,6 +1943,7 @@ const updateController = createUpdateController({
   getWebUiEverLoaded: () => webUiEverLoaded,
   confirmClose: confirmSettingsClose,
   stopRuntimeForUpdate: () => connection.stop(true),
+  managedUpdates: () => enterprise.managedUpdates(),
 })
 function resetPageAppearance(): void {
   return windowTheme.resetPageAppearance()
@@ -1713,6 +2013,13 @@ if (process.platform === 'linux') {
   app.enableSandbox()
 }
 
+// Chromium's own data (the official UI's local storage, cookies, the window
+// session) has always lived under appData/dsh-desktop, named after the old
+// package name. Keep it there across the rename to DSH Desktop Pro so nobody
+// loses state; an explicit --user-data-dir (tests, demos) still wins.
+if (!app.commandLine.hasSwitch('user-data-dir')) {
+  app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop'))
+}
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -1749,10 +2056,11 @@ if (!gotLock) {
     // Freeze this process on one DSH_HOME. A setting change is persisted for
     // the successor, while the old runtime's shutdown still clears the lock
     // and plugin seat belonging to the home it actually used.
-    activeDshDataMode = selectedDshDataMode()
-    activeDshHome = devOverride('DSH_HOME')
-      ?? dshHomeForMode(activeDshDataMode, homedir(), clientHome())
-    app.setName('DSH Desktop')
+    activeDshDataMode = enterprise.active() ? 'isolated' : selectedDshDataMode()
+    activeDshHome = enterprise.active()
+      ? enterprise.dshHome()
+      : devOverride('DSH_HOME') ?? dshHomeForMode(activeDshDataMode, homedir(), clientHome())
+    app.setName('DSH Desktop Pro')
     // Installed Windows notifications must match electron-builder's shortcut
     // identity. Development has no such shortcut, so use Electron's documented
     // process.execPath identity (the Electron executable may still need to be
@@ -1849,7 +2157,7 @@ if (!gotLock) {
     // After the locale watcher: the notice's wording follows the Web UI's
     // language setting, and this is the first point where that is settled.
     updateController.scheduleLegacyBundleNotice()
-    powerMonitor.on('resume', () => { scheduleWindowHealthCheck('system resume', 3_000) })
+    powerMonitor.on('resume', () => { scheduleWindowHealthCheck('system resume', 3_000); void enterprise.checkNow() })
     windowHealthTimer = setInterval(() => { void recoverBlankWindow('periodic health check') }, WINDOW_HEALTH_INTERVAL_MS)
     windowHealthTimer.unref()
     updateController.schedulePeriodicAutoUpdateChecks()
@@ -1858,7 +2166,7 @@ if (!gotLock) {
     boot()
     app.on('activate', showMainWindow)
   }).catch((error: unknown) => {
-    dialog.showErrorBox('DSH Desktop', '桌面客户端启动失败。\n' + (error instanceof Error ? error.message : String(error)))
+    dialog.showErrorBox('DSH Desktop Pro', '桌面客户端启动失败。\n' + (error instanceof Error ? error.message : String(error)))
     app.quit()
   })
 

@@ -39,6 +39,8 @@ interface Options {
   getWebUiEverLoaded: () => boolean
   confirmClose: () => Promise<boolean>
   stopRuntimeForUpdate: () => Promise<void>
+  /** An organisation's update settings: an intranet feed, or no automatic checks. */
+  managedUpdates?: () => { feedUrl?: string; autoCheck?: boolean } | undefined
 }
 
 export function createUpdateController(services: Options) {
@@ -109,7 +111,7 @@ export function createUpdateController(services: Options) {
     return new DesktopUpdater({
       fetchImpl: updaterFetch,
       currentVersion: desktopClientVersion(),
-      feedUrl: defaultUpdateFeedUrl(allowEnvOverrides),
+      feedUrl: services.managedUpdates?.()?.feedUrl ?? defaultUpdateFeedUrl(allowEnvOverrides),
       githubApiUrl: defaultGithubApiUrl(allowEnvOverrides),
       allowEnvOverrides,
       platform: process.platform,
@@ -354,7 +356,7 @@ export function createUpdateController(services: Options) {
         : busyPhase === 'installing' ? copy.installing : copy.restart
       const options: Electron.MessageBoxOptions = {
         type: 'info',
-        title: 'DSH Desktop',
+        title: 'DSH Desktop Pro',
         message: busyMessage,
         buttons: ['OK'],
       }
@@ -382,7 +384,7 @@ export function createUpdateController(services: Options) {
     const unsupported = answer === 'unsupportedPlatform'
     const options: Electron.MessageBoxOptions = {
       type: answer === 'failed' ? 'error' : 'info',
-      title: 'DSH Desktop',
+      title: 'DSH Desktop Pro',
       message: answer === 'failed' ? copy.failed : answer === 'downloaded' ? linuxDownloadInstructions(state.info?.fileName, localeChinese()) : unsupported ? copy.unsupported : copy.latest,
       ...state.error !== null && { detail: state.error },
       ...unsupported && { detail: copy.unsupportedDetail, defaultId: 0, cancelId: 1 },
@@ -452,7 +454,7 @@ export function createUpdateController(services: Options) {
 
 
   /**
-   * The bundle this client installed as before it was renamed to "DSH Desktop".
+   * The bundle this client installed as before it was renamed to "DSH Desktop Pro".
    *
    * A macOS update is a Finder drag, and Finder replaces by FILE NAME — so the
    * first release carrying the new name lands BESIDE the old bundle instead of
@@ -498,13 +500,13 @@ export function createUpdateController(services: Options) {
     const chinese = localeChinese()
     const options: Electron.MessageBoxOptions = {
       type: 'info',
-      title: 'DSH Desktop',
+      title: 'DSH Desktop Pro',
       message: chinese ? '「应用程序」里还留着旧版本' : 'An older copy is still in Applications',
       detail: chinese
-        ? '本客户端已更名为「DSH Desktop」，你正在运行的就是它。\n'
+        ? '本客户端已更名为「DSH Desktop Pro」，你正在运行的就是它。\n'
         + '更名前的「DeepSeek Harness Desktop」还留在「应用程序」里，可以删掉了——'
         + '两者共用同一份设置和会话记录，删除旧的不会丢任何数据。'
-        : 'This client is now called DSH Desktop, and that is what you are running.\n'
+        : 'This client is now called DSH Desktop Pro, and that is what you are running.\n'
         + 'The pre-rename “DeepSeek Harness Desktop” is still in Applications and can be '
         + 'deleted — both read the same settings and conversations, so removing the old '
         + 'copy loses nothing.',
@@ -551,6 +553,7 @@ export function createUpdateController(services: Options) {
   function scheduleAutoUpdateCheck(): void {
     const desktopUpdater = services.getDesktopUpdater()
     if (autoUpdateCheckScheduled || desktopUpdater === undefined || !desktopUpdater.shouldAutoCheck()) return
+    if (services.managedUpdates?.()?.autoCheck === false) return
     autoUpdateCheckScheduled = true
     setTimeout(() => {
       autoUpdateCheckScheduled = false

@@ -56,7 +56,7 @@ interface PresetRecord { offered?: unknown }
 interface ProfileManifest { dsh?: { profile?: { bundles?: unknown } } }
 
 /** `!!js` expressions are opaque strings here; only the structure matters. */
-const PATCH_SCHEMA = DEFAULT_SCHEMA.extend([
+export const PATCH_SCHEMA = DEFAULT_SCHEMA.extend([
   new Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: (data: unknown) => String(data) }),
   new Type('tag:yaml.org,2002:js', { kind: 'mapping', construct: (data: unknown) => data }),
   new Type('tag:yaml.org,2002:js', { kind: 'sequence', construct: (data: unknown) => data }),
@@ -98,7 +98,7 @@ function recordOffered(dshHome: string, url: string): void {
   writeAtomic(join(dshHome, PRESET_RECORD_FILE), JSON.stringify({ offered: [...offered, url] }, undefined, 2) + '\n')
 }
 
-function parsePatch(source: string): unknown {
+export function parsePatch(source: string): unknown {
   return load(source, { schema: PATCH_SCHEMA }) ?? []
 }
 
@@ -113,7 +113,7 @@ function patchConfiguresMarket(entries: readonly unknown[]): boolean {
 }
 
 function marketRowBlock(url: string): string {
-  return '# Added once by DSH Desktop: the curated plugin index for the Discover page.\n'
+  return '# Added once by DSH Desktop Pro: the curated plugin index for the Discover page.\n'
     + '# Remove the index in Plugins → Discover → Manage sources; it will not be added again.\n'
     + '- id: ' + MARKET_ROW_ID + '\n'
     + '  name: "' + MARKET_ROW_NAME + '"\n'

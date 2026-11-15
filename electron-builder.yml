@@ -1,5 +1,5 @@
 appId: io.github.bruc3van.dsh-desktop
-productName: DSH Desktop
+productName: DSH Desktop Pro
 copyright: Copyright © 2026 bruc3van
 
 directories:
@@ -29,6 +29,9 @@ extraResources:
     to: runtime-launcher.mjs
   - from: .build/dsh-cli.mjs
     to: dsh-cli.mjs
+  # Loaded by DSH from a managed profile's patch layer (organisation tool policy).
+  - from: .build/policy-plugin.mjs
+    to: policy-plugin.mjs
 
 asar: true
 npmRebuild: false
@@ -36,7 +39,7 @@ npmRebuild: false
 # keeps release time bounded; maximum compression made Windows packaging spend
 # long periods without progress output for a modest download-size saving.
 compression: normal
-artifactName: dsh-desktop-${version}-${os}-${arch}.${ext}
+artifactName: dsh-desktop-pro-${version}-${os}-${arch}.${ext}
 
 linux:
   executableName: dsh-desktop
@@ -79,7 +82,7 @@ deb:
     - libasound2t64 | libasound2
     - apparmor
   fpm:
-    - resources/linux-package-type=/opt/DSH Desktop/resources/package-type
+    - resources/linux-package-type=/opt/DSH Desktop Pro/resources/package-type
 
 # Legacy AppImage desktop entries otherwise add --no-sandbox by default.
 appImage:
@@ -146,7 +149,7 @@ mac:
       The Harness Agent needs project files stored on network volumes.
 
 dmg:
-  title: DSH Desktop ${version}
+  title: DSH Desktop Pro ${version}
   writeUpdateInfo: false
 
 win:

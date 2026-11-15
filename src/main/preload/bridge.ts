@@ -30,6 +30,22 @@ export interface ConnectionStatus {
   dshDataFallbackReason?: 'plugin-compatibility'
   dshDataFallbackPlugin?: string
   dshDataFallbackPlugins?: string[]
+  /** Organisation management; `personal` when the client is not managed. */
+  enterprise?: {
+    mode: 'personal' | 'file' | 'server' | 'invalid'
+    organization?: string
+    user?: string
+    revision?: number
+    offline?: boolean
+    lastCheckedAt?: number
+    managedFile?: string
+    updates?: { feedManaged: boolean; autoCheck?: boolean }
+    /** Personal mode on an enrolled machine: the organisation to return to. */
+    available?: string
+    /** The organisation lets this person switch to personal mode. */
+    personalAllowed?: boolean
+    problems: string[]
+  }
 }
 
 /** The connection bridge: read/save the Web UI origin through the main process. */
@@ -45,6 +61,9 @@ export const connection = {
     }>,
   switchMode: (): Promise<{ switched: boolean; mode?: 'smart' | 'connect'; error?: string }> =>
     ipcRenderer.invoke('desktop:connection:switch') as Promise<{ switched: boolean; mode?: 'smart' | 'connect'; error?: string }>,
+  /** Organisation actions in enterprise mode: sync now, export diagnostics, sign out. */
+  enterpriseAction: (action: 'sync' | 'diagnostics' | 'sign-out' | 'use-personal' | 'use-organisation'): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('desktop:enterprise:action', action) as Promise<{ ok: boolean; error?: string }>,
   /** An official Web UI answering on the default port right now, if any. */
   probeLocal: (): Promise<{ url: string | null }> =>
     ipcRenderer.invoke('desktop:connection:probe') as Promise<{ url: string | null }>,
@@ -124,6 +143,10 @@ const local = {
   quit: (): void => { ipcRenderer.send('desktop:local:quit') },
   /** Leave a pinned address for Smart mode, from the failure surface. */
   useSmart: (): void => { ipcRenderer.send('desktop:local:use-smart') },
+  /** Organisation gate: personal mode, when the enrollment allows it. */
+  personal: (): void => { ipcRenderer.send('desktop:local:personal') },
+  /** Organisation gate: save a support bundle for IT. */
+  diagnostics: (): void => { ipcRenderer.send('desktop:local:diagnostics') },
 }
 
 const notificationFallback = {

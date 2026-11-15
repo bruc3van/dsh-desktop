@@ -2,7 +2,7 @@ export const ENHANCE_ID = 'dsh-desktop-enhance'
 export const UPDATE_ID = 'dsh-desktop-update'
 export const DESKTOP_TAB_ID = 'dsh-desktop-tab'
 export const DESKTOP_PANEL_ID = 'dsh-desktop-panel'
-export const RELEASES_PAGE_URL = 'https://github.com/bruc3van/dsh-desktop/releases'
+export const RELEASES_PAGE_URL = 'https://github.com/bruc3van/dsh-desktop-pro/releases'
 
 /**
  * The "open the releases page" glyph, beside 检查更新. An in-app download can

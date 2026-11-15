@@ -142,19 +142,19 @@ export function folderAccessMessage(denied: readonly DeniedFolder[], chinese: bo
   if (chinese) {
     const labels = denied.map(entry => FOLDER_LABELS[entry.folder].zh).join('、')
     return {
-      message: '系统阻止了 DSH Desktop 访问' + labels,
+      message: '系统阻止了 DSH Desktop Pro 访问' + labels,
       detail: '工作区「' + workspaces.join('」「') + '」位于' + labels + '中，Agent 目前无法读取其中的文件。\n\n'
-        + '打开「系统设置 → 隐私与安全性 → 文件和文件夹」，在 DSH Desktop 下打开对应开关即可恢复。',
+        + '打开「系统设置 → 隐私与安全性 → 文件和文件夹」，在 DSH Desktop Pro 下打开对应开关即可恢复。',
       buttons: ['打开系统设置', '稍后'],
       checkboxLabel: '不再提醒',
     }
   }
   const labels = denied.map(entry => FOLDER_LABELS[entry.folder].en).join(', ')
   return {
-    message: 'macOS is blocking DSH Desktop from ' + labels,
+    message: 'macOS is blocking DSH Desktop Pro from ' + labels,
     detail: 'The workspace ' + workspaces.map(name => '“' + name + '”').join(', ') + ' is in ' + labels
       + ', so the Agent cannot read its files.\n\n'
-      + 'Open System Settings → Privacy & Security → Files & Folders and turn on the matching switch under DSH Desktop.',
+      + 'Open System Settings → Privacy & Security → Files & Folders and turn on the matching switch under DSH Desktop Pro.',
     buttons: ['Open System Settings', 'Later'],
     checkboxLabel: 'Don’t remind me again',
   }

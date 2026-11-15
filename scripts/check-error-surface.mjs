@@ -99,9 +99,9 @@ try {
   const settings = await app.waitForEvent('window', { timeout: 10_000 }).catch(() => null)
   // Either spelling of the title: the settings page follows the client
   // locale, and the runner's locale is not this check's business.
-  const settingsTitle = settings === null ? null : await settings.locator('.page-title').innerText()
+  const settingsTitle = settings === null ? null : await settings.waitForLoadState('domcontentloaded').then(() => settings.title())
   check('the settings seat opens the desktop settings window',
-    settingsTitle === 'DSH Desktop 设置' || settingsTitle === 'DSH Desktop settings', String(settingsTitle))
+    settingsTitle === 'DSH Desktop Pro 设置' || settingsTitle === 'DSH Desktop Pro settings', String(settingsTitle))
   check('the data environment choices are present', settings !== null
     && await settings.locator('#data-shared').count() === 1
     && await settings.locator('#data-isolated').count() === 1)
@@ -117,7 +117,7 @@ try {
     ? null
     : await settings.locator('#update-page').getAttribute('href').catch(() => null)
   check('the update section links to the releases page',
-    releasesHref === 'https://github.com/bruc3van/dsh-desktop/releases', String(releasesHref))
+    releasesHref === 'https://github.com/bruc3van/dsh-desktop-pro/releases', String(releasesHref))
   await settings?.close().catch(() => {})
 
   // Retry must re-run the connection rather than stall on the loading

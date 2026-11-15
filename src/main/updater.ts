@@ -172,11 +172,11 @@ function envMs(name: string, fallback: number, allow: boolean): number {
   const parsed = Number(raw)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
-const DEFAULT_FEED_URL = 'https://github.com/bruc3van/dsh-desktop/releases/latest/download/latest.json'
-const DEFAULT_GITHUB_API = 'https://api.github.com/repos/bruc3van/dsh-desktop/releases/latest'
+const DEFAULT_FEED_URL = 'https://github.com/bruc3van/dsh-desktop-pro/releases/latest/download/latest.json'
+const DEFAULT_GITHUB_API = 'https://api.github.com/repos/bruc3van/dsh-desktop-pro/releases/latest'
 
 /** Where a person goes when the in-app download cannot reach the assets host. */
-export const RELEASES_PAGE_URL = 'https://github.com/bruc3van/dsh-desktop/releases'
+export const RELEASES_PAGE_URL = 'https://github.com/bruc3van/dsh-desktop-pro/releases'
 
 const GITHUB_DOWNLOAD_HOSTS = new Set([
   'github.com',
@@ -860,14 +860,15 @@ function githubReleaseToFeed(release: GithubRelease, key: string): FeedWithSums 
   const expectedExt = key.startsWith('win') ? 'exe' : key.startsWith('linux-deb-') ? 'deb' : key.startsWith('linux') ? 'AppImage' : 'dmg'
   const assetKey = key === 'linux-deb-x64' ? 'linux-amd64'
     : key === 'linux-x64' ? 'linux-x86_64' : key.replace('linux-deb-', 'linux-')
-  const expectedName = `dsh-desktop-${version}-${assetKey}.${expectedExt}`
+  // Releases before the rename to DSH Desktop Pro used the shorter prefix.
+  const expectedNames = [`dsh-desktop-pro-${version}-${assetKey}.${expectedExt}`, `dsh-desktop-${version}-${assetKey}.${expectedExt}`]
   let downloadUrl: string | undefined
   let sumsUrl: string | undefined
   for (const item of assets) {
     if (item === null || typeof item !== 'object') continue
     const asset = item as GithubReleaseAsset
     if (typeof asset.name !== 'string' || typeof asset.browser_download_url !== 'string') continue
-    if (asset.name === expectedName) downloadUrl = asset.browser_download_url
+    if (expectedNames.includes(asset.name) && downloadUrl === undefined) downloadUrl = asset.browser_download_url
     if (asset.name === 'SHA256SUMS.txt') sumsUrl = asset.browser_download_url
   }
   if (downloadUrl === undefined) return undefined
@@ -913,7 +914,7 @@ async function fetchValidated(
 
 function requestHeaders(version: string): Record<string, string> {
   return {
-    'user-agent': 'dsh-desktop/' + version + ' (+https://github.com/bruc3van/dsh-desktop)',
+    'user-agent': 'dsh-desktop-pro/' + version + ' (+https://github.com/bruc3van/dsh-desktop-pro)',
     accept: 'application/json,application/octet-stream;q=0.9,*/*;q=0.8',
   }
 }

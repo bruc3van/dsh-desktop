@@ -17,5 +17,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src", "scripts"]
+  "include": ["src", "scripts", "packages/*/src", "apps/*/src"]
 }

@@ -134,6 +134,14 @@ jobs:
       - name: 验证预置插件订阅 / Verify preset plugin subscription
         run: pnpm run check:preset-subscription
 
+      - name: 验证企业协议、对账与服务端 / Verify enterprise protocol, reconciler and server
+        run: |
+          pnpm run check:protocol
+          pnpm run check:enterprise
+          pnpm run check:server
+          pnpm run check:gateway
+          pnpm run check:market
+
       # The pure-Node contract checks are offline, fast, and assert exactly the
       # invariants a release must not break (single-writer lock, platform
       # resolution). They used to run nowhere. The updater contract check also
@@ -187,13 +195,13 @@ jobs:
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
-              --title "DSH Desktop $RELEASE_TAG" \
+              --title "DSH Desktop Pro $RELEASE_TAG" \
               --notes-file release-notes.md
             echo "Release $RELEASE_TAG 已存在，正文已刷新 / already exists; notes refreshed"
             exit 0
           fi
 
-          FLAGS=(--draft --verify-tag --title "DSH Desktop $RELEASE_TAG" --notes-file release-notes.md)
+          FLAGS=(--draft --verify-tag --title "DSH Desktop Pro $RELEASE_TAG" --notes-file release-notes.md)
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             FLAGS+=(--prerelease)
           fi

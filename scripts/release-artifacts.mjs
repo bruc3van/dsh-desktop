@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url'
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 
 /** Mirrors electron-builder.yml `artifactName`; asserted equal by the check below. */
-export const ARTIFACT_NAME_TEMPLATE = 'dsh-desktop-${version}-${os}-${arch}.${ext}'
+export const ARTIFACT_NAME_TEMPLATE = 'dsh-desktop-pro-${version}-${os}-${arch}.${ext}'
 
 /**
  * Every artifact the release matrix produces, in the order the download table
@@ -44,7 +44,7 @@ export const RELEASE_TARGETS = [
 
 /** The file electron-builder produces for one target at one version. */
 export function artifactName(version, target) {
-  return 'dsh-desktop-' + version + '-' + target.os + '-' + target.arch + '.' + target.ext
+  return 'dsh-desktop-pro-' + version + '-' + target.os + '-' + target.arch + '.' + target.ext
 }
 
 /** Look up a target by its latest.json platform key. */
@@ -59,8 +59,8 @@ export function targetForKey(key) {
 export function parseArtifactName(name) {
   for (const target of RELEASE_TARGETS) {
     const suffix = '-' + target.os + '-' + target.arch + '.' + target.ext
-    if (!name.startsWith('dsh-desktop-') || !name.endsWith(suffix)) continue
-    const version = name.slice('dsh-desktop-'.length, name.length - suffix.length)
+    if (!name.startsWith('dsh-desktop-pro-') || !name.endsWith(suffix)) continue
+    const version = name.slice('dsh-desktop-pro-'.length, name.length - suffix.length)
     if (version === '') continue
     return { version, target }
   }

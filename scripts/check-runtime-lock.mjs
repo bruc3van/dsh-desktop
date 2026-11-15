@@ -224,8 +224,8 @@ const server = createServer((request, response) => {
       notes: 'fixture',
       platforms: {
         'mac-arm64': {
-          url: origin + '/dsh-desktop-9.9.9-mac-arm64.dmg',
-          fileName: 'dsh-desktop-9.9.9-mac-arm64.dmg',
+          url: origin + '/dsh-desktop-pro-9.9.9-mac-arm64.dmg',
+          fileName: 'dsh-desktop-pro-9.9.9-mac-arm64.dmg',
           sha256: served.sha256,
           size: served.body.length,
         },
@@ -255,7 +255,7 @@ function makeUpdater() {
       // Recorded here rather than in the stub so the assertion sees the hook's
       // position relative to the download that precedes it.
       events.push('stop-runtime')
-      if (!existsSync(join(work, 'downloads', 'dsh-desktop-9.9.9-mac-arm64.dmg'))) {
+      if (!existsSync(join(work, 'downloads', 'dsh-desktop-pro-9.9.9-mac-arm64.dmg'))) {
         throw new Error('the runtime was stopped before the installer had been downloaded')
       }
     },
