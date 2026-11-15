@@ -2,14 +2,14 @@
 
 [中文](development.zh.md)
 
-This document collects the developer-facing content moved out of the README: running from source, development and verification, releasing, and project status. For installation, usage, and connection behavior see the [README](../README_EN.md); for the process model, trust boundary, and design decisions see [Desktop client architecture](desktop-client-architecture.md).
+This document collects the developer-facing content moved out of the README: running from source, development and verification, releasing, and project status. For installation, usage, and connection behavior see the [user guide](user-guide.md); for the process model, trust boundary, and design decisions see [Desktop client architecture](desktop-client-architecture.md).
 
 ## Run from source
 
 Source development requires Node.js `^22.19.0 || >=24.0.0` and [pnpm](https://pnpm.io/). A separate `dsh` installation is not required.
 
 ```sh
-git clone https://github.com/bruc3van/dsh-desktop.git
+git clone https://github.com/bruc3van/dsh-desktop-pro.git
 cd dsh-desktop
 pnpm install
 pnpm run dev          # builds and prepares the separated offline runtime payload
@@ -26,7 +26,7 @@ Each of those four sources can be turned off independently in Connection setting
 
 Steps 2 and 3 run on **your own Node** and use only packages that are **already present** — nothing is downloaded, and Node.js is never installed for you; an empty cache is simply skipped. The client reads the cached package's `package.json` to confirm it really is `@deepseek-ai/dsh` and to report its true version, so nothing else sitting at that path can be launched by mistake. The npx cache never updates itself: when the cached version is older than the bundled runtime the client still prefers your cache, but says so in the connection settings — re-running `npx @deepseek-ai/dsh web` once refreshes the cache to the latest release.
 
-What gets started is always a plain background service (automatic mode tries port 3080, then 13080, then `dsh web --port 0`; Connection settings can instead pin a port) — rc.8 and newer get `--no-open`, so not a browser window — and the client shuts it down when you quit. If the chosen runtime fails to start, the client walks the remaining enabled sources (the bundled runtime last, when it is still enabled). A pinned port that is already taken is not replaced, and the source ladder is not walked against the same dead bind. Connection settings show which runtime is in use (installed / npx cache / bundled) and its version. The bundled safe marketplace is offered when the client starts a verifiable official CLI with compatible dependencies, including recognized PATH and npx installations (reused instances and pinned addresses are read-only); see [Development and verification](#development-and-verification) and the README's [bundled safe marketplace](../README_EN.md#the-bundled-safe-marketplace) section.
+What gets started is always a plain background service (automatic mode tries port 3080, then 13080, then `dsh web --port 0`; Connection settings can instead pin a port) — rc.8 and newer get `--no-open`, so not a browser window — and the client shuts it down when you quit. If the chosen runtime fails to start, the client walks the remaining enabled sources (the bundled runtime last, when it is still enabled). A pinned port that is already taken is not replaced, and the source ladder is not walked against the same dead bind. Connection settings show which runtime is in use (installed / npx cache / bundled) and its version. The preset plugin subscription applies only when the client starts the runtime itself (reused instances and custom addresses are left untouched); see the user guide's [preset plugin subscription](user-guide.md#preset-plugin-subscription).
 
 If the bundled runtime cannot start, or you want to use another instance, open **Settings → Desktop settings**. If the page cannot load at all, the startup surface offers **Web UI connection…**.
 
@@ -57,6 +57,15 @@ In addition, `scripts/` contains a family of regression checks for connection an
 
 `pnpm run e2e` needs a valid API key (export `DEEPSEEK_API_KEY=…`, or add one once via 设置 → 凭据). Without one it exits with code 2 on purpose: a skipped live round trip must not look green. It also runs against a throwaway `DSH_HOME`, so it never touches your real sessions. The production window loads the official Web UI; this repository does not maintain a second product renderer. `pnpm run check:updater` drives a local update-feed fixture through check, hash verification, and dismiss.
 
+### Enterprise mode and the management server (development)
+
+- The protocol lives in `packages/protocol` (desired state, signatures, enrollment, profile merge, device proofs) and is shared by client and server. The desktop bundles it with esbuild; the server runs TypeScript directly on Node 24, so only erasable syntax is allowed (no parameter properties, no enums).
+- Client: `src/main/enterprise/` — `managed-source.ts` picks the mode, `reconcile.ts` is the file-only reconciler, `managed-boot.ts` applies it in the launcher, `plugin-sync.ts` installs and removes plugins once the runtime is up, `server-session.ts` handles sign-in and device identity, `controller.ts` ties them together, and `policy-plugin.ts` is the shipped tool-policy plugin (`.build/policy-plugin.mjs`).
+- In development, `DSH_DESKTOP_MANAGED_DIR` points at a temporary directory instead of the system one (packaged builds ignore it).
+- Server: `pnpm run server` (SQLite in `./data` by default); see `deploy/.env.example`, and add `DSH_DEV_LOGIN=1 DSH_BOOTSTRAP_TOKEN=…` for a trial. The console is at `/console/`.
+- Checks: `check:protocol`, `check:enterprise`, `check:server` (set `DSH_CHECK_DATABASE_URL=postgres://…` to run it on PostgreSQL), `check:gateway` (the built-in model gateway), and `check:enterprise-file` / `check:enterprise-server` (file and server mode in a real Electron window, including a first message through the official UI).
+- File-mode signing: `node scripts/org-key.mjs generate|sign`.
+
 ### Preset plugin subscription (development)
 
 - Only a client-managed `dsh web` spawn carries the request (`DSH_DESKTOP_PRESET_SUBSCRIPTION`); `runtime-launcher` handles it before DSH reads the profile. Ordinary `dsh` / `plugin` / `pnpm` shim calls, adopted instances, pinned addresses, and raw CLIs without a verifiable package anchor never edit a profile.
@@ -70,7 +79,7 @@ In addition, `scripts/` contains a family of regression checks for connection an
 
 Linux targets are x64 AppImage and DEB, using Ubuntu 24.04 as the validation baseline. ARM64, RPM, Snap and Flatpak packages are not provided. Other distributions and full GNOME/KDE desktop behavior need separate validation.
 
-Install the DEB with `sudo apt install ./dsh-desktop-<version>-linux-amd64.deb`. The app lives in `/opt/DSH Desktop/` and can be launched with `dsh-desktop` or from the application menu. Its `/etc/apparmor.d/dsh-desktop-deb` profile grants user namespaces only to the installed executable. Quit before upgrading with the same command. `sudo apt remove dsh-desktop` preserves user data in `~/.bruc3van-dsh-desktop` and `~/.dsh`.
+Install the DEB with `sudo apt install ./dsh-desktop-<version>-linux-amd64.deb`. The app lives in `/opt/DSH Desktop Pro/` and can be launched with `dsh-desktop` or from the application menu. Its `/etc/apparmor.d/dsh-desktop-deb` profile grants user namespaces only to the installed executable. Quit before upgrading with the same command. `sudo apt remove dsh-desktop` preserves user data in `~/.bruc3van-dsh-desktop` and `~/.dsh`.
 
 Both packages include Node, pnpm and dsh. Make it executable before launching. On Ubuntu 24.04, install `libfuse2t64` if FUSE 2 is missing, or use `--appimage-extract-and-run`. System graphics libraries and a kernel/system policy allowing Chromium sandboxing are still required; the app does not automatically disable its renderer sandbox.
 
@@ -81,9 +90,9 @@ sudo install -m 0644 dsh-desktop.apparmor /etc/apparmor.d/dsh-desktop
 sudo apparmor_parser -r /etc/apparmor.d/dsh-desktop
 ```
 
-This profile matches only DSH Desktop AppImages in that directory and permits their sandbox namespaces without disabling the system restriction. WSL has different kernel/policy behavior and cannot validate this profile's enforcement on a real Ubuntu desktop. If the system has no configured Documents directory, upstream default-workspace creation may fail; **Choose workspace** can select an existing project folder.
+This profile matches only DSH Desktop Pro AppImages in that directory and permits their sandbox namespaces without disabling the system restriction. WSL has different kernel/policy behavior and cannot validate this profile's enforcement on a real Ubuntu desktop. If the system has no configured Documents directory, upstream default-workspace creation may fail; **Choose workspace** can select an existing project folder.
 
-Closing the window keeps its renderer and background tasks alive. If the desktop has no tray, launching the same AppImage again restores the window. Use **DSH Desktop → Quit** or `Ctrl+Q` to exit. In-app updates download, verify and reveal the new AppImage; quit, manually replace the original file, then reopen it.
+Closing the window keeps its renderer and background tasks alive. If the desktop has no tray, launching the same AppImage again restores the window. Use **DSH Desktop Pro → Quit** or `Ctrl+Q` to exit. In-app updates download, verify and reveal the new AppImage; quit, manually replace the original file, then reopen it.
 
 Build on a native Linux filesystem with a separate dependency installation:
 
@@ -94,7 +103,7 @@ DSH_RUNTIME_TARGET=linux-x64 corepack pnpm run prepare:runtime
 corepack pnpm exec electron-builder --linux AppImage deb --x64 --publish never
 ```
 
-The artifact is `dsh-desktop-<version>-linux-x86_64.AppImage`; its update-feed key is `linux-x64`. `check:linux` exercises Koffi, Sharp, ripgrep, PTY, Landlock read permissions and real window close/recovery. `smoke:appimage` extracts the actual AppImage and checks its payload, offline plugin installation and AppRun startup, then verifies standalone startup and a menu restart that replaces both the desktop and its managed runtime. It uses extract-and-run by default; set `DSH_SMOKE_APPIMAGE_FUSE=1` to validate FUSE mode. A headless host can use Xvfb and D-Bus:
+The artifact is `dsh-desktop-pro-<version>-linux-x86_64.AppImage`; its update-feed key is `linux-x64`. `check:linux` exercises Koffi, Sharp, ripgrep, PTY, Landlock read permissions and real window close/recovery. `smoke:appimage` extracts the actual AppImage and checks its payload, offline plugin installation and AppRun startup, then verifies standalone startup and a menu restart that replaces both the desktop and its managed runtime. It uses extract-and-run by default; set `DSH_SMOKE_APPIMAGE_FUSE=1` to validate FUSE mode. A headless host can use Xvfb and D-Bus:
 
 ```sh
 xvfb-run -a dbus-run-session -- corepack pnpm run check:linux
@@ -103,7 +112,7 @@ xvfb-run -a dbus-run-session -- corepack pnpm run smoke:appimage
 
 Linux CI runs on PRs, main pushes and manual dispatch, retaining successful test packages as Actions artifacts for 14 days. Automated smoke does not cover model API round trips, a real tray, notification activation, input methods or full Wayland desktop acceptance.
 
-DEB artifacts use `dsh-desktop-<version>-linux-amd64.deb` and the separate `linux-deb-x64` update key. AppImage retains `linux-x64` for older clients. FPM adds a dpkg-owned `resources/package-type` marker only to DEB; the app selects its update format from this marker, not environment variables. DEB updates download and verify the file for manual installation with `apt`, without privilege escalation or stopping tasks.
+DEB artifacts use `dsh-desktop-pro-<version>-linux-amd64.deb` and the separate `linux-deb-x64` update key. AppImage retains `linux-x64` for older clients. FPM adds a dpkg-owned `resources/package-type` marker only to DEB; the app selects its update format from this marker, not environment variables. DEB updates download and verify the file for manual installation with `apt`, without privilege escalation or stopping tasks.
 
 `smoke:deb` only runs on ephemeral GitHub Actions Linux runners because it changes the system package database. It rebuilds the current payload with version `0.0.0` as an upgrade fixture, then checks installation, upgrade, desktop integration, AppArmor loading, the installed runtime/native modules, removal and user-data retention. This exercises the dpkg upgrade path, not compatibility with a historical payload. Native GNOME/KDE, Wayland, notifications and input methods still require desktop acceptance testing.
 

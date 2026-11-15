@@ -181,7 +181,7 @@ export function createPluginRecoveryController(services: Options) {
       else {
         const options: Electron.MessageBoxOptions = {
           type: 'warning',
-          title: 'DSH Desktop',
+          title: 'DSH Desktop Pro',
           message: chinese ? '共享环境中的插件与当前 DSH 不兼容' : 'Plugins in the shared environment are incompatible with this DSH version',
           detail: (canRemove
             ? (chinese
@@ -250,7 +250,7 @@ export function createPluginRecoveryController(services: Options) {
           + (error instanceof Error ? error.message : String(error)))
         await dialog.showMessageBox({
           type: 'error',
-          title: 'DSH Desktop',
+          title: 'DSH Desktop Pro',
           message: chinese ? '未能卸载不兼容插件' : 'Could not remove the incompatible plugins',
           detail: chinese
             ? '卸载可能只完成了一部分。客户端没有切换数据环境；请检查共享环境中的插件状态后重试，或在设置中选择桌面端独立环境。'
@@ -283,7 +283,7 @@ export function createPluginRecoveryController(services: Options) {
       : chinese ? `\n\n问题插件：${plugins.join('、')}` : `\n\nProblem plugins: ${plugins.join(', ')}`
     const options: Electron.MessageBoxOptions = {
       type: 'warning',
-      title: 'DSH Desktop',
+      title: 'DSH Desktop Pro',
       message: chinese ? '已切换到桌面端独立环境' : 'Switched to the isolated desktop environment',
       detail: chinese
         ? '共享环境中的插件与当前 DSH 不兼容，客户端已改用独立数据目录。原来的插件和数据没有删除。\n\n建议重新安装兼容版本；解决兼容问题后，可在设置中切回共享环境。' + pluginDetail

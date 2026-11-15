@@ -1,0 +1,11 @@
+# Only what the management server image needs (see apps/server/Dockerfile).
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!patches
+!dsh-runtime/package.json
+!packages/protocol
+!apps/server
+!apps/console
+**/node_modules

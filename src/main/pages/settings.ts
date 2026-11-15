@@ -7,154 +7,270 @@ const EXTERNAL_LINK_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill=
   + '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>'
   + '<path d="M15 3h6v6"></path><path d="M10 14 21 3"></path></svg>'
 
+/** White glyphs for the sidebar's coloured tiles, drawn on a 20-unit grid. */
+const GLYPH: Record<string, string> = {
+  org: '<path d="M4 17V4.6A1.6 1.6 0 0 1 5.6 3h5.8A1.6 1.6 0 0 1 13 4.6V17M13 8h2.4A1.6 1.6 0 0 1 17 9.6V17M2.5 17h15M7 6.5h3M7 9.5h3M7 12.5h3"/>',
+  connection: '<path d="M8.6 11.4l2.8-2.8M7.2 8.8l-1.9 1.9a2.7 2.7 0 0 0 3.8 3.8l1.9-1.9M12.8 11.2l1.9-1.9a2.7 2.7 0 0 0-3.8-3.8L9 7.4"/>',
+  data: '<ellipse cx="10" cy="5.6" rx="5.4" ry="2.2"/><path d="M4.6 5.6v8.8c0 1.2 2.4 2.2 5.4 2.2s5.4-1 5.4-2.2V5.6M4.6 10c0 1.2 2.4 2.2 5.4 2.2s5.4-1 5.4-2.2"/>',
+  skills: '<path d="M4 15.4V4.6A1.6 1.6 0 0 1 5.6 3H16v11.4H5.6A1.6 1.6 0 0 0 4 16a1.6 1.6 0 0 0 1.6 1.6H16M7.5 6.5h5M7.5 9.5h3.5"/>',
+  updates: '<circle cx="10" cy="10" r="6.6"/><path d="M10 6.6v6.4M7.3 10.4 10 13.1l2.7-2.7"/>',
+}
+
+function glyph(name: string): string {
+  return '<span class="tile tile-' + name + '" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="#fff" stroke-width="1.6"'
+    + ' stroke-linecap="round" stroke-linejoin="round">' + GLYPH[name] + '</svg></span>'
+}
+
+/**
+ * The desktop settings window, laid out like macOS System Settings: a sidebar
+ * of panes on the left, and on the right one pane at a time made of grouped
+ * rows — the label on the left, its control on the right.
+ */
 export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
   // Plain text, not escaped: every value below is a literal written here, and
   // none of them contains a character HTML or an attribute would read.
   const h = (zh: string, en: string): string => chinese ? zh : en
+  const nav = (pane: string, label: string, hidden = false): string =>
+    '<button type="button" class="nav-item" data-pane="' + pane + '" id="nav-' + pane + '"' + (hidden ? ' hidden' : '') + '>'
+    + glyph(pane) + '<span>' + label + '</span></button>'
+  const actionRow = (label: string, help: string, control: string): string =>
+    '<div class="row action-row"><div class="row-text"><div class="row-label">' + label + '</div><div class="row-help">' + help + '</div></div>'
+    + '<div class="row-end">' + control + '</div></div>'
   return '<!doctype html><html lang="' + (chinese ? 'zh-CN' : 'en') + '"><head><meta charset="utf-8">'
-    + '<title>' + h('DSH Desktop 设置', 'DSH Desktop settings') + '</title>'
+    + '<title>' + h('DSH Desktop Pro 设置', 'DSH Desktop Pro settings') + '</title>'
     + '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; img-src data:; style-src \'unsafe-inline\'">'
     + '<meta name="color-scheme" content="light dark">'
-    + '<style>:root{color-scheme:light dark}'
+    + '<style>'
+    + ':root{color-scheme:light dark;--text:#1d1d1f;--muted:#6e6e73;--faint:#98989d;--accent:#007aff;--danger:#d70015;--ok:#248a3d;--warn:#b25000;'
+    + '--sidebar:#ebebed;--sidebar-line:#d9d9dc;--content:#f5f5f7;--group:#fff;--sep:#e5e5ea;--hover:rgba(0,0,0,.05);--selected:rgba(0,0,0,.09);'
+    + '--btn:#fff;--btn-line:rgba(0,0,0,.14);--field:#fff;--field-line:rgba(0,0,0,.16)}'
+    + '@media(prefers-color-scheme:dark){:root{--text:#f5f5f7;--muted:#a1a1a6;--faint:#7c7c80;--accent:#0a84ff;--danger:#ff453a;--ok:#30d158;--warn:#ff9f0a;'
+    + '--sidebar:#252527;--sidebar-line:#38383a;--content:#1c1c1e;--group:#2c2c2e;--sep:#3a3a3c;--hover:rgba(255,255,255,.06);--selected:rgba(255,255,255,.1);'
+    + '--btn:#48484a;--btn-line:rgba(255,255,255,.08);--field:#1c1c1e;--field-line:rgba(255,255,255,.14)}}'
     + '*{box-sizing:border-box;margin:0;padding:0}'
-    + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;font-size:14px;line-height:1.6;background:#fff;color:#0f1115;min-height:100vh;display:flex;justify-content:center;padding:24px 24px 32px}'
-    + '.container{width:100%;max-width:560px}'
-    // Compact settings header using the existing logo and typography.
-    + '.header{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:24px}'
-    + '.mark{display:block;width:36px;height:36px;border-radius:9px;box-shadow:0 6px 16px rgba(15,17,21,.12)}'
-    + '.page-title{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em}'
-    // Section titles with badge
-    + '.section{margin-bottom:24px}'
-    + '.section-title{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:14px;font-weight:500}'
-    + '.section-title .actions{margin-left:auto;margin-top:0}'
-    + '.badge{font-size:11px;font-weight:400;background:#EBEEF2;border-radius:999px;padding:2px 8px;color:#6e7480}'
-    // Text hierarchy
-    + '.status-text{margin:0 0 12px;font-size:13px;color:#6e7480;overflow-wrap:anywhere}'
-    + '.version-text{margin:0 0 4px;font-size:12px;color:#9aa0a6}'
-    // Input
-    + 'input{width:100%;background:#fff;border:1px solid #d8d8d4;border-radius:8px;padding:7px 11px;font-size:13px;font-family:inherit;color:#0f1115;outline:none;transition:border-color .15s ease}'
-    + 'input:focus{border-color:#0f1115}'
-    + 'input::placeholder{color:#9aa0a6}'
-    // Action buttons
-    + '.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}'
-    + '.runtime-picks{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}'
-    + '.custom-row{display:flex;gap:8px;align-items:center;margin-top:12px}'
-    + '.custom-row input{flex:1;min-width:0;width:auto;margin:0}'
-    + 'button{white-space:nowrap;font-weight:400;background:transparent;border:1px solid #d8d8d4;border-radius:28px;padding:6px 18px;font-size:13px;font-family:inherit;color:#0f1115;cursor:pointer;transition:background .15s ease,opacity .15s ease}'
-    + 'button:hover{background:#f5f6f7}'
-    + 'button:disabled{cursor:default;opacity:.5}'
-    + 'button.primary{background:#0f1115;border-color:#0f1115;color:#fff}'
-    + 'button.primary:hover{opacity:.88;background:#0f1115}'
-    // The manual-download seat: a glyph rather than a fourth button, so the
-    // row keeps one primary action and this stays a way out, not a choice.
-    + '.icon-link{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;'
-    + 'border-radius:999px;color:#6e7480;text-decoration:none;transition:background .15s ease,color .15s ease}'
-    + '.icon-link:hover{background:#f5f6f7;color:#0f1115}'
-    + '[hidden]{display:none}'
-    + '.note{margin:8px 0 0;font-size:13px;color:#6e7480}'
+    + 'body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","PingFang SC",sans-serif;font-size:13px;line-height:1.45;'
+    + 'background:var(--content);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased}'
+    + '[hidden]{display:none!important}'
+    // Window: sidebar + one pane. The macOS window draws its traffic lights over
+    // the sidebar, so the top strip there is padding and a drag handle.
+    + '.window{display:grid;grid-template-columns:216px minmax(0,1fr);min-height:100vh}'
+    + '.sidebar{background:var(--sidebar);border-right:1px solid var(--sidebar-line);position:sticky;top:0;height:100vh;overflow-y:auto;padding:14px 10px 16px;display:flex;flex-direction:column}'
+    + 'body.mac .sidebar{padding-top:46px}'
+    + '.drag{position:fixed;top:0;left:0;right:0;height:40px;-webkit-app-region:drag;z-index:0}'
+    + 'body:not(.mac) .drag{display:none}'
+    + 'button,input,a,.nav-item{-webkit-app-region:no-drag}'
+    + '.identity{display:flex;align-items:center;gap:10px;padding:6px 8px 14px;margin-bottom:6px;border-bottom:1px solid var(--sidebar-line)}'
+    + '.identity .mark{width:34px;height:34px;border-radius:8px;flex:none}'
+    + '.identity-name{font-size:13px;font-weight:600;line-height:1.3}'
+    + '.identity-sub{font-size:11.5px;color:var(--muted);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}'
+    + '.nav{display:flex;flex-direction:column;gap:1px}'
+    + '.nav-item{display:flex;align-items:center;gap:9px;width:100%;padding:5px 8px;border:0;border-radius:7px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:default;box-shadow:none;min-height:30px;line-height:1.3}'
+    + '.nav-item:hover{background:var(--hover)}'
+    + '.nav-item[aria-current="page"]{background:var(--selected);font-weight:500}'
+    + '.nav-item:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}'
+    + '.nav-item.attention::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--warn);margin-left:auto}'
+    + '.tile{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;flex:none}'
+    + '.tile svg{width:16px;height:16px}'
+    + '.tile-org{background:linear-gradient(#7d7aff,#5856d6)}.tile-connection{background:linear-gradient(#4aa3ff,#007aff)}'
+    + '.tile-skills{background:linear-gradient(#ffb340,#ff9500)}'
+    + '.tile-data{background:linear-gradient(#4cd471,#28a745)}.tile-updates{background:linear-gradient(#a2a2a7,#7c7c80)}'
+    // Panes
+    + '.panes{min-width:0;padding:0 28px 36px;position:relative;z-index:1}'
+    + '.pane-head{position:sticky;top:0;z-index:2;background:var(--content);padding:14px 0 12px;margin-bottom:6px}'
+    + 'body.mac .pane-head{padding-top:12px;-webkit-app-region:drag}'
+    + '.pane-title{font-size:15px;font-weight:600;letter-spacing:-.01em}'
+    + '.pane{max-width:640px}'
+    + '.group-title{font-size:13px;font-weight:600;margin:20px 0 7px 2px}'
+    + '.group{display:grid;gap:1px;background:var(--sep);border-radius:10px;overflow:hidden;box-shadow:0 0 0 .5px var(--sep)}'
+    + '.row{display:flex;align-items:center;gap:14px;min-height:42px;padding:9px 14px;background:var(--group)}'
+    + '.row-text{flex:1;min-width:0}'
+    + '.row-label{font-size:13px}'
+    + '.row-help{font-size:11.5px;color:var(--muted);margin-top:1px}'
+    + '.row-value{flex:1;min-width:0;text-align:right;color:var(--muted);overflow-wrap:anywhere}'
+    + '.row-end{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;justify-content:flex-end}'
+    + '.row.stack{display:block}'
+    + '.row.stack .row-value{text-align:left;margin-top:3px}'
+    + '.action-row:has(.row-end>button[hidden]){display:none}'
+    + '.caption{font-size:11.5px;color:var(--muted);margin:7px 14px 0;overflow-wrap:anywhere}'
+    + '.caption:empty{display:none}'
+    + '.lead{font-size:12.5px;color:var(--muted);margin:0 2px 14px}'
+    + '.skill-row .row-help{overflow-wrap:anywhere}'
+    + '.empty-row{justify-content:center;color:var(--muted);min-height:64px}'
+    + '.caption.error,.status-text.error{color:var(--danger)}'
+    // Organisation identity
+    + '.org-row{min-height:64px;gap:12px}'
+    + '.monogram{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;flex:none;font-size:18px;font-weight:600;color:#fff;background:linear-gradient(#7d7aff,#5856d6)}'
+    + '.org-name{font-size:14px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}'
+    + '.org-kind{font-size:12px;color:var(--muted)}'
+    + '.state{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap}'
+    + '.state::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}'
+    + '.state.ok{color:var(--ok)}.state.warn{color:var(--warn)}.state.bad{color:var(--danger)}'
+    // Controls: macOS push buttons, text fields and segmented controls.
+    + 'button{font:inherit;font-size:13px;line-height:1;white-space:nowrap;cursor:default;color:var(--text);background:var(--btn);border:.5px solid var(--btn-line);border-radius:6px;padding:5px 11px;min-height:24px;box-shadow:0 .5px 1px rgba(0,0,0,.1)}'
+    + 'button:active{filter:brightness(.95)}'
+    + 'button:disabled{opacity:.45}'
+    + 'button:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:0}'
+    + 'button.primary{background:var(--accent);border-color:transparent;color:#fff}'
+    + 'button.danger{color:var(--danger)}'
+    + 'input{font:inherit;font-size:13px;width:100%;background:var(--field);border:.5px solid var(--field-line);border-radius:6px;padding:4px 8px;min-height:24px;color:var(--text);outline:none;box-shadow:inset 0 .5px 1px rgba(0,0,0,.06)}'
+    + 'input:focus{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 40%,transparent);border-color:var(--accent)}'
+    + 'input::placeholder{color:var(--faint)}'
+    + '.field-row{display:flex;gap:8px;align-items:center;flex:1}'
+    + '.field-row input{flex:1;min-width:0}'
+    + '.icon-link{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;color:var(--muted);text-decoration:none}'
+    + '.icon-link:hover{background:var(--hover);color:var(--text)}'
+    + '.managed-line{color:var(--muted)}'
+    + '.ok-text{color:var(--ok)}.warn-text{color:var(--warn)}'
     + '.path-text{overflow-wrap:anywhere;word-break:break-word}'
-    // Divider
-    + '.divider{border:none;border-top:1px solid #ebeef2;margin:28px 0}'
-    // Download progress
-    + '.progress{height:4px;margin:0 0 10px;border-radius:999px;background:#ebeef2;overflow:hidden}'
-    + '.progress span{display:block;height:100%;width:0;border-radius:999px;background:#0f1115;transition:width .2s ease}'
-    + '.status-text.error{color:#d93f3f}'
-    // Update notes: release Markdown, rendered in the main process. The
-    // stylesheet is shared with the card injected into the Web UI settings.
-    + releaseNotesCss('#update-notes', { text: '#6e7480', strong: '#0f1115', border: '#d8d8d4', surface: '#ebeef2' })
-    // Dark mode
-    + '@media(prefers-color-scheme:dark){body{background:#17181a;color:#f4f5f6}'
-    + '.mark{box-shadow:0 6px 16px rgba(0,0,0,.28)}'
-    + '.badge{background:#2c2e33;color:#818791}'
-    + '.status-text{color:#aeb3bb}.version-text{color:#818791}'
-    + 'input{background:#1e1f22;border-color:#3a3d42;color:#f4f5f6}'
-    + 'input:focus{border-color:#f4f5f6}input::placeholder{color:#5a5e66}'
-    + 'button{border-color:#3a3d42;color:#f4f5f6}button:hover{background:#232529}'
-    + 'button.primary{background:#f4f5f6;border-color:#f4f5f6;color:#17181a}'
-    + 'button.primary:hover{opacity:.88;background:#f4f5f6}'
-    + '.icon-link{color:#aeb3bb}.icon-link:hover{background:#232529;color:#f4f5f6}'
-    + '.note{color:#aeb3bb}.divider{border-color:#2c2e33}'
-    + '.progress{background:#2c2e33}.progress span{background:#f4f5f6}'
-    + '.status-text.error{color:#ff6b6b}'
-    + releaseNotesCss('#update-notes', { text: '#aeb3bb', strong: '#f4f5f6', border: '#3a3d42', surface: '#232529' })
+    + '.tag{display:inline-block;margin-left:6px;padding:0 6px;border-radius:4px;background:var(--hover);color:var(--muted);font-size:11px;font-weight:400;vertical-align:1px}'
+    // Runtime sources: one row per source inside a group.
+    + '#runtime-editor .group button[data-smart-runtime]{display:flex;width:100%;min-height:38px;padding:8px 14px;border-radius:0;background:var(--group)}'
+    + '#runtime-editor .group button[data-smart-runtime]:hover{background:var(--group)}'
+    + '#runtime-editor .group button[data-smart-runtime]::after{left:20px;border-color:#fff}'
+    + '#runtime-editor .group button[data-smart-runtime].primary::before{background:var(--accent);border-color:var(--accent)}'
+    + '.footer-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}'
+    + '.status-text{font-size:12px;color:var(--muted);overflow-wrap:anywhere}'
+    + '.progress{height:4px;border-radius:999px;background:var(--sep);overflow:hidden}'
+    + '.progress span{display:block;height:100%;width:0;border-radius:999px;background:var(--accent);transition:width .2s ease}'
+    + '.notes-box{margin-top:12px;padding:12px 14px;border-radius:10px;background:var(--group);box-shadow:0 0 0 .5px var(--sep)}'
+    + '.app-row .mark{width:44px;height:44px;border-radius:10px;flex:none}'
+    + '.row.stack:not(:has(>:not([hidden]))){display:none}'
+    + releaseNotesCss('#update-notes', { text: '#6e6e73', strong: '#1d1d1f', border: '#d8d8d4', surface: '#ebeef2' })
+    + '@media(prefers-color-scheme:dark){'
+    + releaseNotesCss('#update-notes', { text: '#a1a1a6', strong: '#f5f5f7', border: '#3a3a3c', surface: '#3a3a3c' })
     + '}'
-    + 'body{--choice-text:#0f1115;--choice-muted:#6e7480;--choice-border:#d8d8d4;--choice-surface:#f5f6f7;--choice-inverse:#fff}'
-    + '@media(prefers-color-scheme:dark){body{--choice-text:#f4f5f6;--choice-muted:#aeb3bb;--choice-border:#3a3d42;--choice-surface:#232529;--choice-inverse:#17181a}}'
+    + '#update-notes.notes-box{margin:12px 0 0;max-height:none}'
+    + 'body{--choice-text:#1d1d1f;--choice-muted:#6e6e73;--choice-border:rgba(0,0,0,.12);--choice-surface:rgba(0,0,0,.05);--choice-inverse:#fff}'
+    + '@media(prefers-color-scheme:dark){body{--choice-text:#f5f5f7;--choice-muted:#a1a1a6;--choice-border:rgba(255,255,255,.1);--choice-surface:rgba(255,255,255,.06);--choice-inverse:#636366}}'
     + choiceControlsCss('body', 'primary')
-    // Reduced motion
+    // Segmented controls sit at the end of a row, sized like the macOS ones.
+    + 'body [role="radiogroup"]{border-radius:7px;padding:2px;border:0}'
+    + 'body [role="radiogroup"]>button,body [role="radiogroup"]>button:hover{min-height:22px;padding:2px 14px;border-radius:5px;font-size:12.5px}'
+    // A narrow window keeps the panes, with the sidebar along the top.
+    + '@media(max-width:620px){.window{grid-template-columns:1fr}.sidebar{position:static;height:auto;border-right:0;border-bottom:1px solid var(--sidebar-line)}'
+    + '.nav{flex-direction:row;flex-wrap:wrap}.nav-item{width:auto}.identity{display:none}.panes{padding:0 16px 28px}}'
     + '@media(prefers-reduced-motion:reduce){*{transition:none!important}}'
-    + '</style></head><body><div class="container">'
-    // Header with logo
-    + '<div class="header">' + icon + '<h1 class="page-title">' + h('DSH Desktop 设置', 'DSH Desktop settings') + '</h1></div>'
-    // Connection section
-    + '<div class="section">'
-    + '<div class="section-title">' + h('连接', 'Connection') + '</div>'
-    + '<p class="status-text" id="status">' + h('连接状态读取中…', 'Reading connection status…') + '</p>'
-    + '<div class="runtime-picks" role="radiogroup" aria-label="' + h('连接方式', 'Connection mode') + '">'
+    + '</style></head><body' + (process.platform === 'darwin' ? ' class="mac"' : '') + '><div class="drag" aria-hidden="true"></div><div class="window">'
+    // Sidebar
+    + '<aside class="sidebar"><div class="identity">' + icon
+    + '<div><div class="identity-name">DSH Desktop Pro</div><div class="identity-sub" id="sidebar-mode">' + h('设置', 'Settings') + '</div></div></div>'
+    + '<nav class="nav" aria-label="' + h('设置分类', 'Settings sections') + '">'
+    + nav('org', h('组织', 'Organisation'), true)
+    + nav('skills', h('公司 Skill', 'Company skills'), true)
+    + nav('connection', h('连接', 'Connection'))
+    + nav('data', h('数据环境', 'Data environment'))
+    + nav('updates', h('应用更新', 'App updates'))
+    + '</nav></aside>'
+    + '<main class="panes">'
+    // Organisation pane: shown only when this computer is enrolled.
+    + '<section class="pane" data-pane="org" id="ent-section" hidden>'
+    + '<div class="pane-head"><h1 class="pane-title">' + h('组织', 'Organisation') + '</h1></div>'
+    + '<div class="group"><div class="row org-row"><div class="monogram" id="ent-monogram" aria-hidden="true"></div>'
+    + '<div class="row-text"><div class="org-name" id="ent-org"></div><div class="org-kind" id="ent-kind"></div></div>'
+    + '<span class="state" id="ent-state" hidden></span></div></div>'
+    + '<div class="group" id="ent-facts" style="margin-top:12px"></div>'
+    + '<p class="caption status-text" id="ent-problems" hidden></p>'
+    + '<h2 class="group-title">' + h('操作', 'Actions') + '</h2>'
+    + '<div class="group">'
+    + actionRow(h('企业账号', 'Organisation account'), h('登录后应用组织配置的模型、插件和工具权限。', 'Sign in to use the models, plugins and tool permissions your organisation set up.'),
+      '<button type="button" id="ent-organisation" class="primary" hidden>' + h('使用企业账号登录', 'Sign in to organisation') + '</button>')
+    + actionRow(h('同步配置', 'Sync configuration'), h('组织修改配置后会自动推送到这台电脑。', 'Changes from your organisation arrive on their own.'),
+      '<button type="button" id="ent-sync" hidden>' + h('立即同步', 'Sync now') + '</button>')
+    + actionRow(h('诊断信息', 'Diagnostics'), h('导出日志和配置状态，发给 IT 排查问题。', 'Export logs and configuration state for your IT team.'),
+      '<button type="button" id="ent-diagnostics">' + h('导出诊断信息', 'Export diagnostics') + '</button>')
+    + actionRow(h('个人模式', 'Personal mode'), h('改用自己的模型 Key 和个人数据，组织配置原样保留。', 'Use your own model key and personal data; the organisation configuration is kept.'),
+      '<button type="button" id="ent-personal" hidden>' + h('改用个人模式', 'Use personal mode') + '</button>')
+    + actionRow(h('退出登录', 'Sign out'), h('清除组织下发的配置，对话记录保留。', 'Removes what the organisation installed and keeps your conversations.'),
+      '<button type="button" id="ent-sign-out" class="danger" hidden>' + h('退出企业账号', 'Sign out') + '</button>')
+    + '</div>'
+    + '<p class="caption" id="ent-locked"></p>'
+    + '</section>'
+    // Company skills: the organisation's skill library (server mode, signed in).
+    + '<section class="pane" data-pane="skills" hidden>'
+    + '<div class="pane-head"><h1 class="pane-title">' + h('公司 Skill', 'Company skills') + '</h1></div>'
+    + '<p class="lead">' + h('公司整理好的做事方法。标着「全员」的已经装好；其他的按需安装，装好后在新对话里直接用。', 'Ways of working your organisation has written down. Those marked Everyone are already installed; install the others when you need them and use them in a new conversation.') + '</p>'
+    + '<div class="group" id="skills-list"></div>'
+    + '<p class="caption status-text" id="skills-status"></p>'
+    + '</section>'
+    // Connection pane
+    + '<section class="pane" data-pane="connection">'
+    + '<div class="pane-head"><h1 class="pane-title">' + h('连接', 'Connection') + '</h1></div>'
+    + '<div class="group">'
+    + '<div class="row stack"><div class="row-label">' + h('当前连接', 'Current connection') + '</div><div class="row-value status-text" id="status">' + h('连接状态读取中…', 'Reading connection status…') + '</div></div>'
+    + '<div class="row managed-line" id="managed-connection" hidden></div>'
+    + '<div class="row" id="mode-row"><div class="row-text"><div class="row-label">' + h('连接方式', 'Connection mode') + '</div></div>'
+    + '<div class="row-end"><div class="runtime-picks" id="mode-picks" role="radiogroup" aria-label="' + h('连接方式', 'Connection mode') + '">'
     + '<button type="button" id="mode-smart" class="primary">' + h('智能', 'Smart') + '</button>'
     + '<button type="button" id="mode-custom">' + h('自定义', 'Custom') + '</button>'
+    + '</div></div></div>'
     + '</div>'
     + '<div id="smart-block">'
     + '<div id="runtime-editor">'
-    + '<p class="note" style="margin-top:14px">' + h('可多选，按优先级依次尝试；应用后生效。关掉的来源会跳过。至少保留一种。', 'Pick any; tried in this order after applying. Sources you turn off are skipped. Keep at least one.') + '</p>'
-    + '<div class="runtime-picks">'
+    + '<h2 class="group-title">' + h('运行时来源', 'Runtime sources') + '</h2>'
+    + '<div class="group runtime-picks">'
     + '<button type="button" data-smart-runtime="probe" class="primary" data-tip="' + h('本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。', 'Connect to an official Web UI already running on this machine (3080 by default) instead of starting another.') + '" aria-description="' + h('本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。', 'Connect to an official Web UI already running on this machine (3080 by default) instead of starting another.') + '">' + h('本机已运行', 'Already running') + '</button>'
     + '<button type="button" data-smart-runtime="installed" class="primary" data-tip="' + h('用你 PATH 上自己安装的 dsh，由客户端在后台启动。', 'Start the dsh on your own PATH, in the background, from this client.') + '" aria-description="' + h('用你 PATH 上自己安装的 dsh，由客户端在后台启动。', 'Start the dsh on your own PATH, in the background, from this client.') + '">' + h('本机已安装', 'Installed') + '</button>'
     + '<button type="button" data-smart-runtime="npx" class="primary" data-tip="' + h('用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。', 'Start from the package that npx @deepseek-ai/dsh left in your cache. No network.') + '" aria-description="' + h('用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。', 'Start from the package that npx @deepseek-ai/dsh left in your cache. No network.') + '">' + h('npx 缓存', 'npx cache') + '</button>'
     + '<button type="button" data-smart-runtime="bundled" class="primary" data-tip="' + h('用安装包自带的官方运行时，不用另装 Node 或 dsh。', 'Use the official runtime shipped inside this client. No separate Node or dsh needed.') + '" aria-description="' + h('用安装包自带的官方运行时，不用另装 Node 或 dsh。', 'Use the official runtime shipped inside this client. No separate Node or dsh needed.') + '">' + h('客户端内置', 'Bundled') + '</button>'
     + '</div>'
-    + '<p class="note" data-runtime-status role="status" aria-live="polite"></p>'
-    + '<div class="actions"><button type="button" data-runtime-undo disabled>' + h('撤销更改', 'Undo changes') + '</button>'
+    + '<p class="caption">' + h('可多选，按优先级依次尝试；应用后生效。关掉的来源会跳过。至少保留一种。', 'Pick any; tried in this order after applying. Sources you turn off are skipped. Keep at least one.') + '</p>'
+    + '<p class="caption" data-runtime-status role="status" aria-live="polite"></p>'
+    + '<div class="footer-actions"><button type="button" data-runtime-undo disabled>' + h('撤销更改', 'Undo changes') + '</button>'
     + '<button type="button" class="primary" data-runtime-apply disabled>' + h('应用并重新连接', 'Apply and reconnect') + '</button></div></div>'
-    + '<p class="note" style="margin-top:14px">' + h('本地服务端口', 'Local service port') + '</p>'
-    + '<div class="runtime-picks" role="radiogroup" aria-label="' + h('本地服务端口', 'Local service port') + '">'
+    + '<h2 class="group-title">' + h('本地服务', 'Local service') + '</h2>'
+    + '<div class="group">'
+    + '<div class="row"><div class="row-text"><div class="row-label">' + h('本地服务端口', 'Local service port') + '</div></div>'
+    + '<div class="row-end"><div class="runtime-picks" role="radiogroup" aria-label="' + h('本地服务端口', 'Local service port') + '">'
     + '<button type="button" id="port-random" class="primary">' + h('自动', 'Automatic') + '</button>'
     + '<button type="button" id="port-fixed">' + h('固定', 'Fixed') + '</button>'
-    + '</div>'
-    + '<div id="port-fixed-block" hidden>'
-    + '<div class="custom-row">'
+    + '</div></div></div>'
+    + '<div class="row" id="port-fixed-block" hidden><div class="field-row">'
     + '<input id="port" inputmode="numeric" placeholder="' + h('例如 13080', 'e.g. 13080') + '" spellcheck="false">'
     + '<button id="port-save">' + h('保存', 'Save') + '</button>'
+    + '</div></div>'
     + '</div>'
-    + '</div>'
-    + '<p class="note" id="port-note">' + h('仅影响客户端自己启动的 dsh。自动依次尝试 3080、13080，均被占用时使用随机端口；固定端口不自动回退。', 'Only a dsh this client starts. Automatic mode tries 3080, then 13080, then an OS-assigned port. A pinned port does not fall back.') + '</p>'
+    + '<p class="caption" id="port-note">' + h('仅影响客户端自己启动的 dsh。自动依次尝试 3080、13080，均被占用时使用随机端口；固定端口不自动回退。', 'Only a dsh this client starts. Automatic mode tries 3080, then 13080, then an OS-assigned port. A pinned port does not fall back.') + '</p>'
     + '</div>'
     + '<div id="custom-block" hidden>'
-    + '<div class="custom-row">'
+    + '<h2 class="group-title">' + h('自定义地址', 'Custom address') + '</h2>'
+    + '<div class="group"><div class="row"><div class="field-row">'
     + '<input id="url" placeholder="' + h('例如 http://127.0.0.1:3080', 'e.g. http://127.0.0.1:3080') + '" spellcheck="false">'
-    + '<button id="save">' + h('保存并连接', 'Save and connect') + '</button>'
+    + '<button id="save" class="primary">' + h('保存并连接', 'Save and connect') + '</button>'
+    + '</div></div></div>'
+    + '<p class="caption">' + h('直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。', 'Connects straight to the Web UI at that address. If it stops, this client does not fall back to a local runtime.') + '</p>'
     + '</div>'
-    + '<p class="note">' + h('直连该地址上的 Web UI。服务停掉后不会自动改用本地运行时。', 'Connects straight to the Web UI at that address. If it stops, this client does not fall back to a local runtime.') + '</p>'
-    + '</div>'
-    + '<p class="note" id="note"></p>'
-    + '</div>'
-    // Divider
-    + '<hr class="divider">'
-    // DSH data environment section
-    + '<div class="section">'
-    + '<div class="section-title">' + h('数据环境', 'Data environment') + '<span class="badge">DSH_HOME</span></div>'
-    + '<div class="runtime-picks data-mode-picks" role="radiogroup" aria-label="' + h('DSH 数据环境', 'DSH data environment') + '">'
+    + '<p class="caption" id="note"></p>'
+    + '</section>'
+    // Data environment pane
+    + '<section class="pane" data-pane="data" hidden>'
+    + '<div class="pane-head"><h1 class="pane-title">' + h('数据环境', 'Data environment') + '</h1></div>'
+    + '<div class="group">'
+    + '<div class="row"><div class="row-text"><div class="row-label">' + h('数据环境', 'Data environment') + '<span class="tag" id="data-badge">DSH_HOME</span></div></div>'
+    + '<div class="row-end"><div class="runtime-picks data-mode-picks" id="data-picks" role="radiogroup" aria-label="' + h('DSH 数据环境', 'DSH data environment') + '">'
     + '<button type="button" role="radio" aria-checked="true" id="data-shared" class="primary" disabled>' + h('共享环境', 'Shared') + '</button>'
     + '<button type="button" role="radio" aria-checked="false" id="data-isolated" disabled>' + h('桌面端独立环境', 'Desktop isolated') + '</button>'
+    + '</div></div></div>'
+    + '<div class="row stack"><div class="row-label">' + h('位置', 'Location') + '</div><div class="row-value path-text" id="data-path"></div></div>'
     + '</div>'
-    + '<p class="version-text path-text" id="data-path"></p>'
-    + '<p class="note" id="data-note" aria-live="polite">' + h('正在读取数据环境…', 'Reading data environment…') + '</p>'
-    + '</div>'
-    + '<hr class="divider">'
-    // Update section
-    + '<div class="section">'
-    + '<div class="section-title">' + h('应用更新', 'App updates')
-    + '<div class="actions">'
+    + '<p class="caption" id="data-note" aria-live="polite">' + h('正在读取数据环境…', 'Reading data environment…') + '</p>'
+    + '</section>'
+    // App updates pane
+    + '<section class="pane" data-pane="updates" hidden>'
+    + '<div class="pane-head"><h1 class="pane-title">' + h('应用更新', 'App updates') + '</h1></div>'
+    + '<div class="group">'
+    + '<div class="row app-row">' + icon + '<div class="row-text"><div class="org-name">DSH Desktop Pro</div><div class="row-help" id="versions"></div></div>'
+    + '<div class="row-end">'
     + '<a class="icon-link" id="update-page" href="' + RELEASES_PAGE_URL + '" target="_blank" rel="noreferrer"'
     + ' title="' + h('打开 GitHub 发布页手动下载', 'Open the GitHub releases page to download manually') + '" aria-label="' + h('打开 GitHub 发布页手动下载', 'Open the GitHub releases page to download manually') + '">' + EXTERNAL_LINK_SVG + '</a>'
-    + '<button id="update-install" class="primary" hidden>' + h('下载并安装', 'Download and install') + '</button>'
-    + '<button id="update-check">' + h('检查更新', 'Check for updates') + '</button>'
     + '<button id="update-dismiss" hidden>' + h('稍后提醒', 'Remind me later') + '</button>'
+    + '<button id="update-check">' + h('检查更新', 'Check for updates') + '</button>'
+    + '<button id="update-install" class="primary" hidden>' + h('下载并安装', 'Download and install') + '</button>'
     + '</div></div>'
-    + '<p class="version-text" id="versions"></p>'
-    + '<p class="status-text" id="update-status" hidden></p>'
-    + '<div class="progress" id="update-bar" hidden><span></span></div>'
-    + '<div id="update-notes" hidden></div>'
+    + '<div class="row managed-line" id="managed-updates" hidden></div>'
+    + '<div class="row stack" id="update-progress-row"><p class="status-text" id="update-status" hidden></p>'
+    + '<div class="progress" id="update-bar" hidden style="margin-top:8px"><span></span></div></div>'
     + '</div>'
-    + '</div><script src="desktop/settings.js"></script></body></html>'
+    + '<div class="notes-box" id="update-notes" hidden></div>'
+    + '</section>'
+    + '</main></div><script src="desktop/settings.js"></script></body></html>'
 }

@@ -22,7 +22,9 @@ $baselineSha256 = '4b071a86e2c201eb8cc5b504a967b3530ba98a2105b226e288ddc8949dcf8
 $productKey = 'HKCU:\Software\986c9051-a721-5678-bb71-26cd03957e6c'
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\986c9051-a721-5678-bb71-26cd03957e6c'
 $desktop = [Environment]::GetFolderPath('Desktop')
-$currentShortcut = Join-Path $desktop 'DSH Desktop.lnk'
+$currentShortcut = Join-Path $desktop 'DSH Desktop Pro.lnk'
+# The baseline predates the rename to DSH Desktop Pro: its shortcut must not survive pointing at nothing.
+$baselineShortcut = Join-Path $desktop 'DSH Desktop.lnk'
 $fixtureRoot = Join-Path $env:RUNNER_TEMP 'dsh-desktop-upgrade-fixtures'
 $testRoot = Join-Path $env:RUNNER_TEMP ('dsh-desktop-upgrade-' + [guid]::NewGuid().ToString('N'))
 $baselineInstaller = Join-Path $fixtureRoot $baselineAsset
@@ -301,13 +303,14 @@ function Invoke-UpgradeScenario(
     }
     Write-Step "all $($packed.Count) packed files survived the upgrade"
 
-    $currentExe = Join-Path $targetDir 'DSH Desktop.exe'
+    $currentExe = Join-Path $targetDir 'DSH Desktop Pro.exe'
     if (-not (Test-Path -LiteralPath $currentExe -PathType Leaf)) {
       throw "Current executable was not installed at the expected directory: $currentExe"
     }
     foreach ($nestedDir in @(
       (Join-Path $baselineDir 'DSH Desktop'),
-      (Join-Path $targetDir 'DSH Desktop')
+      (Join-Path $targetDir 'DSH Desktop'),
+      (Join-Path $targetDir 'DSH Desktop Pro')
     )) {
       if (Test-Path -LiteralPath $nestedDir) {
         throw "Upgrade appended the product name to an installation directory: $nestedDir"
@@ -319,6 +322,12 @@ function Invoke-UpgradeScenario(
     }
     if (-not (Test-Path -LiteralPath $currentShortcut -PathType Leaf)) {
       throw "Desktop shortcut is missing: $currentShortcut"
+    }
+    if (Test-Path -LiteralPath $baselineShortcut -PathType Leaf) {
+      $staleTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($baselineShortcut).TargetPath
+      if (-not (Test-Path -LiteralPath $staleTarget -PathType Leaf)) {
+        throw "The pre-rename shortcut was left pointing at a missing file: $baselineShortcut -> $staleTarget"
+      }
     }
 
     $expectedVersion = (Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'package.json') -Raw | ConvertFrom-Json).version
@@ -335,7 +344,7 @@ function Invoke-UpgradeScenario(
     if ($LASTEXITCODE -ne 0) { throw "upgraded runtime smoke failed with code $LASTEXITCODE" }
     Write-Host "✓ $Name upgraded $baselineTag to $expectedVersion and passed runtime smoke"
   } finally {
-    $currentUninstaller = Join-Path $targetDir 'Uninstall DSH Desktop.exe'
+    $currentUninstaller = Join-Path $targetDir 'Uninstall DSH Desktop Pro.exe'
     $baselineUninstaller = Join-Path $baselineDir 'Uninstall DSH Desktop.exe'
     $cleanupUninstaller = if (Test-Path -LiteralPath $currentUninstaller -PathType Leaf) {
       $currentUninstaller

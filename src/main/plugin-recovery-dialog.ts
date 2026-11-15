@@ -22,7 +22,7 @@ export function pluginRecoveryPage(options: MessageBoxOptions, plugins: string[]
     + ':focus-visible{outline:2px solid #528bff;outline-offset:2px}'
     + '@media(prefers-color-scheme:dark){body{background:#17181a;color:#f4f5f6}p{color:#aeb3bb}ul,a{border-color:#3a3d42}a:hover{background:#232529}a.primary{background:#f4f5f6;color:#17181a}}'
     + (confirmation ? 'main{padding:28px;gap:20px}.content{max-height:none;flex:1}h1{font-size:18px;font-weight:600;margin-bottom:12px}footer{display:flex;justify-content:flex-end}footer a{min-width:88px}.eyebrow{font-size:11px;letter-spacing:.08em;color:#6e7480;margin-bottom:12px}@media(prefers-color-scheme:dark){.eyebrow{color:#aeb3bb}}' : '')
-    + '</style></head><body><main><div class="content">' + (confirmation ? '<div class="eyebrow">DSH Desktop · ' + (chinese ? '操作确认' : 'Confirmation') + '</div>' : '') + '<h1>' + escapeHtml(options.message) + '</h1><p>' + escapeHtml(options.detail ?? '') + '</p></div>'
+    + '</style></head><body><main><div class="content">' + (confirmation ? '<div class="eyebrow">DSH Desktop Pro · ' + (chinese ? '操作确认' : 'Confirmation') + '</div>' : '') + '<h1>' + escapeHtml(options.message) + '</h1><p>' + escapeHtml(options.detail ?? '') + '</p></div>'
     + (plugins.length ? '<section class="plugins" aria-label="' + escapeHtml(label) + '"><div class="label">' + escapeHtml(label) + '</div><ul tabindex="0">' + plugins.map(name => '<li>' + escapeHtml(name) + '</li>').join('') + '</ul></section>' : '')
     + '<footer>' + (options.buttons ?? []).map((label, index) => '<a role="button" href="dsh-plugin-recovery:' + index + '"' + (index === (confirmation ? 1 : options.defaultId) ? ' class="primary"' : '') + (index === options.defaultId ? ' id="default-action"' : '') + '>' + escapeHtml(label) + '</a>').join('')
     + '</footer></main></body></html>'
@@ -47,7 +47,7 @@ function showClientDialog(owner: BrowserWindow | null, options: MessageBoxOption
       width: Math.min(560, area.width),
       height: Math.min(confirmation ? 320 : 600, area.height),
       minWidth: Math.min(320, area.width), minHeight: Math.min(confirmation ? 280 : 420, area.height),
-      title: options.title ?? 'DSH Desktop',
+      title: options.title ?? 'DSH Desktop Pro',
       parent, modal: parent !== undefined, show: false,
       resizable: true, minimizable: false, maximizable: false,
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },

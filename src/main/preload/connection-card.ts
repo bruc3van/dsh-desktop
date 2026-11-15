@@ -32,6 +32,14 @@ export function injectEnhance(panel: Element): void {
       '#' + ENHANCE_ID + ' .dsh-enhance-switch{background:var(--dsw-alias-label-primary,#0F1115);border-color:var(--dsw-alias-label-primary,#0F1115);color:var(--dsw-alias-bg-layer-1,#fff)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-switch:hover{opacity:.88;background:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-note{margin:10px 0 0;font-size:13px;color:var(--dsw-alias-label-secondary,#6E7480)}',
+      '#' + ENHANCE_ID + ' [hidden]{display:none!important}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-entBlock{margin:0 0 18px;padding:0 0 16px;border-bottom:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-entHead{gap:8px}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-badge{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,#F5F6F7);color:var(--dsw-alias-label-secondary,#6E7480)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 18px;margin:10px 0 0;font-size:13px}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-facts dt{color:var(--dsw-alias-label-secondary,#6E7480)}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-facts dd{margin:0;color:var(--dsw-alias-label-primary,#0F1115);overflow-wrap:anywhere}',
+      '#' + ENHANCE_ID + ' .dsh-enhance-managed{margin:6px 0 4px;padding:9px 12px;border-radius:8px;font-size:13px;background:var(--dsw-alias-interactive-bg-hover,#F5F6F7);color:var(--dsw-alias-label-primary,#0F1115)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-dataBlock{margin:16px 0 0;padding:16px 0 0;'
         + 'border-top:1px solid var(--dsw-alias-border-l2,#D8D8D4)}',
       '#' + ENHANCE_ID + ' .dsh-enhance-dataModes{flex-wrap:wrap;margin-top:8px}',
@@ -81,9 +89,21 @@ export function injectEnhance(panel: Element): void {
   const block = document.createElement('div')
   block.id = ENHANCE_ID
   block.innerHTML =
-    '<div class="dsh-enhance-title">连接</div>'
+    '<div class="dsh-enhance-entBlock" id="dsh-enhance-ent" hidden>'
+    + '<div class="dsh-enhance-row dsh-enhance-entHead"><div class="dsh-enhance-title">组织管理</div><span class="dsh-enhance-badge" id="dsh-enhance-entKind"></span></div>'
+    + '<dl class="dsh-enhance-facts" id="dsh-enhance-entFacts"></dl>'
+    + '<p class="dsh-enhance-note" id="dsh-enhance-entNote"></p>'
+    + '<div class="dsh-enhance-row dsh-enhance-runtimes">'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-entSync" type="button" hidden>立即同步</button>'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-entDiagnostics" type="button">导出诊断信息</button>'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-entSignOut" type="button" hidden>退出企业账号</button>'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-entPersonal" type="button" hidden>改用个人模式</button>'
+    + '<button class="dsh-enhance-button" id="dsh-enhance-entOrganisation" type="button" hidden>使用企业账号登录</button>'
+    + '</div></div>'
+    + '<div class="dsh-enhance-title">连接</div>'
     + '<p class="dsh-enhance-status" id="dsh-enhance-status">连接状态读取中…</p>'
-    + '<div class="dsh-enhance-row dsh-enhance-modes" role="radiogroup" aria-label="连接方式">'
+    + '<p class="dsh-enhance-managed" id="dsh-enhance-managed" hidden></p>'
+    + '<div class="dsh-enhance-row dsh-enhance-modes" id="dsh-enhance-modes" role="radiogroup" aria-label="连接方式">'
     + '<button class="dsh-enhance-button dsh-enhance-switch" id="dsh-enhance-mode-smart" type="button" role="radio" aria-checked="true">智能</button>'
     + '<button class="dsh-enhance-button" id="dsh-enhance-mode-custom" type="button" role="radio" aria-checked="false">自定义</button>'
     + '</div>'
@@ -123,7 +143,7 @@ export function injectEnhance(panel: Element): void {
     + '<p class="dsh-enhance-note" id="dsh-enhance-note"></p>'
     + '<div class="dsh-enhance-dataBlock">'
     + '<div class="dsh-enhance-title">数据环境</div>'
-    + '<div class="dsh-enhance-row dsh-enhance-dataModes" role="radiogroup" aria-label="DSH 数据环境">'
+    + '<div class="dsh-enhance-row dsh-enhance-dataModes" id="dsh-enhance-dataModes" role="radiogroup" aria-label="DSH 数据环境">'
     + '<button class="dsh-enhance-button dsh-enhance-switch" id="dsh-enhance-data-shared" type="button" role="radio" aria-checked="true">共享环境</button>'
     + '<button class="dsh-enhance-button" id="dsh-enhance-data-isolated" type="button" role="radio" aria-checked="false">桌面端独立环境</button>'
     + '</div>'
@@ -298,6 +318,83 @@ export function injectEnhance(panel: Element): void {
     const tip = button.getAttribute('data-tip') ?? ''
     button.title = tip
   }
+  // Enterprise mode: who manages this client, what they fixed, what stays the person's.
+  const entEl = block.querySelector('#dsh-enhance-ent') as HTMLElement
+  const entNoteEl = block.querySelector('#dsh-enhance-entNote') as HTMLElement
+  const entSyncEl = block.querySelector('#dsh-enhance-entSync') as HTMLButtonElement
+  const entSignOutEl = block.querySelector('#dsh-enhance-entSignOut') as HTMLButtonElement
+  const entPersonalEl = block.querySelector('#dsh-enhance-entPersonal') as HTMLButtonElement
+  const entOrganisationEl = block.querySelector('#dsh-enhance-entOrganisation') as HTMLButtonElement
+  const entDiagnosticsEl = block.querySelector('#dsh-enhance-entDiagnostics') as HTMLButtonElement
+  const lockedNote = '连接方式、运行时来源和数据环境由组织统一设置，不能在这里修改；本地服务端口和应用更新仍可以自己调整。'
+  const paintEnterprise = (status: ConnectionStatus): void => {
+    const ent = status.enterprise
+    const managed = ent !== undefined && ent.mode !== 'personal'
+    const offer = ent !== undefined && !managed && ent.available !== undefined
+    const show = (selector: string, visible: boolean): void => { (block.querySelector(selector) as HTMLElement).hidden = !visible }
+    entEl.hidden = !managed && !offer
+    entOrganisationEl.hidden = !offer
+    entPersonalEl.hidden = !(managed && ent.personalAllowed === true)
+    entDiagnosticsEl.hidden = !managed
+    if (offer) {
+      entSyncEl.hidden = true
+      entSignOutEl.hidden = true
+      ;(block.querySelector('#dsh-enhance-entKind') as HTMLElement).textContent = '个人模式'
+      ;(block.querySelector('#dsh-enhance-entFacts') as HTMLElement).replaceChildren()
+      entNoteEl.textContent = '这台电脑登记在 ' + (ent.available ?? '') + '。你现在用的是个人模式：自己的模型 Key 和个人数据目录，不应用组织配置。组织的会话和配置原样保留，随时可以切回企业账号。'
+    }
+    show('#dsh-enhance-modes', !managed)
+    show('#dsh-enhance-runtime-editor', !managed)
+    show('#dsh-enhance-dataModes', !managed)
+    show('#dsh-enhance-managed', managed)
+    if (!managed) return
+    show('#dsh-enhance-smart', true)
+    show('#dsh-enhance-custom', false)
+    ;(block.querySelector('#dsh-enhance-entKind') as HTMLElement).textContent = ent.mode === 'server' ? '服务端统一管理' : ent.mode === 'file' ? '配置文件管理' : '配置无效'
+    entSyncEl.hidden = ent.mode !== 'server'
+    entSignOutEl.hidden = ent.mode !== 'server'
+    const facts: Array<[string, string]> = [['组织', ent.organization ?? '—']]
+    if (ent.user !== undefined) facts.push(['账号', ent.user])
+    if (ent.revision !== undefined) facts.push(['配置版本', 'r' + String(ent.revision)])
+    if (ent.mode === 'server') {
+      const minutes = ent.lastCheckedAt === undefined ? undefined : Math.round((Date.now() - ent.lastCheckedAt) / 60000)
+      facts.push(['上次同步', minutes === undefined ? '还没有同步过' : minutes < 1 ? '刚刚' : minutes < 60 ? String(minutes) + ' 分钟前' : String(Math.round(minutes / 60)) + ' 小时前'])
+    }
+    if (ent.mode === 'file' && ent.managedFile !== undefined) facts.push(['配置文件', ent.managedFile])
+    facts.push(['状态', ent.mode === 'invalid' ? '配置无效，客户端不会启动运行时' : ent.offline === true ? '连不上企业服务，正在用上次的配置' : '正常'])
+    const list = block.querySelector('#dsh-enhance-entFacts') as HTMLElement
+    list.replaceChildren(...facts.flatMap(([label, value]) => {
+      const term = document.createElement('dt')
+      term.textContent = label
+      const detail = document.createElement('dd')
+      detail.textContent = value
+      return [term, detail]
+    }))
+    entNoteEl.textContent = ent.problems.length > 0 ? ent.problems.join('；') : lockedNote
+    ;(block.querySelector('#dsh-enhance-managed') as HTMLElement).textContent = '由组织固定：智能模式，使用客户端内置的 DSH ' + (status.dshVersion ?? '') + '；不连接本机其他 dsh，也不能填自定义地址。'
+    dataNoteEl.textContent = '组织的对话、凭据和插件单独存放在这里，不会和你个人的 ~/.dsh 混在一起。退出企业账号时，组织下发的配置会被清除，对话记录保留。'
+  }
+  const runEnterpriseAction = async (action: 'sync' | 'diagnostics' | 'sign-out' | 'use-personal' | 'use-organisation', button: HTMLButtonElement): Promise<void> => {
+    button.disabled = true
+    if (action === 'sync') entNoteEl.textContent = '正在同步…'
+    try {
+      const result = await connection.enterpriseAction(action)
+      if (!result.ok) { entNoteEl.textContent = result.error ?? '操作失败'; return }
+      if (action === 'sync') {
+        paintEnterprise(await connection.getStatus())
+        entNoteEl.textContent = '已同步到最新配置。'
+      }
+    } catch (error) {
+      entNoteEl.textContent = error instanceof Error ? error.message : String(error)
+    } finally {
+      button.disabled = false
+    }
+  }
+  entSyncEl.addEventListener('click', () => { void runEnterpriseAction('sync', entSyncEl) })
+  entPersonalEl.addEventListener('click', () => { void runEnterpriseAction('use-personal', entPersonalEl) })
+  entOrganisationEl.addEventListener('click', () => { void runEnterpriseAction('use-organisation', entOrganisationEl) })
+  entDiagnosticsEl.addEventListener('click', () => { void runEnterpriseAction('diagnostics', entDiagnosticsEl) })
+  entSignOutEl.addEventListener('click', () => { void runEnterpriseAction('sign-out', entSignOutEl) })
   void connection.getStatus().then((status) => {
     // Named by WHO started the runtime, then which dsh it is — "本地"/"内置"
     // used to overlap, and a reused instance the user started got neither.
@@ -310,7 +407,7 @@ export function injectEnhance(panel: Element): void {
     const modeLabel = status.mode === 'probe'
       ? '本机已运行'
       : status.mode === 'connect' ? '自定义地址' : startedByClient
-    statusEl.textContent = modeLabel + ' → ' + (status.targetUrl || '（未就绪）')
+    statusEl.textContent = modeLabel + ' → ' + (status.targetUrl === '' || status.targetUrl === undefined ? '（未就绪）' : status.targetUrl.replace(/[?#].*$/, ''))
       + (status.childPid !== undefined ? ' · PID ' + String(status.childPid) : '')
       + (status.lastError !== undefined ? ' · ' + status.lastError : '')
       // Non-blocking: the cache stays in use; re-running npx is how it updates.
@@ -322,6 +419,7 @@ export function injectEnhance(panel: Element): void {
     runtimeEditor.load(status.smartRuntimes, status.dshDataMode === 'isolated')
     paintPort(status.localWebPort)
     paintDataMode(status)
+    paintEnterprise(status)
   }).catch(() => { statusEl.textContent = '连接状态不可用' })
   panel.appendChild(block)
 }

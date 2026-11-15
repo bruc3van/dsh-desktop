@@ -59,7 +59,7 @@ $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\986c9
 $productKeyReg = 'HKCU\Software\986c9051-a721-5678-bb71-26cd03957e6c'
 $uninstallKeyReg = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\986c9051-a721-5678-bb71-26cd03957e6c'
 $desktop = [Environment]::GetFolderPath('Desktop')
-$shortcut = Join-Path $desktop 'DSH Desktop.lnk'
+$shortcut = Join-Path $desktop 'DSH Desktop Pro.lnk'
 
 function Write-Step([string]$Message) {
   Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $Message)
@@ -146,7 +146,7 @@ $hadProductKey = Test-Path -Path $productKey
 $hadUninstallKey = Test-Path -Path $uninstallKey
 $hadShortcut = Test-Path -LiteralPath $shortcut
 $installerStateIsolated = $false
-$uninstaller = Join-Path $installDir 'Uninstall DSH Desktop.exe'
+$uninstaller = Join-Path $installDir 'Uninstall DSH Desktop Pro.exe'
 
 try {
   # --- shield an installation that may already be on this machine ----------
@@ -209,7 +209,7 @@ try {
     }
     throw "scenario '$Scenario' lost $($missing.Count) file(s) between release/win-unpacked and $installDir"
   }
-  $executable = Join-Path $installDir 'DSH Desktop.exe'
+  $executable = Join-Path $installDir 'DSH Desktop Pro.exe'
   if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "installed executable not found: $executable"
   }

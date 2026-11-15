@@ -8,7 +8,7 @@
  * `codesign --verify`, and still installs — users would only notice when the
  * Documents prompt returned after updating.
  *
- * Usage: node scripts/check-mac-signature.mjs [path/to/DSH Desktop.app]
+ * Usage: node scripts/check-mac-signature.mjs [path/to/DSH Desktop Pro.app]
  * @module desktop/scripts/check-mac-signature
  */
 
@@ -22,7 +22,7 @@ import { PIN_FILE, readPinnedFingerprint } from './sign-mac.mjs'
 const execFile = promisify(execFileCallback)
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const APP_ID = 'io.github.bruc3van.dsh-desktop'
-const BUNDLE = 'DSH Desktop.app'
+const BUNDLE = 'DSH Desktop Pro.app'
 
 if (process.platform !== 'darwin') {
   console.error('check-mac-signature is macOS-only')

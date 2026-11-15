@@ -136,7 +136,7 @@ const scripted = results => {
 
 console.log('\n# message')
 const zh = folderAccessMessage([{ folder: 'documents', workspace: HOME + '/Documents/app' }], true)
-check('Chinese copy names the folder', zh.message === '系统阻止了 DSH Desktop 访问「文稿」', zh.message)
+check('Chinese copy names the folder', zh.message === '系统阻止了 DSH Desktop Pro 访问「文稿」', zh.message)
 check('Chinese copy names the workspace and the settings path',
   zh.detail.includes('「app」') && zh.detail.includes('系统设置 → 隐私与安全性 → 文件和文件夹'))
 equal('Chinese buttons', [zh.buttons, zh.checkboxLabel], [['打开系统设置', '稍后'], '不再提醒'])
@@ -144,7 +144,7 @@ const en = folderAccessMessage([
   { folder: 'documents', workspace: HOME + '/Documents/app' },
   { folder: 'volumes', workspace: '/Volumes/USB/site' },
 ], false)
-check('English copy lists every location', en.message === 'macOS is blocking DSH Desktop from Documents, removable or network volumes', en.message)
+check('English copy lists every location', en.message === 'macOS is blocking DSH Desktop Pro from Documents, removable or network volumes', en.message)
 
 console.log('\n# controller')
 function harness(overrides = {}) {

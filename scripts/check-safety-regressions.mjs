@@ -238,7 +238,7 @@ try {
   const updater = new DesktopUpdater({ currentVersion: '1.0.0', feedUrl: 'https://example.invalid', platform: 'win32', arch: 'x64',
     packaged: true, downloadDir: work, loadPersistence: () => ({}), savePersistence() {}, dryRun: false })
   const payload = Buffer.from('inert synthetic installer')
-  updater.info = { availableVersion: '2.0.0', fileName: 'dsh-desktop-2.0.0-win-x64.exe', sha256: createHash('sha256').update(payload).digest('hex') }
+  updater.info = { availableVersion: '2.0.0', fileName: 'dsh-desktop-pro-2.0.0-win-x64.exe', sha256: createHash('sha256').update(payload).digest('hex') }
   updater.downloadToFile = async (_info, destination) => fs.writeFileSync(destination, payload)
   assert.equal((await updater.install()).started, true)
   let recoveredWindows = 0
@@ -252,9 +252,9 @@ try {
   assert.equal(updater.getState().phase, 'error')
   assert.equal((await updater.install()).started, true, 'retry must no longer short-circuit as busy')
   installer.emit('exit', 0, null)
-  for (const name of ['dsh-desktop-1.0.0-win-x64.exe', 'unrelated.txt']) fs.writeFileSync(join(work, name), 'fixture')
+  for (const name of ['dsh-desktop-pro-1.0.0-win-x64.exe', 'unrelated.txt']) fs.writeFileSync(join(work, name), 'fixture')
   pruneOldInstallers(work, updater.info.fileName)
-  assert.equal(fs.existsSync(join(work, 'dsh-desktop-1.0.0-win-x64.exe')), false)
+  assert.equal(fs.existsSync(join(work, 'dsh-desktop-pro-1.0.0-win-x64.exe')), false)
   assert.equal(fs.existsSync(join(work, updater.info.fileName)), true)
   assert.equal(fs.existsSync(join(work, 'unrelated.txt')), true)
   console.log('✓ failed installer can be retried, and cleanup retains current installer and unrelated files')

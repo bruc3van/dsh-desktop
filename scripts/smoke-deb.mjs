@@ -17,8 +17,8 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
 const deb = resolve(process.argv[2] ?? join(root, 'release', `dsh-desktop-${version}-linux-amd64.deb`))
 const work = await mkdtemp(join(tmpdir(), 'dsh-deb-'))
-const executable = '/opt/DSH Desktop/dsh-desktop'
-const marker = '/opt/DSH Desktop/resources/package-type'
+const executable = '/opt/DSH Desktop Pro/dsh-desktop'
+const marker = '/opt/DSH Desktop Pro/resources/package-type'
 const profile = '/etc/apparmor.d/dsh-desktop-deb'
 const run = (command, args, options = {}) => execFileSync(command, args, {
   encoding: 'utf8', timeout: 240_000, maxBuffer: 8 * 1024 * 1024, ...options,

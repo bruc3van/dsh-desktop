@@ -121,6 +121,14 @@ jobs:
       - name: 验证预置插件订阅 / Verify preset plugin subscription
         run: pnpm run check:preset-subscription
 
+      - name: 验证企业协议、对账与服务端 / Verify enterprise protocol, reconciler and server
+        run: |
+          pnpm run check:protocol
+          pnpm run check:enterprise
+          pnpm run check:server
+          pnpm run check:gateway
+          pnpm run check:market
+
       - name: 验证运行时锁契约 / Verify runtime lock contract
         run: pnpm run check:runtime-lock
 
@@ -174,6 +182,12 @@ jobs:
       - name: 验证桌面设置降级 / Verify desktop settings fallback
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         run: pnpm run check:settings-integration
+
+      - name: 验证企业模式（文件与服务端）/ Verify enterprise mode (file and server)
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        run: |
+          pnpm run check:enterprise-file
+          pnpm run check:enterprise-server
 
       - name: 验证运行时来源批量选择 / Verify runtime source batch selection
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}

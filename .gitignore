@@ -10,3 +10,5 @@ output/playwright/
 .DS_Store
 .mimosa
 .output
+# Local management-server data (pnpm run server)
+/data/

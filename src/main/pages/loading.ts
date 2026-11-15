@@ -1,6 +1,6 @@
 
 export function renderLoadingPageUrl(chinese: boolean, icon: string): string {
-  const title = chinese ? '正在启动 DSH Desktop' : 'Starting DSH Desktop'
+  const title = chinese ? '正在启动 DSH Desktop Pro' : 'Starting DSH Desktop Pro'
   const hint = chinese ? '首次启动通常需要 10–20 秒' : 'The first launch usually takes 10–20 seconds'
   // The only connection seat reachable while the Web UI itself cannot load:
   // the official settings dialog (and its enhanced 连接 block) needs a page.

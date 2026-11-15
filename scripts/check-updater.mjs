@@ -50,11 +50,11 @@ const releaseNotes = readFileSync(releaseNotesFile, 'utf8')
 const releaseChanges = readFileSync(releaseChangesFile, 'utf8')
 if (!releaseNotes.includes('fixture release change')
   || releaseNotes.includes('old change that must not leak')
-  || !releaseNotes.includes('dsh-desktop-9.9.9-mac-arm64.dmg')
-  || !releaseNotes.includes('dsh-desktop-9.9.9-mac-x64.dmg')
-  || !releaseNotes.includes('dsh-desktop-9.9.9-win-x64.exe')
-  || !releaseNotes.includes('dsh-desktop-9.9.9-linux-x86_64.AppImage')
-  || !releaseNotes.includes('dsh-desktop-9.9.9-linux-amd64.deb')) {
+  || !releaseNotes.includes('dsh-desktop-pro-9.9.9-mac-arm64.dmg')
+  || !releaseNotes.includes('dsh-desktop-pro-9.9.9-mac-x64.dmg')
+  || !releaseNotes.includes('dsh-desktop-pro-9.9.9-win-x64.exe')
+  || !releaseNotes.includes('dsh-desktop-pro-9.9.9-linux-x86_64.AppImage')
+  || !releaseNotes.includes('dsh-desktop-pro-9.9.9-linux-amd64.deb')) {
   throw new Error('generated GitHub Release notes are incomplete')
 }
 if (releaseChanges !== '### 新增\n- fixture release change\n') {
@@ -86,7 +86,7 @@ execFileSync(process.execPath, [
   join(APP_DIR, 'scripts', 'write-update-feed.mjs'),
   '--dir', artifacts,
   '--version', '9.9.9',
-  '--repo', 'bruc3van/dsh-desktop',
+  '--repo', 'bruc3van/dsh-desktop-pro',
   '--notes-file', notesFile,
   '--out', feedPath,
 ], { stdio: 'pipe' })
@@ -100,7 +100,7 @@ for (const target of RELEASE_TARGETS) {
   if (entry?.sha256 !== expectedHash) {
     throw new Error(target.key + ' sha256 mismatch in generated feed: ' + JSON.stringify(entry?.sha256))
   }
-  const expectedUrl = 'https://github.com/bruc3van/dsh-desktop/releases/download/v9.9.9/' + fixtureName(target)
+  const expectedUrl = 'https://github.com/bruc3van/dsh-desktop-pro/releases/download/v9.9.9/' + fixtureName(target)
   if (entry?.url !== expectedUrl) throw new Error(target.key + ' url: ' + JSON.stringify(entry?.url))
 }
 console.log('✓ write-update-feed.mjs emits latest.json for ' + requiredPlatformKeys().join(', '))
@@ -215,8 +215,8 @@ console.log('✓ compareVersions orders core, release-over-prerelease, and numer
 const matrixFeed = {
   version: '99.0.0',
   platforms: {
-    'mac-arm64': { url: 'https://example.invalid/dsh-desktop-99.0.0-mac-arm64.dmg' },
-    'win-x64': { url: 'https://example.invalid/dsh-desktop-99.0.0-win-x64.exe' },
+    'mac-arm64': { url: 'https://example.invalid/dsh-desktop-pro-99.0.0-mac-arm64.dmg' },
+    'win-x64': { url: 'https://example.invalid/dsh-desktop-pro-99.0.0-win-x64.exe' },
   },
 }
 const feedOnlyUpdater = (platform, arch, feed = matrixFeed, currentVersion = '0.0.1') => new DesktopUpdater({
@@ -289,7 +289,7 @@ console.log('✓ Mac preflight failure downloads nothing and leaves the runtime 
 
 const linuxPayload = Buffer.from('fixture-AppImage')
 const linuxHash = createHash('sha256').update(linuxPayload).digest('hex')
-const linuxFile = 'dsh-desktop-99.0.0-linux-x86_64.AppImage'
+const linuxFile = 'dsh-desktop-pro-99.0.0-linux-x86_64.AppImage'
 let linuxDownloads = 0, linuxStops = 0, linuxReveals = 0
 const linuxOptions = {
   currentVersion: '0.0.1', feedUrl: 'https://example.invalid/latest.json',
@@ -368,7 +368,7 @@ assert.deepEqual(readFileSync(join(work, 'linux', linuxFile)), replacementPayloa
 console.log('✓ Linux recovers verified downloads after restart and preserves them until a replacement passes verification')
 
 // DEB and AppImage coexist without sharing a feed key or installation action.
-const debFile = 'dsh-desktop-99.0.0-linux-amd64.deb'
+const debFile = 'dsh-desktop-pro-99.0.0-linux-amd64.deb'
 const debPayload = Buffer.from('fixture-deb')
 const debHash = createHash('sha256').update(debPayload).digest('hex')
 for (const fallback of [false, true]) {
@@ -506,7 +506,7 @@ console.log('✓ a failed fetch reports the cause behind "fetch failed"')
 // downloaded executable lands. Every spelling below is a way a name could name
 // something other than one plain file inside the download directory.
 const fileNames = [
-  ['dsh-desktop-1.2.3-win-x64.exe', 'dsh-desktop-1.2.3-win-x64.exe'],
+  ['dsh-desktop-pro-1.2.3-win-x64.exe', 'dsh-desktop-pro-1.2.3-win-x64.exe'],
   ['../../evil.exe', '.._.._evil.exe'],
   ['sub\\dir\\evil.exe', 'sub_dir_evil.exe'],
   // A drive-relative path and an NTFS alternate data stream: both write
@@ -803,7 +803,7 @@ const fixture = createServer((req, res) => {
       + '.fixtureHeader{border-color:#2c2e33}.navList{background:#1b1c1f;border-color:#2c2e33}.navList button{color:#aeb3bb}'
       + '.navList button:hover{background:#232529;color:#f4f5f6}.navList button.active{background:#2c2e33;color:#f4f5f6}.officialPanel p{color:#aeb3bb}}'
       + '</style></head><body><div class="fixtureDialog" role="dialog" aria-label="设置">'
-      + '<div class="fixtureHeader"><h1>设置</h1><span>DSH Desktop</span></div>'
+      + '<div class="fixtureHeader"><h1>设置</h1><span>DSH Desktop Pro</span></div>'
       + '<div class="content"><div class="navList">'
       + '<button class="active" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">'
       + '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.36.72.66 1 .3.28.68.42 1.1.4H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"></path></svg>'
@@ -903,7 +903,7 @@ try {
     const el = document.getElementById('dsh-update-releases')
     return el === null ? null : { href: el.getAttribute('href'), target: el.getAttribute('target') }
   })
-  if (releasesLink?.href !== 'https://github.com/bruc3van/dsh-desktop/releases' || releasesLink.target !== '_blank') {
+  if (releasesLink?.href !== 'https://github.com/bruc3van/dsh-desktop-pro/releases' || releasesLink.target !== '_blank') {
     throw new Error('manual-download link missing from the update card: ' + JSON.stringify(releasesLink))
   }
   const installed = await available.window.evaluate(() => window.desktop.update.install())

@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE_DIR = join(APP_DIR, 'release')
-const PRODUCT_NAME = 'DSH Desktop'
+const PRODUCT_NAME = 'DSH Desktop Pro'
 const FIXTURE_NAME = 'dsh-desktop-pnpm-fixture'
 
 const runtimeManifest = JSON.parse(await readFile(join(APP_DIR, 'dsh-runtime', 'package.json'), 'utf8'))

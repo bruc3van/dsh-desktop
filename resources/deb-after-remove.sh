@@ -8,7 +8,7 @@ case "${1:-remove}" in
     *) exit 0 ;;
 esac
 if update-alternatives --query dsh-desktop >/dev/null 2>&1; then
-    update-alternatives --remove dsh-desktop '/opt/DSH Desktop/dsh-desktop'
+    update-alternatives --remove dsh-desktop '/opt/DSH Desktop Pro/dsh-desktop'
 fi
 profile_target='/etc/apparmor.d/dsh-desktop-deb'
 if [ -f "$profile_target" ]; then

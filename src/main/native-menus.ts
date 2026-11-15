@@ -6,6 +6,12 @@ interface MenuActions {
   checkUpdates: () => void
   restart: () => void
   quit: () => void
+  /** Enterprise mode only: save a support bundle for IT. */
+  exportDiagnostics?: () => void
+  /** Server mode only: sign out of the organisation account. */
+  signOut?: () => void
+  /** An enrolled machine that allows personal mode: switch between the two. */
+  switchMode?: { zh: string; en: string; click: () => void }
 }
 interface TrayMenuOptions {
   chinese: boolean
@@ -22,7 +28,7 @@ interface ApplicationMenuOptions {
 /** Linux desktops may omit the tray; keep settings and quit in the window. */
 export function buildLinuxApplicationMenu({ chinese, actions }: TrayMenuOptions): Electron.MenuItemConstructorOptions[] {
   return [
-    { label: 'DSH Desktop', submenu: [
+    { label: 'DSH Desktop Pro', submenu: [
       { label: chinese ? '桌面设置…' : 'Desktop settings…', accelerator: 'CommandOrControl+,', click: actions.openSettings },
       { label: chinese ? '检查更新…' : 'Check for Updates…', click: actions.checkUpdates },
       { label: chinese ? '重启客户端' : 'Restart', click: actions.restart },
@@ -41,6 +47,12 @@ export function buildTrayMenu({ chinese, state, actions }: TrayMenuOptions): Ele
     { label: chinese ? '显示主窗口' : 'Show Window', click: actions.showWindow },
     { id: 'desktop-settings', label: chinese ? '桌面设置…' : 'Desktop settings…', click: actions.openSettings },
     { label: updateLabel, click: actions.checkUpdates },
+    ...actions.exportDiagnostics === undefined && actions.signOut === undefined && actions.switchMode === undefined ? [] : [
+      { type: 'separator' as const },
+      ...actions.switchMode === undefined ? [] : [{ label: chinese ? actions.switchMode.zh : actions.switchMode.en, click: actions.switchMode.click }],
+      ...actions.exportDiagnostics === undefined ? [] : [{ label: chinese ? '导出诊断信息…' : 'Export Diagnostics…', click: actions.exportDiagnostics }],
+      ...actions.signOut === undefined ? [] : [{ label: chinese ? '退出企业账号…' : 'Sign Out of Organisation…', click: actions.signOut }],
+    ],
     { type: 'separator' },
     { label: chinese ? '重启客户端' : 'Restart', click: actions.restart },
     { label: chinese ? '退出' : 'Quit', click: actions.quit },

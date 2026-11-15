@@ -177,6 +177,7 @@ process.exit(1)
   await failureWindow.waitForSelector('#error-settings', { timeout: 35_000 })
   await failureWindow.locator('#error-settings').click()
   const settingsWindow = await app.waitForEvent('window', { timeout: 10_000 })
+  // The data environment opens on its own when it needs attention.
   await settingsWindow.waitForSelector('#data-shared')
   // The settings DOM appears before its asynchronous data environment response.
   await settingsWindow.waitForFunction(() => {
@@ -222,6 +223,7 @@ process.exit(1)
   await probeOnlyFailure.locator('#error-settings').click()
   const probeOnlySettings = await settingsOpened
   try {
+    await probeOnlySettings.locator('#nav-data').click()
     await probeOnlySettings.waitForSelector('#data-isolated')
     for (const id of ['data-shared', 'data-isolated']) {
       if (!await probeOnlySettings.locator('#' + id).isDisabled()) {

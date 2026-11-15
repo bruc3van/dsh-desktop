@@ -1,0 +1,12 @@
+# Minimal LiteLLM configuration. The real provider key lives only here;
+# employees receive personal virtual keys issued by the management server.
+# See https://docs.litellm.ai for routing, budgets and guardrails.
+model_list:
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

@@ -14,7 +14,7 @@ const args = parseArgs(process.argv.slice(2))
 const dir = args.dir
 const version = (args.version ?? '').replace(/^v/i, '')
 const out = args.out
-const repo = args.repo ?? 'bruc3van/dsh-desktop'
+const repo = args.repo ?? 'bruc3van/dsh-desktop-pro'
 const notes = args['notes-file'] !== undefined
   ? readFileSync(args['notes-file'], 'utf8')
   : (args.notes ?? '')

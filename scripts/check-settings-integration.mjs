@@ -162,7 +162,7 @@ try {
     await pressSettingsShortcut()
   }
   const settings = await settingsOpened
-  await settings.waitForSelector('#versions')
+  await settings.waitForSelector('#versions', { state: 'attached' })
   await settings.waitForFunction(() => document.getElementById('versions').textContent.includes('v'))
   assert.equal(await settings.locator('#update-check').count(), 1)
   assert.equal(await settings.evaluate(async () => (await (await fetch('desktop/status')).json()).settingsIntegration.reason), 'missing-content')
@@ -173,7 +173,7 @@ try {
   const shortcutOpened = app.waitForEvent('window')
   await pressSettingsShortcut()
   const shortcutSettings = await shortcutOpened
-  await shortcutSettings.waitForSelector('#versions')
+  await shortcutSettings.waitForSelector('#versions', { state: 'attached' })
   await closeSettings(shortcutSettings)
 
   // Repeated streaming mutations do not flood diagnostics.

@@ -1,0 +1,23 @@
+{
+  "name": "@dsh-desktop-pro/server",
+  "version": "1.0.0",
+  "description": "DSH Desktop Pro management server: organisation sign-in, desired-state distribution, devices and audit",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "src/main.ts",
+  "scripts": {
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@dsh-desktop-pro/protocol": "workspace:*",
+    "jose": "6.2.17",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
