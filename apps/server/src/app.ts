@@ -20,6 +20,8 @@ import { createSealer, newId } from './crypto.ts'
 import { parseCsv } from './csv.ts'
 import type { Db } from './db.ts'
 import { createGateway } from './gateway.ts'
+import { createIdentitySources } from './identity/index.ts'
+import { createDirectorySync, type DirectorySync } from './identity/sync.ts'
 import {
   bearer, cookies, createRouter, HttpError, readForm, readJson, readText, redirect, securityHeaders, sendHtml, sendJson, setCookie, type Context,
 } from './http.ts'
@@ -45,6 +47,8 @@ export interface App {
   market: Market
   auth: Auth
   composer: Composer
+  /** The upstream directory sync, when DSH_DIRECTORY is set. */
+  directory: DirectorySync | undefined
   listen(): Promise<string>
   close(): Promise<void>
 }
@@ -63,6 +67,11 @@ const SIGN_IN_ERRORS_ZH: Record<string, string> = {
   idp_token: '公司登录系统没有返回登录凭据，请稍后重试，或联系公司 IT 管理员。',
   idp_nonce: '登录校验没有通过，请回到 DSH Desktop Pro 重新点击登录。',
   oidc_disabled: '这台服务端没有配置公司登录，请联系公司 IT 管理员。',
+  idp_disabled: '这台服务端没有开启这种登录方式，请联系公司 IT 管理员。',
+  idp_refused: '登录被取消或被拒绝，请回到 DSH Desktop Pro 重新点击登录。',
+  idp_unreachable: '暂时连不上公司的登录服务，请稍后重试。',
+  not_in_directory: '你的账号不在这台服务端同步的公司通讯录里。如果刚入职，请等几分钟再试，或联系公司 IT 管理员。',
+  wrong_organization: '你登录的不是本公司的账号，请切换到公司账号后重试。',
 }
 
 function str(value: unknown, field: string, max = 200): string {
@@ -77,7 +86,8 @@ export async function createApp(options: AppOptions): Promise<App> {
   const sealer = createSealer(config.secret)
   const store = createStore(db, config.tenant.id, sealer)
   await store.ensureTenant(config.tenant.name)
-  const auth = createAuth(store, config, fetchImpl)
+  const identity = createIdentitySources(config, fetchImpl)
+  const auth = createAuth(store, config, identity.signIn)
   const market = createMarket(db, store.tenantId, config, fetchImpl)
   const composer = createComposer(store, config, sealer, createGateway(config.gateway, fetchImpl, db, store.tenantId), market)
   const metering = createMetering(db, store.tenantId, sealer, config)
@@ -88,6 +98,9 @@ export async function createApp(options: AppOptions): Promise<App> {
   /** Ends waiting long polls before the database closes. */
   let shuttingDown = false
   const stopRetention = startRetention(db, store.tenantId, config.retention)
+  const directory = identity.directory === undefined ? undefined
+    : createDirectorySync({ db, store, connector: identity.directory, config: config.directorySync, onDisabled: userId => offboard(userId) })
+  directory?.start()
 
   /**
    * The console authenticates with a cookie, so a change must come from the
@@ -130,12 +143,12 @@ export async function createApp(options: AppOptions): Promise<App> {
     const flow = await auth.startFlow('client', { redirect: redirectUri, state: url.searchParams.get('state') ?? '', challenge: url.searchParams.get('code_challenge') ?? '' })
     const methods = auth.signInMethods()
     // One real provider and no development login: go straight to it.
-    if (methods.length === 1 && methods[0]?.id === 'oidc') { redirect(res, await auth.oidcRedirect(flow)); return }
+    if (methods.length === 1 && methods[0] !== undefined && methods[0].id !== 'dev') { redirect(res, await auth.redirectTo(methods[0].id, flow)); return }
     sendHtml(res, 200, signInPage({ organization: (await store.tenant()).name, flowId: flow.id, methods, devLogin: config.devLogin, audience: 'client', lang, host: host() }))
   })
 
-  router.get('/v1/auth/start/oidc', async ({ res, url }) => {
-    redirect(res, await auth.oidcRedirect(await auth.flow(url.searchParams.get('flow') ?? '')))
+  router.get('/v1/auth/start/:idp', async ({ res, url, params }) => {
+    redirect(res, await auth.redirectTo(params['idp'] ?? '', await auth.flow(url.searchParams.get('flow') ?? '')))
   })
 
   async function finishLogin(ctx: Context, done: { flow: Awaited<ReturnType<Auth['flow']>>; person: User }): Promise<void> {
@@ -148,7 +161,8 @@ export async function createApp(options: AppOptions): Promise<App> {
     redirect(ctx.res, await auth.issueCode(done.flow, done.person))
   }
 
-  router.get('/v1/auth/oidc/callback', async (ctx) => { await finishLogin(ctx, await auth.oidcCallback(ctx.url.searchParams)) })
+  // Each identity source returns here: `/v1/auth/<idp>/callback` is the address to register with it.
+  router.get('/v1/auth/:idp/callback', async (ctx) => { await finishLogin(ctx, await auth.callback(ctx.params['idp'] ?? '', ctx.url.searchParams)) })
   router.post('/v1/auth/dev', async (ctx) => {
     const form = await readForm(ctx.req)
     await finishLogin(ctx, await auth.devLogin(form.get('flow') ?? '', str(form.get('email'), 'email')))
@@ -378,16 +392,21 @@ export async function createApp(options: AppOptions): Promise<App> {
     if (body.departmentId !== undefined) patch.departmentId = typeof body.departmentId === 'string' && body.departmentId !== '' ? body.departmentId : null
     if (body.name !== undefined) patch.name = str(body.name, 'name')
     const person = await store.updateUser(ctx.params['id'] ?? '', patch)
-    if (patch.status === 'disabled') {
-      // Off-boarding: sessions end now, the gateway key stops working now,
-      // and devices are told to remove the organisation's configuration.
-      await auth.revokeUserSessions(person.id)
-      await composer.revokeGatewayKey(person.id)
-      await db.run("UPDATE devices SET status = 'revoked' WHERE tenant_id = $1 AND user_id = $2", [store.tenantId, person.id])
-    }
+    if (patch.status === 'disabled') await offboard(person.id)
     await store.audit({ actorType: 'admin', actorId: me.id, action: 'user.updated', target: person.id, detail: patch as Record<string, unknown> })
     sendJson(ctx.res, 200, person)
   })
+
+  /**
+   * Off-boarding, the same for a manual disable and a directory sync: sessions
+   * end now, every gateway key of the person stops working now, and devices are
+   * told to remove the organisation's configuration.
+   */
+  async function offboard(userId: string): Promise<void> {
+    await auth.revokeUserSessions(userId)
+    await composer.revokeGatewayKey(userId)
+    await db.run("UPDATE devices SET status = 'revoked' WHERE tenant_id = $1 AND user_id = $2", [store.tenantId, userId])
+  }
 
   /** CSV columns: name,email,department[,role] — department as a path like Finance/Payables. */
   router.post('/admin/api/users/import', async (ctx) => {
@@ -407,6 +426,8 @@ export async function createApp(options: AppOptions): Promise<App> {
       const departmentId = column('department') >= 0 && (row[column('department')]?.trim() ?? '') !== '' ? await store.departmentByPath(row[column('department')] ?? '') : null
       const existing = await store.userByEmail(email)
       if (existing === undefined) { await store.createUser({ name, email, role, departmentId }); created += 1 }
+      // The directory owns name and department of the people it manages; the CSV can still set the role.
+      else if (existing.source !== null) { await store.updateUser(existing.id, { role }); updated += 1 }
       else { await store.updateUser(existing.id, { name, role, departmentId }); updated += 1 }
     }
     await store.audit({ actorType: 'admin', actorId: me.id, action: 'users.imported', detail: { created, updated, errors: errors.length } })
@@ -526,6 +547,34 @@ export async function createApp(options: AppOptions): Promise<App> {
     }))
   })
   router.get('/admin/api/audit/verify', async (ctx) => { await admin(ctx, false); sendJson(ctx.res, 200, await verifyAudit(db, store.tenantId)) })
+
+  // ---------- identity sources ----------
+
+  router.get('/admin/api/identity', async (ctx) => {
+    await admin(ctx, false)
+    sendJson(ctx.res, 200, {
+      signIn: auth.signInMethods().map(method => ({ ...method, ...method.id !== 'dev' && { callbackUrl: auth.callbackUrl(method.id) } })),
+      directory: directory === undefined ? null : {
+        source: directory.source,
+        intervalMinutes: directory.intervalMinutes,
+        maxDisablePercent: config.directorySync.maxDisablePercent,
+        running: directory.isRunning(),
+        runs: await directory.runs(20),
+        managed: (await db.get<{ count: number }>("SELECT COUNT(*) AS count FROM users WHERE tenant_id = $1 AND source = $2 AND status = 'active'", [store.tenantId, directory.source]))?.count ?? 0,
+      },
+    })
+  })
+  router.post('/admin/api/identity/directory/preview', async (ctx) => {
+    await admin(ctx, false)
+    if (directory === undefined) throw new HttpError(404, 'no_directory')
+    sendJson(ctx.res, 200, await directory.preview())
+  })
+  router.post('/admin/api/identity/directory/sync', async (ctx) => {
+    const me = await admin(ctx)
+    if (directory === undefined) throw new HttpError(404, 'no_directory')
+    const body = await readJson(ctx.req) as { force?: unknown }
+    sendJson(ctx.res, 200, await directory.run({ trigger: 'manual', force: body.force === true, actor: me.id }))
+  })
 
   /** The file IT distributes with the installer. */
   router.get('/admin/api/enrollment', async (ctx) => {
@@ -855,7 +904,7 @@ export async function createApp(options: AppOptions): Promise<App> {
   })
 
   return {
-    server, store, metering, market, auth, composer,
+    server, store, metering, market, auth, composer, directory,
     listen: () => new Promise((resolve) => {
       server.listen(config.port, config.host, () => {
         const address = server.address()
@@ -865,6 +914,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     close: async () => {
       shuttingDown = true
       stopRetention()
+      await directory?.stop()
       const closing = new Promise<void>(resolve => { server.close(() => { resolve() }) })
       // Long polls wake every two seconds; idle keep-alive sockets close now.
       server.closeIdleConnections()

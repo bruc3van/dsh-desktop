@@ -10,6 +10,7 @@ import * as audit from './page-audit.js'
 import * as settings from './page-settings.js'
 import * as models from './page-models.js'
 import * as usage from './page-usage.js'
+import * as identity from './page-identity.js'
 import * as quotas from './page-quotas.js'
 import * as market from './page-market.js'
 import * as skills from './page-skills.js'
@@ -27,6 +28,7 @@ const NAV = [
   { group: t('人员与组织'), items: [
     { href: '#/members', label: t('成员'), icon: 'people', count: () => counts.members },
     { href: '#/departments', label: t('部门'), icon: 'tree' },
+    { href: '#/identity', label: t('身份源'), icon: 'key' },
   ] },
   { group: t('配置'), items: [
     { href: '#/profiles', label: t('场景包'), icon: 'layers', count: () => counts.profiles },
@@ -53,6 +55,7 @@ const ROUTES = [
   [/^#\/members$/, members.renderList],
   [/^#\/members\/([^/]+)$/, members.renderDetail],
   [/^#\/departments$/, members.renderDepartments],
+  [/^#\/identity$/, identity.render],
   [/^#\/profiles$/, profiles.renderList],
   [/^#\/profiles\/([^/]+)(?:\/([a-z-]+))?$/, profiles.renderDetail],
   [/^#\/gateway$/, settings.renderGateway],

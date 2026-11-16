@@ -1,3 +1,4 @@
+import { SOURCE_LABEL } from './page-identity.js'
 import { t, tf } from './i18n.js'
 import { actionLabel, actionTone, api, DEVICE_STATE, deviceState, ROLE_LABEL } from './api.js'
 import {
@@ -49,7 +50,7 @@ export async function renderList(ctx) {
     result.textContent = tf('{n} 人', { n: rows.length })
     tableHost.replaceChildren(table([
       { label: t('成员'), cell: user => h('div', { class: 'title-line' }, h('span', { class: 'avatar' }, initials(user.name)),
-        h('div', {}, h('div', { class: 'cell-title' }, user.name), h('div', { class: 'cell-sub' }, user.email ?? '—'))) },
+        h('div', {}, h('div', { class: 'cell-title' }, user.name, user.source && [' ', badge(SOURCE_LABEL[user.source] ?? user.source, 'plain')]), h('div', { class: 'cell-sub' }, user.email ?? '—'))) },
       { label: t('部门'), cell: user => path(user.department_id) || h('span', { class: 'faint' }, '—') },
       { label: t('角色'), cell: user => roleBadge(user.role) },
       { label: t('状态'), cell: user => statusBadge(user.status) },
@@ -89,16 +90,19 @@ export async function renderList(ctx) {
 // ---------- add / edit ----------
 
 function memberDialog(ctx, departments, path, person) {
-  const name = h('input', { value: person?.name ?? '', autocomplete: 'off' })
+  // Someone an upstream directory manages: name and department come from it (ADR-0008).
+  const managed = person?.source ? SOURCE_LABEL[person.source] ?? person.source : null
+  const name = h('input', { value: person?.name ?? '', autocomplete: 'off', disabled: managed !== null })
   const email = h('input', { type: 'email', value: person?.email ?? '', autocomplete: 'off', disabled: person !== undefined })
   const department = select(departmentOptions(departments, path), person?.department_id ?? '', () => {}, t('部门'))
+  if (managed !== null) department.disabled = true
   const role = select([['member', t('成员')], ['admin', t('管理员')], ['auditor', t('审计员（只读）')]], person?.role ?? 'member', () => {}, t('角色'))
   return openDialog({
     title: person ? tf('修改 {name}', { name: person.name }) : t('添加成员'),
     drawer: true,
     build: (close) => {
       const save = button(person ? t('保存修改') : t('添加成员'), { kind: 'primary', onclick: () => busy(save, async () => {
-        const body = { name: name.value, role: role.value, departmentId: department.value }
+        const body = managed !== null ? { role: role.value } : { name: name.value, role: role.value, departmentId: department.value }
         if (person) await api('PATCH', '/admin/api/users/' + person.id, body)
         else await api('POST', '/admin/api/users', { ...body, email: email.value })
         toast(person ? t('已保存') : tf('已添加 {name}', { name: name.value }))
@@ -107,8 +111,9 @@ function memberDialog(ctx, departments, path, person) {
       }) })
       return {
         body: [
+          managed !== null && callout('info', tf('姓名、邮箱和部门来自{source}通讯录，在{source}里修改后会自动同步过来。这里可以改角色。', { source: managed })),
           field(t('姓名'), name),
-          field(t('邮箱'), email, person ? t('邮箱用来匹配企业账号登录，添加后不能修改。') : t('必须和企业 SSO 里的邮箱一致，登录时靠它认出这个人。')),
+          field(t('邮箱'), email, managed !== null ? null : person ? t('邮箱用来匹配企业账号登录，添加后不能修改。') : t('必须和企业 SSO 里的邮箱一致，登录时靠它认出这个人。')),
           field(t('部门'), department, t('决定这个人拿到哪个部门的场景包。')),
           field(t('角色'), role, t('管理员可以修改所有配置；审计员可以查看控制台，但不能修改。')),
         ],

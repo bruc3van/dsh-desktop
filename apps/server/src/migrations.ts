@@ -158,6 +158,30 @@ const MIGRATIONS: Array<{ id: number; statements: string[] }> = [
         tenant_id TEXT PRIMARY KEY, seq BIGINT NOT NULL, hash TEXT NOT NULL, pruned_at BIGINT NOT NULL)`,
     ],
   },
+  {
+    id: 6,
+    statements: [
+      // Identity sources (ADR-0008): which upstream directory manages a person
+      // or department, and its own ID for them.
+      `ALTER TABLE users ADD COLUMN source TEXT`,
+      `ALTER TABLE users ADD COLUMN external_id TEXT`,
+      // Who disabled someone: 'admin' stays disabled; 'sync' comes back when the directory does.
+      `ALTER TABLE users ADD COLUMN disabled_by TEXT`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS users_source_external ON users (tenant_id, source, external_id)`,
+      `ALTER TABLE departments ADD COLUMN source TEXT`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS departments_source_external ON departments (tenant_id, source, external_id)`,
+      // Sign-in flows name the identity source they went to; flows live minutes, so the table is recreated.
+      `DROP TABLE login_flows`,
+      `CREATE TABLE login_flows (
+        id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, kind TEXT NOT NULL, client_redirect TEXT, client_state TEXT, code_challenge TEXT,
+        idp TEXT, idp_nonce TEXT, idp_verifier TEXT, expires_at BIGINT NOT NULL)`,
+      // One row per directory sync run.
+      `CREATE TABLE IF NOT EXISTS directory_runs (
+        id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, source TEXT NOT NULL, trigger TEXT NOT NULL, started_at BIGINT NOT NULL,
+        finished_at BIGINT, status TEXT NOT NULL, summary TEXT, error TEXT)`,
+      `CREATE INDEX IF NOT EXISTS directory_runs_time ON directory_runs (tenant_id, started_at)`,
+    ],
+  },
 ]
 
 export async function migrate(db: Db): Promise<void> {

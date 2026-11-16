@@ -3,10 +3,12 @@
  *
  * The server is an OAuth 2.0 authorization server for one public client
  * (`dsh-desktop`, PKCE required, loopback redirect only) and federates the
- * actual authentication to the organisation's identity provider: any
- * OpenID Connect provider, or a development login for evaluation. People are
- * matched by IdP subject, then by e-mail; unknown people are refused unless
- * automatic provisioning is on.
+ * actual authentication to identity sources (ADR-0008): an OpenID Connect
+ * provider, the organisation's Feishu, DingTalk or WeCom, or a development
+ * login for evaluation. People are matched by the provider's subject first.
+ * For a directory source that is the only match: its people come from its
+ * directory. For OIDC a verified e-mail can find a member, and unknown people
+ * are refused unless automatic provisioning is on.
  *
  * Tokens are opaque random strings stored only as SHA-256 hashes. Refresh
  * tokens rotate on every use, and presenting one that was already rotated
@@ -21,10 +23,10 @@
  */
 
 import { pkceChallenge } from '@dsh-desktop-pro/protocol'
-import { createRemoteJWKSet, jwtVerify } from 'jose'
 import type { ServerConfig } from './config.ts'
 import { newId, randomToken, safeEqual, sha256 } from './crypto.ts'
 import { HttpError } from './http.ts'
+import { IdentityError, type SignedInIdentity, type SignInConnector } from './identity/types.ts'
 import type { Store, User } from './store.ts'
 
 const FLOW_TTL_MS = 10 * 60 * 1000
@@ -39,12 +41,11 @@ interface Flow {
   client_redirect: string | null
   client_state: string | null
   code_challenge: string | null
-  oidc_state: string | null
-  oidc_nonce: string | null
-  oidc_verifier: string | null
+  /** The identity source this sign-in went to, and what its callback must match. */
+  idp: string | null
+  idp_nonce: string | null
+  idp_verifier: string | null
 }
-
-interface OidcMetadata { authorization_endpoint: string; token_endpoint: string; jwks_uri: string; issuer: string }
 
 /** Only the loopback redirect of a native app (RFC 8252 §7.3). */
 export function isLoopbackRedirect(value: string): boolean {
@@ -56,25 +57,18 @@ export function isLoopbackRedirect(value: string): boolean {
   }
 }
 
-export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof fetch = fetch) {
-  let oidcMetadata: Promise<OidcMetadata> | undefined
-  let jwks: ReturnType<typeof createRemoteJWKSet> | undefined
+export function createAuth(store: Store, config: ServerConfig, connectors: readonly SignInConnector[]) {
+  const byId = new Map(connectors.map(connector => [connector.id, connector]))
 
-  function discover(): Promise<OidcMetadata> {
-    if (config.oidc === undefined) return Promise.reject(new Error('OIDC is not configured'))
-    oidcMetadata ??= fetchImpl(config.oidc.issuer.replace(/\/$/, '') + '/.well-known/openid-configuration', { signal: AbortSignal.timeout(10_000) })
-      .then(async (response) => {
-        if (!response.ok) throw new Error('OIDC discovery answered HTTP ' + String(response.status))
-        return await response.json() as OidcMetadata
-      })
-      .catch((error: unknown) => { oidcMetadata = undefined; throw error })
-    return oidcMetadata
+  /** Where an identity source sends people back; register it with the provider. */
+  function callbackUrl(idp: string): string {
+    return config.publicUrl + '/v1/auth/' + idp + '/callback'
   }
 
-  function signInMethods(): Array<{ id: string; label: string }> {
+  function signInMethods(): Array<{ id: string; label: string; labels: { zh: string; en: string } }> {
     return [
-      ...config.oidc !== undefined ? [{ id: 'oidc', label: config.oidc.label }] : [],
-      ...config.devLogin ? [{ id: 'dev', label: 'Development login' }] : [],
+      ...connectors.map(connector => ({ id: connector.id, label: connector.label.en, labels: connector.label })),
+      ...config.devLogin ? [{ id: 'dev', label: 'Development login', labels: { zh: '开发登录', en: 'Development login' } }] : [],
     ]
   }
 
@@ -82,7 +76,7 @@ export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof
     const flow: Flow = {
       id: randomToken(24), kind,
       client_redirect: client?.redirect ?? null, client_state: client?.state ?? null, code_challenge: client?.challenge ?? null,
-      oidc_state: null, oidc_nonce: null, oidc_verifier: null,
+      idp: null, idp_nonce: null, idp_verifier: null,
     }
     await store.db.run('DELETE FROM login_flows WHERE expires_at < $1', [Date.now()])
     await store.db.run('INSERT INTO login_flows (id, tenant_id, kind, client_redirect, client_state, code_challenge, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
@@ -92,61 +86,56 @@ export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof
 
   async function flow(id: string): Promise<Flow> {
     const row = await store.db.get<Flow & { expires_at: number }>(
-      'SELECT id, kind, client_redirect, client_state, code_challenge, oidc_state, oidc_nonce, oidc_verifier, expires_at FROM login_flows WHERE tenant_id = $1 AND id = $2', [store.tenantId, id])
+      'SELECT id, kind, client_redirect, client_state, code_challenge, idp, idp_nonce, idp_verifier, expires_at FROM login_flows WHERE tenant_id = $1 AND id = $2', [store.tenantId, id])
     if (row === undefined || row.expires_at < Date.now()) throw new HttpError(400, 'login_expired', 'This sign-in link expired. Start again from DSH Desktop Pro.')
     return row
   }
 
-  /** The IdP leg: redirect to the provider, remembering PKCE and nonce for the callback. */
-  async function oidcRedirect(current: Flow): Promise<string> {
-    if (config.oidc === undefined) throw new HttpError(400, 'oidc_disabled')
-    const metadata = await discover()
+  function connector(idp: string): SignInConnector {
+    const found = byId.get(idp)
+    if (found === undefined) throw new HttpError(404, 'idp_disabled', 'This sign-in method is not set up on this server.')
+    return found
+  }
+
+  /** The provider leg: send the person to the identity source, remembering PKCE and nonce for the callback. */
+  async function redirectTo(idp: string, current: Flow): Promise<string> {
+    const source = connector(idp)
     const verifier = randomToken(32)
     const nonce = randomToken(16)
-    await store.db.run('UPDATE login_flows SET oidc_state = $1, oidc_nonce = $2, oidc_verifier = $3 WHERE id = $4', [current.id, nonce, verifier, current.id])
-    const url = new URL(metadata.authorization_endpoint)
-    url.searchParams.set('response_type', 'code')
-    url.searchParams.set('client_id', config.oidc.clientId)
-    url.searchParams.set('redirect_uri', config.publicUrl + '/v1/auth/oidc/callback')
-    url.searchParams.set('scope', config.oidc.scopes)
-    url.searchParams.set('state', current.id)
-    url.searchParams.set('nonce', nonce)
-    url.searchParams.set('code_challenge', pkceChallenge(verifier))
-    url.searchParams.set('code_challenge_method', 'S256')
-    return url.href
+    await store.db.run('UPDATE login_flows SET idp = $1, idp_nonce = $2, idp_verifier = $3 WHERE id = $4', [idp, nonce, verifier, current.id])
+    return source.authorizeUrl({ state: current.id, nonce, challenge: pkceChallenge(verifier), redirectUri: callbackUrl(idp) })
   }
 
-  /** The IdP came back: exchange its code, verify the ID token, find the person. */
-  async function oidcCallback(params: URLSearchParams): Promise<{ flow: Flow; person: User }> {
-    if (config.oidc === undefined) throw new HttpError(400, 'oidc_disabled')
-    if (params.get('error') !== null) throw new HttpError(400, 'idp_error', 'The identity provider refused the sign-in: ' + (params.get('error_description') ?? params.get('error') ?? ''))
+  /** The provider came back: let its connector establish who it is, then find the member. */
+  async function callback(idp: string, params: URLSearchParams): Promise<{ flow: Flow; person: User }> {
+    const source = connector(idp)
     const current = await flow(params.get('state') ?? '')
-    if (current.oidc_verifier === null || current.oidc_nonce === null) throw new HttpError(400, 'login_state')
-    const metadata = await discover()
-    const body = new URLSearchParams({
-      grant_type: 'authorization_code', code: params.get('code') ?? '', redirect_uri: config.publicUrl + '/v1/auth/oidc/callback',
-      client_id: config.oidc.clientId, code_verifier: current.oidc_verifier,
-      ...config.oidc.clientSecret !== undefined && { client_secret: config.oidc.clientSecret },
-    })
-    const response = await fetchImpl(metadata.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body, signal: AbortSignal.timeout(15_000) })
-    if (!response.ok) throw new HttpError(502, 'idp_token', 'The identity provider did not issue a token (HTTP ' + String(response.status) + ')')
-    const tokens = await response.json() as { id_token?: string }
-    if (typeof tokens.id_token !== 'string') throw new HttpError(502, 'idp_token', 'The identity provider returned no ID token')
-    jwks ??= createRemoteJWKSet(new URL(metadata.jwks_uri))
-    const { payload } = await jwtVerify(tokens.id_token, jwks, { issuer: metadata.issuer, audience: config.oidc.clientId })
-    if (payload['nonce'] !== current.oidc_nonce) throw new HttpError(400, 'idp_nonce')
-    const subject = String(payload.sub ?? '')
-    const claimed = typeof payload['email'] === 'string' ? payload['email'] : undefined
-    const verified = payload['email_verified'] === true || payload['email_verified'] === 'true' || config.oidc.trustEmail
-    const name = typeof payload['name'] === 'string' ? payload['name'] : claimed ?? subject
-    if (claimed !== undefined && !verified) {
-      await store.audit({ actorType: 'system', action: 'login.email_unverified', detail: { provider: 'oidc', email: claimed } })
+    if (current.idp !== idp || current.idp_verifier === null || current.idp_nonce === null) throw new HttpError(400, 'login_state')
+    let identity: SignedInIdentity
+    try {
+      identity = await source.complete(params, { nonce: current.idp_nonce, verifier: current.idp_verifier, redirectUri: callbackUrl(idp) })
+    } catch (error) {
+      if (error instanceof IdentityError) {
+        if (error.code === 'wrong_organization') await store.audit({ actorType: 'system', action: 'login.refused', detail: { provider: idp, reason: 'wrong_organization' } })
+        throw new HttpError(error.status, error.code, error.message)
+      }
+      throw error
     }
-    return { flow: current, person: await resolvePerson('oidc', subject, verified ? claimed : undefined, name) }
+    return { flow: current, person: await resolvePerson(identity) }
   }
 
-  async function resolvePerson(provider: string, subject: string, email: string | undefined, name: string): Promise<User> {
+  async function resolvePerson(identity: SignedInIdentity): Promise<User> {
+    const { provider, subject, name } = identity
     let person = await store.userByIdentity(provider, subject)
+    if (person === undefined && identity.directoryBound) {
+      // People of a directory source come only from its directory.
+      await store.audit({ actorType: 'system', action: 'login.refused', detail: { provider, reason: 'not_in_directory' } })
+      throw new HttpError(403, 'not_in_directory', 'Your account is not in the organisation directory this server syncs. Ask your IT administrator.')
+    }
+    const email = identity.email !== undefined && identity.emailVerified ? identity.email : undefined
+    if (identity.email !== undefined && !identity.emailVerified) {
+      await store.audit({ actorType: 'system', action: 'login.email_unverified', detail: { provider, email: identity.email } })
+    }
     if (person === undefined && email !== undefined) person = await store.userByEmail(email)
     if (person === undefined && config.autoProvision) {
       person = await store.createUser({ name, email: email ?? null })
@@ -165,7 +154,8 @@ export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof
   async function devLogin(flowId: string, email: string): Promise<{ flow: Flow; person: User }> {
     if (!config.devLogin) throw new HttpError(404, 'not_found')
     const current = await flow(flowId)
-    return { flow: current, person: await resolvePerson('dev', email.toLowerCase(), email.toLowerCase(), email.split('@')[0] ?? email) }
+    const normalised = email.toLowerCase()
+    return { flow: current, person: await resolvePerson({ provider: 'dev', subject: normalised, name: normalised.split('@')[0] ?? normalised, email: normalised, emailVerified: true, directoryBound: false }) }
   }
 
   /** Finish a client flow: a one-time code for the loopback redirect. */
@@ -337,7 +327,7 @@ export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof
   }
 
   return {
-    signInMethods, startFlow, flow, oidcRedirect, oidcCallback, devLogin, issueCode, token, logout, revokeUserSessions,
+    signInMethods, callbackUrl, startFlow, flow, redirectTo, callback, devLogin, issueCode, token, logout, revokeUserSessions,
     authenticate, consoleSession, consolePerson, consoleLogout, bootstrapSession, bootstrapValid,
   }
 }
