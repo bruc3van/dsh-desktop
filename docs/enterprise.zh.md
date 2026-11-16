@@ -121,6 +121,43 @@ docker compose up -d
 DSH_PUBLIC_URL=http://127.0.0.1:8080 DSH_SERVER_SECRET=$(openssl rand -base64 48) DSH_DEV_LOGIN=1 DSH_BOOTSTRAP_TOKEN=change-me pnpm run server
 ```
 
+### 身份源：飞书、钉钉、企业微信
+
+接入公司的飞书、钉钉或企业微信后，**成员从通讯录来**：入职自动出现，调岗自动换部门，离职自动停用（结束登录、吊销所有设备的网关 Key、吊销设备），员工用同一个应用登录。一个组织只接一个通讯录（`DSH_DIRECTORY`）。设计和取舍见 [ADR-0008](adr/0008-identity-sources.md)。
+
+**规则**
+
+- 人只靠平台自己的人员 ID 对应（飞书 `union_id`、钉钉 `unionId`、企业微信 `userid`），**不靠邮箱**：飞书的邮箱是管理员录入、未经验证的，企业微信新建的应用拿不到邮箱。
+- 用飞书、钉钉、企业微信登录的人，必须已经在同步过来的通讯录里；不在的人登录会被拒绝，也不会被自动创建。
+- 控制台里已有的成员，如果邮箱和通讯录里某人相同，第一次同步时会被**认领**：保留角色、设备和历史，之后由通讯录管理。
+- 受通讯录管理的成员，姓名、邮箱、部门只读，在平台里改；角色、停用、场景包仍在控制台改。
+- 离职或从应用的可见范围消失 → 停用，不删除；重新出现会自动恢复。管理员手动停用的人不会被同步恢复。
+- 每 `DSH_DIRECTORY_SYNC_MINUTES` 分钟（默认 15）全量对一次账，控制台「身份源」页可以预览和立即同步。
+- **防误停**：一次同步要停用的人超过受管理在职人数的 `DSH_DIRECTORY_MAX_DISABLE_PERCENT`（默认 20%，至少 3 人），或会停用所有人时，这次同步不执行，等管理员预览后强制执行。常见原因是应用的通讯录范围被改小。
+
+**飞书**（`DSH_DIRECTORY=feishu`）
+
+1. 在飞书开放平台创建**企业自建应用**，开启「网页应用」，记下 App ID 和 App Secret。
+2. 「安全设置」里添加重定向 URL：`<DSH_PUBLIC_URL>/v1/auth/feishu/callback`。
+3. 「权限管理」里开通通讯录的只读权限：部门信息、成员基本信息、成员所属部门、成员状态（在职/离职）、邮箱（可选）。权限名称以开放平台后台为准。
+4. 把应用的**通讯录权限范围**设为全部成员（或你想同步的范围），然后发布应用版本。
+5. `.env`：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`。国际版 Lark 另设 `FEISHU_API_URL=https://open.larksuite.com`、`FEISHU_ACCOUNTS_URL=https://accounts.larksuite.com`。
+
+**钉钉**（`DSH_DIRECTORY=dingtalk`）
+
+1. 在钉钉开放平台创建**企业内部应用**，记下 Client ID（AppKey）、Client Secret 和企业的 CorpId。
+2. 「登录与分享」里添加回调域名，回调地址是 `<DSH_PUBLIC_URL>/v1/auth/dingtalk/callback`。
+3. 开通权限：通讯录部门信息读、成员信息读、个人信息读（`Contact.User.Read`）。通讯录可见范围设为全部员工。
+4. `.env`：`DINGTALK_CLIENT_ID`、`DINGTALK_CLIENT_SECRET`、`DINGTALK_CORP_ID`。登录时选择了其他组织的人会被拒绝。
+
+**企业微信**（`DSH_DIRECTORY=wecom`）
+
+1. 在企业微信管理后台创建**自建应用**，记下 CorpID、AgentId、Secret。应用的**可见范围**就是同步范围。
+2. 设置「网页授权及 JS-SDK」的可信域名为服务端的域名（企业微信要求域名的备案主体与企业相关）。登录回调地址是 `<DSH_PUBLIC_URL>/v1/auth/wecom/callback`。
+3. 设置「企业可信 IP」为服务端访问企业微信接口时的出口 IP。
+4. `.env`：`WECOM_CORP_ID`、`WECOM_AGENT_ID`、`WECOM_SECRET`。
+5. 2022 年 6 月以后创建的应用拿不到成员邮箱，不影响登录和同步。
+
 ### 模型网关
 
 不管用哪种网关，员工电脑上都只有服务端给他签发的个人 Key，真实的模型 Key 拿不到；员工停用后，个人 Key 立即失效。
@@ -247,4 +284,7 @@ DSH_TIMEZONE=Asia/Shanghai
 - 费用是按目录价格的估算，以上游厂商的账单为准。
 - 插件市场的必装插件只按精确版本安装；上架时指定的 npm 私服地址只用于发现页安装，必装时用场景包里的 npm 源。
 - 员工的发现页会缓存插件列表约 10 分钟，上架、下架后可能要等一会儿才显示；禁用和必装随配置几秒内生效。
-- 公司 SSO 目前支持标准 OpenID Connect；飞书、钉钉、企业微信的登录和组织同步、灰度发布、离线安装包还在后续版本里。
+- 登录支持标准 OpenID Connect，以及飞书、钉钉、企业微信（含通讯录同步）。通讯录变更事件（飞书长连接、钉钉 Stream、企业微信回调）还没有接入，离职最晚在一个同步周期（默认 15 分钟）内生效。
+- 一人多部门时只取主部门。
+- 飞书、钉钉、企业微信的接入已经按官方文档的接口和返回格式做了自动检查，但只有真实企业的应用能确认平台现在仍是这样返回的；第一次接入请先在控制台「预览」。
+- 灰度发布、离线安装包还在后续版本里。

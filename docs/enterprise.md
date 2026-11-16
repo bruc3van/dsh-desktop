@@ -79,6 +79,19 @@ Deployments run on **PostgreSQL**. SQLite is for single-machine trials and demos
 DSH_PUBLIC_URL=http://127.0.0.1:8080 DSH_SERVER_SECRET=$(openssl rand -base64 48) DSH_DEV_LOGIN=1 DSH_BOOTSTRAP_TOKEN=change-me pnpm run server
 ```
 
+**Identity sources: Feishu, DingTalk, WeCom.** Set `DSH_DIRECTORY` to `feishu`, `dingtalk` or `wecom` and **members come from that directory**: joiners appear, moves change department, leavers are disabled (sessions end, every device key and device is revoked), and people sign in with the same app. See [ADR-0008](adr/0008-identity-sources.md).
+
+- People are matched by the platform's own ID (Feishu `union_id`, DingTalk `unionId`, WeCom `userid`), never by e-mail: Feishu documents its e-mail as admin-entered and unverified, and newer WeCom apps do not receive it.
+- Signing in with the platform requires being in the synced directory; nobody is created at sign-in.
+- An existing member with the same e-mail as someone in the directory is adopted on the first sync, keeping role, devices and history.
+- Name, e-mail and department of managed people are read-only in the console; role, disabling and profiles are not.
+- Leaving (or leaving the app's visible range) disables, never deletes; coming back restores, unless an administrator disabled them.
+- A full comparison runs every `DSH_DIRECTORY_SYNC_MINUTES` (default 15); the console's *Identity sources* page previews and syncs on demand.
+- A run that would disable more than `DSH_DIRECTORY_MAX_DISABLE_PERCENT` (default 20%, at least 3) of managed, active people — or all of them — is held until an administrator forces it.
+- Feishu: a self-built app with web app enabled; redirect URL `<DSH_PUBLIC_URL>/v1/auth/feishu/callback`; read-only contact permissions (departments, basic member info, member departments, member status, optionally e-mail) with the contact scope set to everyone; `FEISHU_APP_ID`, `FEISHU_APP_SECRET` (Lark: also `FEISHU_API_URL`, `FEISHU_ACCOUNTS_URL`).
+- DingTalk: an internal app; callback `<DSH_PUBLIC_URL>/v1/auth/dingtalk/callback`; read permissions for departments, members and personal info (`Contact.User.Read`); `DINGTALK_CLIENT_ID`, `DINGTALK_CLIENT_SECRET`, `DINGTALK_CORP_ID` (other organisations are refused).
+- WeCom: a self-built app whose visible range is what gets synced; the server's domain as trusted domain for web authorization (callback `<DSH_PUBLIC_URL>/v1/auth/wecom/callback`) and its outbound IP as trusted IP; `WECOM_CORP_ID`, `WECOM_AGENT_ID`, `WECOM_SECRET`.
+
 Either way, employees only ever hold a key the server issues to their device: revoking the device ends that key, disabling the person ends all of theirs.
 
 - **Built-in gateway** (`DSH_GATEWAY=direct`, the default): the server forwards to any OpenAI-compatible API (DeepSeek, Qwen, Kimi, Zhipu, an internal vLLM). Set a default upstream with `DSH_UPSTREAM_URL` and `DSH_UPSTREAM_KEY`, or add upstreams in the console's model catalog; `DSH_TIMEZONE` (default `Asia/Shanghai`) sets the days, weeks and months that usage and limits follow. Profiles route models to `<DSH_PUBLIC_URL>/llm/v1`; only the models in the person's profiles are allowed, checked on every request. Every request is recorded — member, department, model, the model that answered, tokens (input, cache hits, output, reasoning), cost, time to first token, duration and result — never the conversation. When requests cannot be recorded the gateway stops forwarding (`503`) until they can; each person may run `DSH_GATEWAY_MAX_CONCURRENT` requests at once (default 8).
@@ -123,4 +136,7 @@ Denied tools are taken out of the model's tool list. A call that still arrives (
 - Cost is an estimate from catalog prices; the provider's bill is authoritative.
 - Required plugins from the market install at their exact version from the profile's npm registry; a registry set on an approved plugin is used only when people install it from Discover.
 - The Discover page caches the plugin list for about 10 minutes, so approvals and withdrawals can take a while to show; blocks and required plugins arrive with the configuration within seconds.
-- Sign-in is standard OpenID Connect today; Feishu, DingTalk and WeCom sign-in and directory sync, staged rollout and offline install bundles are planned.
+- Sign-in supports OpenID Connect and Feishu, DingTalk and WeCom with directory sync. Directory change events are not connected yet, so a departure takes effect within one sync interval (15 minutes by default).
+- A person in several departments gets their primary department.
+- The Feishu, DingTalk and WeCom connectors are checked against the documented endpoints and shapes; only a real organisation's app confirms the platforms still answer that way, so preview the first sync in the console.
+- Staged rollout and offline install bundles are planned.
