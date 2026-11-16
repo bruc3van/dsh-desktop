@@ -144,7 +144,11 @@ try {
   assert.equal((await llm('sk-dsh-forged', 'chat/completions', { model: 'deepseek-chat' })).status, 401)
   // A profile change applies to the next request, without reissuing keys.
   await admin('PUT', '/admin/api/profiles/' + profile.id, { spec: { models: { providers: { company: { api: 'openai-completions', baseURL: me.gatewayUrl, credential: 'DSH_ORG_GATEWAY_KEY', models: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }] } } } } })
-  assert.equal((await llm(key, 'chat/completions', { model: 'deepseek-reasoner', messages: [] })).status, 200)
+  const reasoned = await llm(key, 'chat/completions', { model: 'deepseek-reasoner', messages: [] })
+  assert.equal(reasoned.status, 200)
+  // The gateway records a request before it ends the response, not before it
+  // sends the headers: read to the end, or the count below races the record.
+  await reasoned.text()
   console.log('✓ only models the person\'s profiles route here are allowed, read at request time')
 
   const usage = (await admin('GET', '/admin/api/usage')).body.rows
