@@ -1,6 +1,7 @@
 import type { BrowserWindow } from 'electron'
 import { appOrigin, originIsLoopback } from './connection-policy.ts'
 import { permissionGrantedForContext } from './permission-policy.ts'
+import type { MainSurface } from './main-window.ts'
 export interface BridgeCaller {
   /** The main window's top frame, showing an origin this client itself selected. */
   trusted: boolean
@@ -10,8 +11,7 @@ export interface BridgeCaller {
 
 interface Options {
   getMainWindow: () => BrowserWindow | null
-  getLoadingDocumentActive: () => boolean
-  getErrorDocumentActive: () => boolean
+  mainSurface: () => MainSurface
   currentTarget: () => string | undefined
   isClientOwnedOrigin: (origin: string) => boolean
 }
@@ -60,7 +60,7 @@ export function createBridgePolicy(options: Options) {
       // The frame was destroyed between send and dispatch.
       return UNTRUSTED_CALLER
     }
-    if (frameUrl.startsWith('data:')) return { trusted: options.getLoadingDocumentActive() || options.getErrorDocumentActive(), remote: false }
+    if (frameUrl.startsWith('data:')) return { trusted: options.mainSurface() !== 'page', remote: false }
     const origin = appOrigin(frameUrl)
     if (origin === '') return UNTRUSTED_CALLER
     const target = currentTarget()
@@ -112,7 +112,7 @@ export function createBridgePolicy(options: Options) {
   function localDocumentCaller(event: Electron.IpcMainEvent): boolean {
     const mainWindow = options.getMainWindow()
     if (mainWindow === null || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return false
-    if (!options.getLoadingDocumentActive() && !options.getErrorDocumentActive()) return false
+    if (options.mainSurface() === 'page') return false
     try {
       const frame = event.senderFrame
       if (frame === null || frame.parent !== null) return false
@@ -153,7 +153,7 @@ export function createBridgePolicy(options: Options) {
     // The client's own data: surfaces (loading, failure) are trusted by
     // definition; everything else must be the origin the client currently
     // targets — the same test the bridge applies to IPC callers.
-    if (url === '' || url.startsWith('data:')) return options.getLoadingDocumentActive() || options.getErrorDocumentActive()
+    if (url === '' || url.startsWith('data:')) return options.mainSurface() !== 'page'
     const target = currentTarget()
     return target !== undefined && appOrigin(url) === appOrigin(target)
   }

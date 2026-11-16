@@ -6,7 +6,7 @@ import { createBridgePolicy,type BridgeCaller } from './bridge-policy.ts'
 import { createDesktopIpc } from './desktop-ipc.ts'
 import { createLocaleController } from './locale-controller.ts'
 import { centeredWindowBounds, guardWindowVisibility } from './window-state.ts'
-import { createMainWindowFactory } from './main-window.ts'
+import { createMainWindowFactory, type MainSurface } from './main-window.ts'
 import { buildApplicationMenu, buildLinuxApplicationMenu, buildTrayMenu } from './native-menus.ts'
 import { createPluginRecoveryController } from './plugin-recovery-controller.ts'
 import { showConfirmationDialog } from './plugin-recovery-dialog.ts'
@@ -193,7 +193,7 @@ const connection = createConnectionController({
   isQuitting: () => quitting, isInstallerHandoff,
   plugins: { onManagedReady, schedulePluginCompatibilityFallback },
   presentation: {
-    windowRequested: () => mainWindowRequested, isLoading: () => loadingDocumentActive,
+    windowRequested: () => mainWindowRequested, isLoading: () => mainSurface === 'loading',
     launchWindow, loadMainWindow, showLoadingDocument, updateLoadingStatus, showConnectionError,
     showPinnedPortStartupFailure, showLocalRuntimeStartupFailure, rememberSmartBridgeHandoff,
   },
@@ -307,12 +307,13 @@ function requestMacNotificationAttention(id: string): void {
 
 /** Whether a caller is waiting for the main window, as opposed to tray-only recovery. */
 let mainWindowRequested = false
-/** Whether the main window still shows the local loading document. */
-let loadingDocumentActive = false
+/**
+ * Which document the main window holds. The loading and failure documents are
+ * the client's own data: pages and the only ones allowed the local seats.
+ */
+let mainSurface: MainSurface = 'page'
 /** Invalidates delayed loading hints from an older startup/reconnect surface. */
 let loadingHintGeneration = 0
-/** Whether the main window shows the local connection-failure document. */
-let errorDocumentActive = false
 let settingsWindow: BrowserWindow | null = null
 const settingsServer = createSettingsServer({
   requestRestart,
@@ -420,7 +421,7 @@ function scheduleLoadingHints(): void {
   for (const [delay, message] of steps) {
     setTimeout(() => {
       const window = mainWindow
-      if (generation !== loadingHintGeneration || !loadingDocumentActive
+      if (generation !== loadingHintGeneration || mainSurface !== 'loading'
         || window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
       void window.webContents.executeJavaScript(
         `document.querySelector('.hint')?.replaceChildren(${JSON.stringify(message)});`,
@@ -443,7 +444,7 @@ function updateLoadingStatus(chinese: string, english: string, state: 'busy' | '
   // Not webContents.getURL(): it stays empty until the data document commits,
   // which is exactly when the first status update is issued. Electron holds
   // the script until the page stops loading, so an early call still lands.
-  if (!loadingDocumentActive || window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
+  if (mainSurface !== 'loading' || window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
   const message = localeChinese() ? chinese : english
   const failed = String(state === 'failed')
   void window.webContents.executeJavaScript(
@@ -580,7 +581,7 @@ function showConnectionError(failure: ConnectionFailure): void {
     reportConnectionFailureWithoutWindow(failure)
     return
   }
-  if (errorDocumentActive) return
+  if (mainSurface === 'failure') return
   const chinese = localeChinese()
   let title: string
   let hint: string
@@ -605,8 +606,7 @@ function showConnectionError(failure: ConnectionFailure): void {
     hint = loadFailureHint(failure.code, failure.url, chinese)
   }
 
-  errorDocumentActive = true
-  loadingDocumentActive = false
+  mainSurface = 'failure'
   resetPageAppearance()
   void window.loadURL(errorPageUrl({
     title,
@@ -705,11 +705,11 @@ function retryConnection(): void {
   // An explicit retry may recover a repaired disk/configuration. The manager
   // keeps failures latched when a previous tree's disposal is unconfirmed.
   webUi?.clearFatalError()
-  errorDocumentActive = false
+  dismissFailureSurface()
   showLoadingDocument()
   updateLoadingStatus('正在重新连接…', 'Reconnecting…')
   resetRuntimeRecoveryBudget()
-  if (enterpriseGateActive) {
+  if (admission.kind !== 'admitted') {
     // The gate's main button: sign in (or retry the organisation server).
     void startConnection(loadSettings(), true, true)
     return
@@ -736,7 +736,7 @@ function onRendererTheme(event: Electron.IpcMainEvent, payload: unknown): void {
 const macFolderAccess = createMacFolderAccessController({
   home: homedir(),
   dshHome: childHome,
-  managesRuntime: () => !connection.probeConnected && connection.configuredTarget === undefined,
+  managesRuntime: () => connection.source.kind === 'local',
   chinese: localeChinese,
   dismissed: () => loadSettings().macFolderAccessHintDismissed ?? [],
   dismiss: (folders) => patchSettings({
@@ -767,14 +767,16 @@ function createWindow(): void {
   mainWindow = createMainWindow()
 }
 
-function onMainWindowClosed(): void { mainWindow = null; loadingDocumentActive = false; errorDocumentActive = false }
+function onMainWindowClosed(): void { mainWindow = null; mainSurface = 'page' }
 function markMainWindowUnrequested(): void { mainWindowRequested = false }
 function resetSettingsIntegrationStatus(): void { settingsIntegrationStatus = { state: 'absent' }; reportedSettingsIntegrationFailures.clear() }
 function markWebUiLoaded(): void {
   webUiEverLoaded = true
   void macFolderAccess.onWebUiLoaded()
 }
-function markLoadingDocument(): void { loadingDocumentActive = true; errorDocumentActive = false }
+function markLoadingDocument(): void { mainSurface = 'loading' }
+/** A seat on the failure document was used; what replaces it is decided next. */
+function dismissFailureSurface(): void { if (mainSurface === 'failure') mainSurface = 'page' }
 function createMainWindow(): BrowserWindow {
   return mainWindowFactory.createMainWindow()
 }
@@ -814,8 +816,7 @@ function navigateMainWindow(url: string, force: boolean): void {
     mainWindow.webContents.reload()
     return
   }
-  loadingDocumentActive = false
-  errorDocumentActive = false
+  mainSurface = 'page'
   void mainWindow.loadURL(url).catch(() => { /* did-fail-load owns user recovery */ })
 }
 
@@ -1138,7 +1139,7 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
   const savedServerUrl = normalizeServerUrl(settings.serverUrl)
   const selectedInstalled = selectedInstalledDsh()
   return {
-    mode: connection.probeConnected ? 'probe' : connection.configuredTarget !== undefined ? 'connect' : 'local',
+    mode: connection.source.kind,
     targetUrl: currentTarget() ?? '',
     desktopVersion: desktopClientVersion(),
     settingsIntegration: settingsIntegrationStatus,
@@ -1208,8 +1209,7 @@ function localDocumentCaller(event: Electron.IpcMainEvent): boolean {
 function showLoadingDocument(): void {
   const window = mainWindow
   if (window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
-  loadingDocumentActive = true
-  errorDocumentActive = false
+  mainSurface = 'loading'
   resetPageAppearance()
   void window.loadURL(loadingPageUrl()).catch(() => {})
   scheduleLoadingHints()
@@ -1527,6 +1527,17 @@ function launchWindow(generation = connection.generation, force = false): void {
   if (generation !== connection.generation || quitting) return
   mainWindowRequested = true
   if (mainWindow === null) createWindow()
+  // The organisation answers first. A window reopened before it has admitted
+  // this launch (macOS destroys a closed window; the Dock asks for a new one)
+  // shows where that stands and starts nothing.
+  if (admission.kind === 'refused') {
+    showEnterpriseGate(admission.readiness)
+    return
+  }
+  if (admission.kind === 'pending') {
+    showAdmissionProgress(admission.interactive)
+    return
+  }
   // A failure that arrived while the window was closed owns this window: it is
   // the real explanation, and its seats (retry, settings, quit) are live. A
   // failure from a superseded attempt is stale — drop it and connect.
@@ -1646,8 +1657,24 @@ function boot(): void {
   void startConnection(settings, false, false)
 }
 
-/** The organisation sign-in or failure surface currently fills the main window. */
-let enterpriseGateActive = false
+/**
+ * Whether the organisation has let this launch start a runtime. Personal mode
+ * is admitted from the start. `launchWindow` asks this before anything else: a
+ * window opened while the answer is pending or refused shows that answer, and
+ * never starts the runtime behind it.
+ */
+type Admission =
+  | { kind: 'admitted' }
+  | { kind: 'pending'; interactive: boolean }
+  | { kind: 'refused'; readiness: Exclude<Readiness, { kind: 'ready' }> }
+let admission: Admission = enterprise.active() ? { kind: 'pending', interactive: false } : { kind: 'admitted' }
+
+function showAdmissionProgress(interactive: boolean): void {
+  updateLoadingStatus(
+    interactive ? '请在浏览器中完成企业账号登录…' : '正在获取企业配置…',
+    interactive ? 'Finish signing in with your organisation account in the browser…' : 'Getting your organisation configuration…',
+  )
+}
 
 /**
  * Connect, after the organisation (if any) has said the runtime may start.
@@ -1655,12 +1682,10 @@ let enterpriseGateActive = false
  */
 async function startConnection(settings: ClientSettings, force: boolean, interactive: boolean): Promise<void> {
   if (enterprise.active()) {
+    admission = { kind: 'pending', interactive }
     if (mainWindowRequested) {
       showLoadingDocument()
-      updateLoadingStatus(
-        interactive ? '请在浏览器中完成企业账号登录…' : '正在获取企业配置…',
-        interactive ? 'Finish signing in with your organisation account in the browser…' : 'Getting your organisation configuration…',
-      )
+      showAdmissionProgress(interactive)
     }
     let readiness: Readiness
     try {
@@ -1672,7 +1697,7 @@ async function startConnection(settings: ClientSettings, force: boolean, interac
       showEnterpriseGate(readiness)
       return
     }
-    enterpriseGateActive = false
+    admission = { kind: 'admitted' }
     refreshTrayMenu()
     await enterprise.beforeLaunch((message) => { if (mainWindowRequested) updateLoadingStatus(message, message) }).catch((error: unknown) => {
       console.warn('[enterprise] plugin sync before launch failed: ' + (error instanceof Error ? error.message : String(error)))
@@ -1686,12 +1711,11 @@ async function startConnection(settings: ClientSettings, force: boolean, interac
 /** Sign-in or a blocking organisation failure, in the same surface as connection failures. */
 function showEnterpriseGate(readiness: Exclude<Readiness, { kind: 'ready' }>): void {
   if (quitting) return
-  enterpriseGateActive = true
+  admission = { kind: 'refused', readiness }
   const window = mainWindow
   if (window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
   const chinese = localeChinese()
-  errorDocumentActive = true
-  loadingDocumentActive = false
+  mainSurface = 'failure'
   resetPageAppearance()
   const signIn = readiness.kind === 'sign-in'
   const organization = signIn ? readiness.organization : (enterprise.status().organization ?? '')
@@ -1870,7 +1894,7 @@ const localeController = createLocaleController({
 
 function useSmartFromLocalDocument(): void {
   patchSettings({ connectionMode: 'smart' })
-  errorDocumentActive = false
+  dismissFailureSurface()
   showLoadingDocument()
   applyConnectionSettings(loadSettings(), true)
 }
@@ -1910,8 +1934,7 @@ const desktopIpc = createDesktopIpc({
 
 const bridgePolicy = createBridgePolicy({
   getMainWindow: () => mainWindow,
-  getLoadingDocumentActive: () => loadingDocumentActive,
-  getErrorDocumentActive: () => errorDocumentActive,
+  mainSurface: () => mainSurface,
   currentTarget,
   isClientOwnedOrigin: (origin) => originIsLoopback(origin) && connection.configuredTarget === undefined
     && connection.childTarget !== undefined && webUi?.pid() !== undefined
@@ -1982,8 +2005,7 @@ const mainWindowFactory = createMainWindowFactory({
   isInstallerHandoff,
   onMainWindowClosed,
   markMainWindowUnrequested,
-  getLoadingDocumentActive: () => loadingDocumentActive,
-  getErrorDocumentActive: () => errorDocumentActive,
+  mainSurface: () => mainSurface,
   currentTarget,
   getConnection: () => connection,
   resetSettingsIntegrationStatus,
