@@ -129,6 +129,7 @@ jobs:
           pnpm run check:gateway
           pnpm run check:market
           pnpm run check:oidc
+          pnpm run check:directory
 
       - name: 验证运行时锁契约 / Verify runtime lock contract
         run: pnpm run check:runtime-lock
@@ -266,7 +267,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: 每项检查一个空数据库 / One empty database per check
         run: |
-          for db in server gateway market oidc; do
+          for db in server gateway market oidc directory_feishu directory_dingtalk directory_wecom; do
             psql -h 127.0.0.1 -U dsh -d dsh -c "CREATE DATABASE check_$db"
           done
       - name: 验证服务端 / Verify server
@@ -285,6 +286,11 @@ jobs:
         run: pnpm run check:oidc
         env:
           DSH_CHECK_DATABASE_URL: postgres://dsh:dsh@127.0.0.1:5432/check_oidc
+      - name: 验证身份源同步 / Verify identity sources
+        run: pnpm run check:directory
+        env:
+          # One database per platform: check_directory_feishu, _dingtalk, _wecom.
+          DSH_CHECK_DATABASE_URL: postgres://dsh:dsh@127.0.0.1:5432/check_directory
 
   package-linux:
     name: Linux x64 AppImage / DEB 冒烟 / Linux package smoke

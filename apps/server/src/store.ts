@@ -23,9 +23,15 @@ export interface User {
   role: Role
   status: 'active' | 'disabled'
   department_id: string | null
+  /** The upstream directory that manages this person (ADR-0008); `null` when managed here. */
+  source: string | null
+  /** 'admin' or 'sync'; only someone disabled by the sync comes back with the directory. */
+  disabled_by: string | null
 }
 
-export interface Department { id: string; parent_id: string | null; name: string; external_id: string | null }
+export interface Department { id: string; parent_id: string | null; name: string; external_id: string | null; source: string | null }
+
+const USER_COLUMNS = 'id, name, email, role, status, department_id, source, disabled_by'
 
 export interface Profile { id: string; name: string; description: string | null; current_version: number; updated_at: number }
 
@@ -79,15 +85,15 @@ export function createStore(db: Db, tenantId: string, sealer: Sealer) {
   // ---- people and departments ----
 
   async function users(): Promise<User[]> {
-    return db.all<User>('SELECT id, name, email, role, status, department_id FROM users WHERE tenant_id = $1 ORDER BY name', [tenantId])
+    return db.all<User>('SELECT ' + USER_COLUMNS + ' FROM users WHERE tenant_id = $1 ORDER BY name', [tenantId])
   }
 
   async function user(id: string): Promise<User | undefined> {
-    return db.get<User>('SELECT id, name, email, role, status, department_id FROM users WHERE tenant_id = $1 AND id = $2', [tenantId, id])
+    return db.get<User>('SELECT ' + USER_COLUMNS + ' FROM users WHERE tenant_id = $1 AND id = $2', [tenantId, id])
   }
 
   async function userByEmail(email: string): Promise<User | undefined> {
-    return db.get<User>('SELECT id, name, email, role, status, department_id FROM users WHERE tenant_id = $1 AND email = $2', [tenantId, email.toLowerCase()])
+    return db.get<User>('SELECT ' + USER_COLUMNS + ' FROM users WHERE tenant_id = $1 AND email = $2', [tenantId, email.toLowerCase()])
   }
 
   async function userByIdentity(provider: string, subject: string): Promise<User | undefined> {
@@ -111,19 +117,27 @@ export function createStore(db: Db, tenantId: string, sealer: Sealer) {
     return (await user(id)) as User
   }
 
+  /**
+   * An administrator's change. For someone an upstream directory manages, the
+   * directory owns the name and department; role and status stay here.
+   */
   async function updateUser(id: string, patch: { role?: Role; status?: 'active' | 'disabled'; departmentId?: string | null; name?: string }): Promise<User> {
     const current = await user(id)
     if (current === undefined) throw new HttpError(404, 'user_not_found')
-    await db.run('UPDATE users SET name = $1, role = $2, status = $3, department_id = $4, updated_at = $5 WHERE tenant_id = $6 AND id = $7', [
+    if (current.source !== null && ((patch.name !== undefined && patch.name !== current.name) || (patch.departmentId !== undefined && patch.departmentId !== current.department_id))) {
+      throw new HttpError(409, 'managed_by_directory', 'Name and department come from the organisation directory.')
+    }
+    const disabledBy = patch.status === undefined ? current.disabled_by : patch.status === 'disabled' ? 'admin' : null
+    await db.run('UPDATE users SET name = $1, role = $2, status = $3, department_id = $4, disabled_by = $5, updated_at = $6 WHERE tenant_id = $7 AND id = $8', [
       patch.name ?? current.name, patch.role ?? current.role, patch.status ?? current.status,
-      patch.departmentId === undefined ? current.department_id : patch.departmentId, Date.now(), tenantId, id,
+      patch.departmentId === undefined ? current.department_id : patch.departmentId, disabledBy, Date.now(), tenantId, id,
     ])
     await bumpRevision()
     return (await user(id)) as User
   }
 
   async function departments(): Promise<Department[]> {
-    return db.all<Department>('SELECT id, parent_id, name, external_id FROM departments WHERE tenant_id = $1 ORDER BY name', [tenantId])
+    return db.all<Department>('SELECT id, parent_id, name, external_id, source FROM departments WHERE tenant_id = $1 ORDER BY name', [tenantId])
   }
 
   async function createDepartment(name: string, parentId: string | null, externalId: string | null = null): Promise<Department> {
@@ -132,7 +146,7 @@ export function createStore(db: Db, tenantId: string, sealer: Sealer) {
     }
     const id = newId('dep')
     await db.run('INSERT INTO departments (id, tenant_id, parent_id, name, external_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)', [id, tenantId, parentId, name, externalId, Date.now()])
-    return { id, parent_id: parentId, name, external_id: externalId }
+    return { id, parent_id: parentId, name, external_id: externalId, source: null }
   }
 
   /** A department path like `Finance/Payables`, created as needed. */

@@ -28,6 +28,8 @@ function describeError(code, status) {
     user_not_found: t('这个成员不存在。'),
     invalid_name: t('请填写姓名。'),
     invalid_email: t('邮箱格式不正确，例如 name@example.com。'),
+    managed_by_directory: t('姓名和部门来自公司通讯录，请在通讯录里修改。'),
+    no_directory: t('这台服务端没有接入通讯录。'),
     email_taken: t('这个邮箱已经有成员在用了。'),
     parent_not_found: t('上级部门不存在。'),
     upstream_in_use: t('还有模型使用这个上游，先修改或删除这些模型。'),

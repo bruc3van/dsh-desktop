@@ -72,7 +72,7 @@ function page(lang: PageLanguage, title: string, body: string, host: string): st
 export interface SignInPageOptions {
   organization: string
   flowId: string
-  methods: Array<{ id: string; label: string }>
+  methods: Array<{ id: string; label: string; labels?: { zh: string; en: string } }>
   devLogin: boolean
   /** `client` for DSH Desktop Pro, `console` for the management console. */
   audience: 'client' | 'console'
@@ -86,7 +86,7 @@ export function signInPage(options: SignInPageOptions): string {
   const t = (chinese: string, english: string): string => zh ? chinese : english
   const sso = options.methods.filter(method => method.id !== 'dev')
   const buttons = sso.map(method => '<a class="button" href="/v1/auth/start/' + escapeHtml(method.id) + '?flow=' + encodeURIComponent(options.flowId) + '">'
-    + escapeHtml(t('使用 ' + method.label + ' 登录', 'Continue with ' + method.label)) + '</a>').join('')
+    + escapeHtml(t('使用' + (method.labels?.zh ?? method.label) + '登录', 'Continue with ' + (method.labels?.en ?? method.label))) + '</a>').join('')
   const dev = options.devLogin
     ? (sso.length > 0 ? '<div class="or">' + t('或', 'or') + '</div>' : '<div style="height:24px"></div>')
       + '<div class="dev-head">' + t('评估登录', 'Evaluation sign-in') + '<span class="chip">' + t('仅限试用', 'Evaluation only') + '</span></div>'

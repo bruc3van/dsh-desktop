@@ -197,6 +197,9 @@ textarea.skill { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mon
 .tabs a .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); margin-left: 6px; vertical-align: 2px; }
 
 /* ---------- description lists ---------- */
+.plan-group + .plan-group { margin-top: 18px; }
+.plan-group h3 { font-size: 13.5px; font-weight: 600; margin: 0 0 6px; display: flex; align-items: center; gap: 6px; }
+.plan-list { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.7; max-height: 260px; overflow: auto; }
 dl.props { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 24px; margin: 0; }
 dl.props dt { color: var(--text-2); font-size: 13px; }
 dl.props dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
