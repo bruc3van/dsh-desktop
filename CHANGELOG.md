@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-16
+
+- 修复 PTC 预设（如 OPS (PTC)）下 `run_code` 每次都以 `worker-exit` 失败的问题（[#31](https://github.com/bruc3van/dsh-desktop-pro/issues/31)）。PTC 工作进程就是客户端自身的可执行文件，需要以 Node 模式启动；此前文件沙箱会把这个设置清掉，工作进程于是作为第二个客户端实例启动并立即退出。现在只在沙箱包住的目标是客户端自身时保留 Node 模式，Agent 执行的普通命令仍然拿不到它。macOS 和 Linux 开启文件沙箱时同样适用。
+
 ## [0.6.0] - 2026-11-15
 
 - 不再随安装包内置 safer-dsh-market；首次启动本地运行时时，改为打开官方「自定义插件市场」并订阅精选插件列表 `https://bruc3van.com/dsh-plugins/index.json`。
