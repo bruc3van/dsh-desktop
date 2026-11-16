@@ -14,3 +14,9 @@
 
 - **ORM**：多一层依赖和抽象，换来的可移植性用约定的 SQL 子集同样能做到。
 - **把桌面端迁进 `apps/desktop`**：没有用户价值，却要改所有路径和发布流程，风险大。
+
+## 修订（0.7.0-beta.3）：只承诺 PostgreSQL
+
+正式部署只支持 PostgreSQL。SQLite 保留给单机试用、演示和自动检查，不承诺升级路径、并发和备份恢复。CI 新增 PostgreSQL 任务，服务端的四组检查（`check:server`、`check:gateway`、`check:market`、`check:oidc`）在真实的 PostgreSQL 上各用一个空库跑一遍；此前这些检查只在 SQLite 上跑过，而 Docker 部署默认用的是 PostgreSQL。
+
+数据不再无限增长：逐请求的网关记录默认保留 400 天（`DSH_REQUEST_RETENTION_DAYS`），过期的登录残留每小时清理；审计日志默认永久保留，设置 `DSH_AUDIT_RETENTION_DAYS` 后清理旧事件，并把最后一条被删事件的哈希记为检查点，完整性校验从检查点开始，所以不留检查点地截掉开头仍会被发现。
