@@ -92,8 +92,21 @@ export function createEnterpriseController(options: EnterpriseOptions) {
   const personalChosen = personalAllowed && existsSync(personalChoicePath)
   let session: ServerSession | undefined
   let problems: string[] = []
-  let offline = false
-  let offlineReason = ''
+  /**
+   * Why the organisation server could not be reached on the last attempt, or
+   * undefined while it answers. One value on purpose: "offline" without a
+   * reason cannot be represented, so the status and the report always say why.
+   */
+  let offlineReason: string | undefined
+  function wentOffline(error: unknown): void {
+    offlineReason = zh('暂时连不上企业服务，正在使用上次的配置。', 'The organisation server is unreachable; using the last configuration.')
+      + ' (' + (error instanceof Error ? error.message : String(error)) + ')'
+  }
+  function backOnline(): void { offlineReason = undefined }
+  /** The problems to show and report, led by the outage when there is one. */
+  function knownProblems(): string[] {
+    return offlineReason === undefined ? problems : [offlineReason, ...problems]
+  }
   let lastCheckedAt: number | undefined
   let pollTimer: NodeJS.Timeout | undefined
   let pollTick: (() => Promise<void>) | undefined
@@ -170,7 +183,7 @@ export function createEnterpriseController(options: EnterpriseOptions) {
   /** Decide whether the runtime may start, signing in first when asked to. */
   async function prepare(interactive: boolean): Promise<Readiness> {
     problems = []
-    offline = false
+    backOnline()
     if (source.kind === 'personal' || !active()) return { kind: 'ready' }
     if (source.kind === 'invalid') {
       return {
@@ -219,8 +232,7 @@ export function createEnterpriseController(options: EnterpriseOptions) {
         }
         const cached = readCache()
         if (cached !== undefined && cached.source === 'server' && usableOffline(cached.state, cached.receivedAt, Date.now())) {
-          offline = true
-          offlineReason = zh('暂时连不上企业服务，正在使用上次的配置。', 'The organisation server is unreachable; using the last configuration.') + ' (' + error.message + ')'
+          wentOffline(error)
           return { kind: 'ready' }
         }
         return {
@@ -249,7 +261,7 @@ export function createEnterpriseController(options: EnterpriseOptions) {
     const statusReport: StatusReport = {
       revision: state.revision,
       result,
-      problems: (offline && offlineReason !== '' ? [offlineReason, ...problems] : problems).slice(0, 20),
+      problems: knownProblems().slice(0, 20),
       clientVersion: options.clientVersion,
       appliedAt: new Date().toISOString(),
       ...options.dshVersion() !== undefined && { dshVersion: options.dshVersion() },
@@ -340,7 +352,7 @@ export function createEnterpriseController(options: EnterpriseOptions) {
       if (current === undefined || !current.isSignedIn()) return
       try {
         const state = await current.fetchDesiredState()
-        offline = false
+        backOnline()
         lastCheckedAt = Date.now()
         if (state.wipe === true) {
           await wipe('the server retired this device')
@@ -355,7 +367,7 @@ export function createEnterpriseController(options: EnterpriseOptions) {
         } else if (error instanceof SessionError && error.kind === 'sign-in-required') {
           onRetired({ kind: 'sign-in', organization: source.enrollment.organization.name, server: source.enrollment.server, personalAllowed, reason: error.message })
         } else {
-          offline = true
+          wentOffline(error)
           options.log('[enterprise] refresh failed: ' + (error instanceof Error ? error.message : String(error)))
         }
       }
@@ -385,7 +397,7 @@ export function createEnterpriseController(options: EnterpriseOptions) {
         const answer = await current.watch(revision)
         failures = 0
         // Either answer means the server was reached and the document is current.
-        offline = false
+        backOnline()
         lastCheckedAt = Date.now()
         if (answer.changed) await tick()
         else await uploadDenials()
@@ -425,8 +437,8 @@ export function createEnterpriseController(options: EnterpriseOptions) {
       ...source.kind === 'file' && { signed: source.signed },
       ...session?.user()?.name !== undefined && { user: session.user()?.name },
       ...cached !== undefined && { revision: cached.state.revision, receivedAt: cached.receivedAt },
-      offline,
-      problems: source.kind === 'invalid' ? [source.reason] : offline && offlineReason !== '' ? [offlineReason, ...problems] : problems,
+      offline: offlineReason !== undefined,
+      problems: source.kind === 'invalid' ? [source.reason] : knownProblems(),
       ...source.kind === 'server' && { credentialProtection: options.secrets().encrypted ? 'os' : 'file-permissions' },
       ...lastCheckedAt !== undefined && { lastCheckedAt },
       ...source.kind === 'file' && { managedFile: join(source.dir, 'managed.json') },
