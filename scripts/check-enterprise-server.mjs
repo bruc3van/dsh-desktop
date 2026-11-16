@@ -112,7 +112,9 @@ try {
   console.log('✓ sign-in in the browser enrolls the device and applies a document with a personal gateway key')
 
   const notice = page.getByRole('button', { name: /^(继续|Continue)$/ })
-  if (await notice.isVisible({ timeout: 10_000 }).catch(() => false)) await notice.click()
+  // isVisible() answers at once and ignores its timeout, so a notice that mounts a
+  // moment later was skipped and then covered the composer. Wait for it instead.
+  await notice.waitFor({ state: 'visible', timeout: 10_000 }).then(() => notice.click(), () => undefined)
   const composer = page.locator('textarea, [contenteditable="true"]').first()
   await composer.waitFor({ state: 'visible', timeout: 30_000 })
   await composer.click()

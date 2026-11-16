@@ -100,7 +100,9 @@ try {
   // Zero configuration: the model is preselected and no key is asked for.
   // The official preview notice is product copy for everyone; acknowledge it.
   const notice = page.getByRole('button', { name: /^(继续|Continue)$/ })
-  if (await notice.isVisible({ timeout: 10_000 }).catch(() => false)) await notice.click()
+  // isVisible() answers at once and ignores its timeout, so a notice that mounts a
+  // moment later was skipped and then covered the composer. Wait for it instead.
+  await notice.waitFor({ state: 'visible', timeout: 10_000 }).then(() => notice.click(), () => undefined)
   await page.getByText('Acme Chat').first().waitFor({ timeout: 30_000 })
   // The composer is a textarea in older Web UIs and a rich editor in newer ones.
   const composer = page.locator('textarea, [contenteditable="true"]').first()
