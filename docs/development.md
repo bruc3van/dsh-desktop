@@ -167,6 +167,18 @@ The entry point assembles services and retains startup, shutdown, and coordinati
 
 The controller exposes read-only state and explicit operations to the window layer. Delayed probes and readiness results must still match the initiating connection generation; the application supplies its quit state. Initial starts and both retry paths (failed source and crash restart) select an automatic port again. Windows await `readyForConnection()` instead of directly publishing child readiness URLs.
 
+Mutually exclusive states are one discriminated union each, moved by named functions and only derived at the point of use; do not rebuild the same fact from several booleans:
+
+| State | Where | Values |
+|---|---|---|
+| `ConnectionSource` | `connection-controller.ts` | `connect` (an address the user entered), `probe` (a detected instance, reused), `local` (started by the client) |
+| `MainSurface` | `main-window.ts`, held by `index.ts` | `loading`, `failure`, `page` |
+| `Admission` | `index.ts` | `admitted`, `pending`, `refused`; in enterprise mode a reopened window consults it first and starts no runtime until admitted |
+| `Shutdown` | `index.ts` | `running`, `restart-scheduled`, `restart-requested`, `stopping` (with `restart`); an acknowledged restart is not swallowed by a plain quit that follows, and a restart asked for after `stopping` is refused and logged |
+| Update phase | `updater.ts` | `UpdaterPhase`; `installInProgress()` answers whether a download, install or pending restart is under way |
+
+The enterprise controller keeps only `offlineReason`: a value means offline, so the status endpoint and the report always carry the reason. On the server, `sessionStands()` in `auth.ts` is the single test for a live session; refresh tokens, access tokens, the console cookie and the bootstrap session all go through it.
+
 `npm run check:connection-controller` covers delayed port probes, stale readiness, overlapping intentional stops, the three retry paths, and survivor precedence. `npm run check:runtime-survivor` starts an isolated real child to verify that unowned/recycled processes survive, a serving leftover is adopted, and restart stops the verified owned process. Both run in CI.
 
 Existing Electron checks continue to cover connection switching, installed sources, automatic fallback, authentication occupancy, and plugin recovery. The automatic fallback check respects another program holding port 13080: it verifies 13080 when available and an OS-assigned port otherwise, without stopping other programs to free a test port.

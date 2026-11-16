@@ -190,7 +190,7 @@ const { bundledPnpmEntry, childPath, resolveBundledDsh, restoreMacGuiPath } = ru
 const connection = createConnectionController({
   runtime: () => webUi, catalog: runtimeCatalog, probe: webProbe, survivor: runtimeSurvivor,
   childHome, loadSettings, sharedDshDiscoveryEnabled, localeChinese,
-  isQuitting: () => quitting, isInstallerHandoff,
+  isQuitting, isInstallerHandoff,
   plugins: { onManagedReady, schedulePluginCompatibilityFallback },
   presentation: {
     windowRequested: () => mainWindowRequested, isLoading: () => mainSurface === 'loading',
@@ -341,15 +341,31 @@ const settingsServer = createSettingsServer({
 let tray: Tray | null = null
 let desktopUpdater: DesktopUpdater | undefined
 let webUi: WebUiManager | undefined
-let quitting = false
 /**
- * Set when this quit is a restart, so the stop ladder also disposes of a
- * runtime the client adopted rather than spawned. Read only inside the
- * shutdown path: by then `quitting` already suppresses every recovery route,
- * so stopping the harness the window is pointed at cannot be mistaken for an
- * outage and answered with a second writer.
+ * Where the client stands on leaving. One value, so "restarting but not
+ * quitting" and its siblings are spelled out rather than read off three flags.
+ *
+ * - `running`: nobody asked to leave.
+ * - `restart-scheduled`: a restart was acknowledged to its caller and waits a
+ *   moment for that answer to be delivered.
+ * - `restart-requested`: `app.quit()` was called for a restart; the quit
+ *   coordinator may still cancel it (unsaved settings).
+ * - `stopping`: the stop ladder runs and nothing recovers any more. `restart`
+ *   says a successor was arranged, so the ladder also disposes of a runtime
+ *   the client adopted rather than spawned. That is safe only here: every
+ *   recovery route is already suppressed, so stopping the harness the window
+ *   points at cannot be mistaken for an outage and answered with a second
+ *   writer.
  */
-let restarting = false
+type Shutdown =
+  | { kind: 'running' }
+  | { kind: 'restart-scheduled' }
+  | { kind: 'restart-requested' }
+  | { kind: 'stopping'; restart: boolean }
+let shutdown: Shutdown = { kind: 'running' }
+function isQuitting(): boolean { return shutdown.kind === 'stopping' }
+/** A restart someone was promised, whether or not the quit for it has begun. */
+function restartWanted(): boolean { return shutdown.kind === 'restart-scheduled' || shutdown.kind === 'restart-requested' }
 let windowHealthTimer: NodeJS.Timeout | undefined
 const WINDOW_HEALTH_INTERVAL_MS = 60_000
 
@@ -575,7 +591,7 @@ let pendingConnectionFailure: { failure: ConnectionFailure; generation: number }
  * description is the one that explains it. Retry clears the flag.
  */
 function showConnectionError(failure: ConnectionFailure): void {
-  if (quitting) return
+  if (isQuitting()) return
   const window = mainWindow
   if (window === null || window.isDestroyed() || window.webContents.isDestroyed()) {
     reportConnectionFailureWithoutWindow(failure)
@@ -701,7 +717,7 @@ function reportConnectionFailureWithoutWindow(failure: ConnectionFailure): void 
 
 /** The failure surface's 重试: re-resolve the connection from the saved settings. */
 function retryConnection(): void {
-  if (quitting) return
+  if (isQuitting()) return
   // An explicit retry may recover a repaired disk/configuration. The manager
   // keeps failures latched when a previous tree's disposal is unconfirmed.
   webUi?.clearFatalError()
@@ -799,7 +815,7 @@ let navigationEpoch = 0
 function loadMainWindow(url: string, force = false): void {
   const epoch = ++navigationEpoch
   void browserAdmission.select(url).then((selected) => {
-    if (selected && epoch === navigationEpoch && !quitting) navigateMainWindow(url, force)
+    if (selected && epoch === navigationEpoch && !isQuitting()) navigateMainWindow(url, force)
   }).catch((error: unknown) => {
     console.warn('[desktop] browser admission failed: ' + sanitizeRuntimeOutput(String(error)))
   })
@@ -1052,15 +1068,16 @@ function trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
   return buildTrayMenu({ chinese: localeChinese(), state: desktopUpdater?.getState(), actions: nativeMenuActions })
 }
 
-let restartScheduled = false
 function requestRestart(): { started: boolean; error?: string } {
-  if (quitting || restarting || restartScheduled || isInstallerHandoff()) {
+  if (shutdown.kind !== 'running' || isInstallerHandoff()) {
     return { started: false, error: localeChinese() ? '客户端正在退出、重启或更新，请稍后重试。' : 'The client is quitting, restarting or updating. Try again later.' }
   }
-  restartScheduled = true
+  shutdown = { kind: 'restart-scheduled' }
   // Let HTTP/IPC deliver the acknowledgement before quit closes the transport.
   // The UI timeout restores controls if a later installer handoff prevents restart.
-  setTimeout(() => { restartScheduled = false; restartApp() }, 150)
+  // A plain quit that lands inside this window keeps the promise: the quit
+  // coordinator arranges the successor for any restart still wanted.
+  setTimeout(() => { if (shutdown.kind === 'restart-scheduled') restartApp() }, 150)
   return { started: true }
 }
 
@@ -1081,13 +1098,23 @@ function requestRestart(): { started: boolean; error?: string } {
  * installation is exactly the damage no relaunch can repair.
  */
 function restartApp(): void {
-  if (quitting || restarting || isInstallerHandoff()) return
-  restarting = true
+  if (isInstallerHandoff()) {
+    console.log('[desktop] restart refused: an update is being installed')
+    return
+  }
+  if (shutdown.kind === 'stopping') {
+    // Past the point where a successor can be arranged. Say so in the log: most
+    // callers (tray, policy change, plugin recovery) have no other answer.
+    if (!shutdown.restart) console.log('[desktop] restart refused: the client is already quitting')
+    return
+  }
+  if (shutdown.kind === 'restart-requested') return
+  shutdown = { kind: 'restart-requested' }
   app.quit()
 }
 
 async function prepareRestart(): Promise<void> {
-  if (!restarting || devFlag('DSH_DESKTOP_SKIP_RELAUNCH')) return
+  if (!restartWanted() || devFlag('DSH_DESKTOP_SKIP_RELAUNCH')) return
   const image = process.platform === 'linux' && app.isPackaged ? process.env.APPIMAGE : undefined
   try {
     if (image) await scheduleAppImageRestart(image, app.getPath('home'))
@@ -1259,6 +1286,8 @@ function permissionGranted(contents: Electron.WebContents | null, permission: st
 
 
 
+/** False until startup has created its window; see the `second-instance` handler. */
+let startupWindowOpened = false
 function showMainWindow(): void {
   if (mainWindow === null) {
     launchWindow()
@@ -1524,7 +1553,7 @@ function managedRefusal(): string {
 
 /** Open the window at the CURRENT target, waiting for local readiness if needed. */
 function launchWindow(generation = connection.generation, force = false): void {
-  if (generation !== connection.generation || quitting) return
+  if (generation !== connection.generation || isQuitting()) return
   mainWindowRequested = true
   if (mainWindow === null) createWindow()
   // The organisation answers first. A window reopened before it has admitted
@@ -1554,7 +1583,7 @@ function launchWindow(generation = connection.generation, force = false): void {
   }
   updateLoadingStatus('正在启动本地 dsh 服务…', 'Starting the local dsh service…')
   void connection.readyForConnection(generation).then((url) => {
-    if (url === undefined || generation !== connection.generation || quitting) return
+    if (url === undefined || generation !== connection.generation || isQuitting()) return
     if (!mainWindowRequested) return
     if (connection.configuredTarget === undefined) loadMainWindow(url, force)
   }, () => {
@@ -1562,7 +1591,7 @@ function launchWindow(generation = connection.generation, force = false): void {
     // as the error surface, or held and rendered above. A repeat request (dock
     // activate, second instance) rejects without one, so the loading surface
     // must carry the state instead of spinning forever.
-    if (generation !== connection.generation || quitting) return
+    if (generation !== connection.generation || isQuitting()) return
     updateLoadingStatus('本地服务启动失败。可在下方设置 Web UI 连接。',
       'The local service failed to start. Set the Web UI connection below.', 'failed')
   })
@@ -1710,7 +1739,7 @@ async function startConnection(settings: ClientSettings, force: boolean, interac
 
 /** Sign-in or a blocking organisation failure, in the same surface as connection failures. */
 function showEnterpriseGate(readiness: Exclude<Readiness, { kind: 'ready' }>): void {
-  if (quitting) return
+  if (isQuitting()) return
   admission = { kind: 'refused', readiness }
   const window = mainWindow
   if (window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
@@ -1962,7 +1991,7 @@ const updateController = createUpdateController({
   getDesktopUpdater: () => desktopUpdater,
   openExternal,
   launchWindow,
-  getQuitting: () => quitting,
+  getQuitting: isQuitting,
   getWebUiEverLoaded: () => webUiEverLoaded,
   confirmClose: confirmSettingsClose,
   stopRuntimeForUpdate: () => connection.stop(true),
@@ -1984,7 +2013,7 @@ const windowTheme = createWindowTheme({
 const windowHealth = createWindowHealth({
   getMainWindow: () => mainWindow,
   currentTarget,
-  getQuitting: () => quitting,
+  getQuitting: isQuitting,
   getConnection: () => connection,
   probeWithGrace,
   refuseUnauthenticatedProbeTarget,
@@ -2001,7 +2030,7 @@ const mainWindowFactory = createMainWindowFactory({
   watchTaskbarTheme,
   scheduleWindowHealthCheck,
   clearMacNotificationAttention,
-  getQuitting: () => quitting,
+  getQuitting: isQuitting,
   isInstallerHandoff,
   onMainWindowClosed,
   markMainWindowUnrequested,
@@ -2046,7 +2075,10 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', showMainWindow)
+  // A second launch can arrive before this one is ready. Startup opens the
+  // window itself, so there is nothing to add — and creating one earlier would
+  // run before `app` is ready and ahead of the session's permission handlers.
+  app.on('second-instance', () => { if (startupWindowOpened) showMainWindow() })
 
   // Every webContents, including any the runtime or a dependency creates
   // later, inherits the same rule: nothing opens a second window, http(s)
@@ -2167,6 +2199,7 @@ if (!gotLock) {
     })
     mainWindowRequested = true
     createWindow()
+    startupWindowOpened = true
     const guiPathReady = restoreMacGuiPath()
     desktopUpdater = updateController.createDesktopUpdater()
     desktopUpdater.onChange(updateController.broadcastUpdateState)
@@ -2203,13 +2236,15 @@ if (!gotLock) {
   app.on('before-quit', createQuitCoordinator({
     confirm: confirmSettingsClose,
     prepare: prepareRestart,
-    cancelled: () => { restarting = false },
+    // A scheduled restart keeps its timer and asks again; one already asked
+    // for goes back to running with the quit it rode on.
+    cancelled: () => { if (shutdown.kind === 'restart-requested') shutdown = { kind: 'running' } },
     begin: () => {
-      quitting = true
+      shutdown = { kind: 'stopping', restart: restartWanted() }
       if (windowHealthTimer !== undefined) clearInterval(windowHealthTimer)
       connection.dispose()
     },
-    stop: () => connection.stop(restarting),
+    stop: () => connection.stop(shutdown.kind === 'stopping' && shutdown.restart),
     quit: () => { app.quit() },
     failed: (error) => {
       console.error('[desktop] shutdown ladder failed: ' + sanitizeRuntimeOutput(String(error)))

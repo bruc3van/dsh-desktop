@@ -188,6 +188,18 @@ git add scripts/mac-signing-cert.sha1
 
 `connection-controller` 对窗口层提供只读状态和显式操作。异步探测与就绪结果仍须匹配发起时的连接代际；退出状态由应用层提供。初次启动和两条重试路径（来源失败、崩溃重启）都会重新选择自动端口。窗口层通过 `readyForConnection()` 等待就绪，不直接发布子进程的目标地址。
 
+互斥的状态写成一个判别联合，由具名函数迁移，读取处只做派生；不要再用几个布尔值拼出同一件事：
+
+| 状态 | 位置 | 取值 |
+|---|---|---|
+| `ConnectionSource` | `connection-controller.ts` | `connect`（用户填写的地址）、`probe`（复用探测到的实例）、`local`（客户端自己启动） |
+| `MainSurface` | `main-window.ts`，由 `index.ts` 持有 | `loading`、`failure`、`page` |
+| `Admission` | `index.ts` | `admitted`、`pending`、`refused`；企业模式下窗口重开时先看它，未放行不会启动运行时 |
+| `Shutdown` | `index.ts` | `running`、`restart-scheduled`、`restart-requested`、`stopping`（带 `restart`）；已答应的重启不会被随后的普通退出吞掉，进入 `stopping` 后的重启请求会被拒绝并写日志 |
+| 更新阶段 | `updater.ts` | `UpdaterPhase`；`installInProgress()` 判断是否处于下载、安装或待重启 |
+
+企业控制器只保存 `offlineReason`：有值即离线，状态接口和上报里的离线一定带原因。服务端 `auth.ts` 的 `sessionStands()` 是会话是否有效的唯一判断，刷新令牌、访问令牌、控制台 Cookie 和引导会话都经过它。
+
 `npm run check:connection-controller` 验证延迟端口探测、过期就绪、并发主动停止、三条重试路径和遗留进程优先级。`npm run check:runtime-survivor` 启动隔离的真实子进程，验证无归属记录和已复用 PID 不会被结束、可用遗留进程会被接管、重启会停止经核实归属的进程。两项检查均接入 CI。
 
 已有的 Electron 检查继续覆盖连接切换、已安装来源、自动回退、认证占用及插件恢复。自动端口回退检查允许本机其他程序占用 13080：空闲时验证回退至 13080，已占用时验证系统分配端口；测试不会为了固定端口而停止其他程序。

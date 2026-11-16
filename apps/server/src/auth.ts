@@ -48,6 +48,15 @@ interface Flow {
 }
 
 /** Only the loopback redirect of a native app (RFC 8252 §7.3). */
+/**
+ * A session row that still stands: found, not revoked, not past its end.
+ * Every door (refresh, bearer token, console cookie, bootstrap) asks here, so
+ * none of them can forget one of the three.
+ */
+function sessionStands<T extends { revoked: number; expires_at: number }>(session: T | undefined): session is T {
+  return session !== undefined && session.revoked === 0 && session.expires_at >= Date.now()
+}
+
 export function isLoopbackRedirect(value: string): boolean {
   try {
     const url = new URL(value)
@@ -226,7 +235,7 @@ export function createAuth(store: Store, config: ServerConfig, connectors: reado
       // Off-boarded: say so explicitly (before "revoked", which off-boarding
       // also sets), so the device removes the organisation's configuration.
       if (person?.status !== 'active') throw new HttpError(403, 'user_disabled')
-      if (session.revoked !== 0 || session.expires_at < Date.now()) throw new HttpError(400, 'invalid_grant')
+      if (!sessionStands(session)) throw new HttpError(400, 'invalid_grant')
       // Rotate: the presented refresh token stops working now. The condition
       // makes the swap the single point where a racing duplicate loses.
       const refreshToken = randomToken(32)
@@ -265,8 +274,8 @@ export function createAuth(store: Store, config: ServerConfig, connectors: reado
     const row = await store.db.get<{ user_id: string; session_id: string; expires_at: number }>(
       'SELECT user_id, session_id, expires_at FROM access_tokens WHERE token_hash = $1 AND tenant_id = $2', [sha256(accessToken), store.tenantId])
     if (row === undefined || row.expires_at < Date.now()) return undefined
-    const session = await store.db.get<{ revoked: number }>('SELECT revoked FROM sessions WHERE id = $1', [row.session_id])
-    if (session === undefined || session.revoked !== 0) return undefined
+    const session = await store.db.get<{ expires_at: number; revoked: number }>('SELECT expires_at, revoked FROM sessions WHERE id = $1', [row.session_id])
+    if (!sessionStands(session)) return undefined
     const person = await store.user(row.user_id)
     return person === undefined ? undefined : { person, sessionId: row.session_id }
   }
@@ -310,14 +319,14 @@ export function createAuth(store: Store, config: ServerConfig, connectors: reado
     if (value === '' || !await bootstrapOpen()) return false
     const session = await store.db.get<{ expires_at: number; revoked: number }>(
       "SELECT expires_at, revoked FROM sessions WHERE refresh_hash = $1 AND tenant_id = $2 AND kind = 'bootstrap'", [sha256(value), store.tenantId])
-    return session !== undefined && session.revoked === 0 && session.expires_at >= Date.now()
+    return sessionStands(session)
   }
 
   async function consolePerson(cookie: string | undefined): Promise<User | undefined> {
     if (cookie === undefined || cookie === '') return undefined
     const session = await store.db.get<{ user_id: string; expires_at: number; revoked: number }>(
       "SELECT user_id, expires_at, revoked FROM sessions WHERE refresh_hash = $1 AND tenant_id = $2 AND kind = 'console'", [sha256(cookie), store.tenantId])
-    if (session === undefined || session.revoked !== 0 || session.expires_at < Date.now()) return undefined
+    if (!sessionStands(session)) return undefined
     const person = await store.user(session.user_id)
     return person?.status === 'active' && person.role !== 'member' ? person : undefined
   }
