@@ -15,6 +15,7 @@ import {
   defaultUpdateFeedUrl,
   describeFetchError,
   DesktopUpdater,
+  installInProgress,
   manualCheckAnswer,
   RELEASES_PAGE_URL,
   type UpdateInfo,
@@ -310,7 +311,7 @@ export function createUpdateController(services: Options) {
       const action = targetUrl.slice('dsh-update-action:'.length)
       if (action === 'install') {
         const phase = desktopUpdater?.getState().phase
-        if (phase === 'downloading' || phase === 'installing' || phase === 'restartRequired') return true
+        if (phase !== undefined && installInProgress(phase)) return true
         void installDesktopUpdate().then((installed) => {
           if (installed.started) scheduleQuitAfterWindowsInstall()
         })
@@ -318,7 +319,7 @@ export function createUpdateController(services: Options) {
       }
       if (action === 'ignore') {
         const phase = desktopUpdater?.getState().phase
-        if (phase === 'downloading' || phase === 'installing' || phase === 'restartRequired') return true
+        if (phase !== undefined && installInProgress(phase)) return true
       }
       prompt.close()
       if (action === 'ignore') {
@@ -345,7 +346,7 @@ export function createUpdateController(services: Options) {
     const desktopUpdater = services.getDesktopUpdater()
     if (desktopUpdater === undefined) return
     const busyPhase = desktopUpdater.getState().phase
-    if (busyPhase === 'downloading' || busyPhase === 'installing' || busyPhase === 'restartRequired') {
+    if (installInProgress(busyPhase)) {
       if (!prompt || devFlag('DSH_DESKTOP_SKIP_UPDATE_PROMPT')) return
       const copy = updateDialogCopy()
       // Say what is actually running: this branch is reached only while a

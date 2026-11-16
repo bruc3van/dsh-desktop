@@ -65,6 +65,14 @@ export function manualCheckAnswer(phase: UpdaterPhase): ManualCheckAnswer {
   }
 }
 
+/**
+ * A download, an installer hand-off or a finished install holds the updater:
+ * nothing else may start a check, an install or a dismissal until it lets go.
+ */
+export function installInProgress(phase: UpdaterPhase): boolean {
+  return phase === 'downloading' || phase === 'installing' || phase === 'restartRequired'
+}
+
 export interface UpdateInfo {
   currentVersion: string
   availableVersion: string
@@ -467,11 +475,7 @@ export class DesktopUpdater {
 
   async check(): Promise<CheckUpdateResult> {
     if (this.checkInFlight !== undefined) return this.checkInFlight
-    if (
-      this.phase === 'downloading'
-      || this.phase === 'installing'
-      || this.phase === 'restartRequired'
-    ) {
+    if (installInProgress(this.phase)) {
       return this.info === null ? { hasUpdate: false } : { hasUpdate: true, info: this.info }
     }
 
@@ -564,7 +568,7 @@ export class DesktopUpdater {
     // going, the state is already saying the right thing, and the caller
     // still gets the reason in the result.
     if (info === null) return { started: false, error: '没有可安装的更新' }
-    if (this.phase === 'checking' || this.phase === 'downloading' || this.phase === 'installing' || this.phase === 'restartRequired') {
+    if (this.phase === 'checking' || installInProgress(this.phase)) {
       return { started: false, error: '更新正在进行中' }
     }
     if (info.sha256 === undefined) {

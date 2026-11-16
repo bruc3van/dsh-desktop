@@ -4,6 +4,14 @@ import type { createConnectionController } from './connection-controller.ts'
 import { appOrigin, isSecureUpgrade } from './connection-policy.ts'
 import type { ConnectionFailure } from './connection-types.ts'
 import { createWindowStateStore, resolveWindowState, trackWindowState, guardWindowVisibility } from './window-state.ts'
+/**
+ * Which document the main window holds, as far as the client can know it:
+ * - `loading`: the client's own startup document;
+ * - `failure`: the client's own connection-failure or organisation-gate document;
+ * - `page`: neither of them — the Web UI it was navigated to, or no window at all.
+ */
+export type MainSurface = 'loading' | 'failure' | 'page'
+
 interface Options {
   clientHome: () => string
   localeChinese: () => boolean
@@ -17,8 +25,7 @@ interface Options {
   isInstallerHandoff: () => boolean
   onMainWindowClosed: () => void
   markMainWindowUnrequested: () => void
-  getLoadingDocumentActive: () => boolean
-  getErrorDocumentActive: () => boolean
+  mainSurface: () => MainSurface
   currentTarget: () => string | undefined
   getConnection: () => Readonly<Pick<ReturnType<typeof createConnectionController>, "configuredTarget" | "probeConnected" | "upgradeConfiguredTarget" | "resetProbeRecovery">>
   resetSettingsIntegrationStatus: () => void
@@ -160,7 +167,7 @@ export function createMainWindowFactory(options: Options) {
       // while one of those surfaces is the one on screen, and never hand a data:
       // URL to the system browser.
       if (targetUrl.startsWith('data:')) {
-        if (options.getLoadingDocumentActive() || options.getErrorDocumentActive()) return
+        if (options.mainSurface() !== 'page') return
         event.preventDefault()
         return
       }
@@ -242,7 +249,7 @@ export function createMainWindowFactory(options: Options) {
       // Every finished document, before the update-check gate below returns:
       // this is the one event that reports the failure surface has actually
       // landed, and its seats are dead until they are bound.
-      if (options.getErrorDocumentActive() && mainWindow !== null) bindErrorPageSeats(mainWindow)
+      if (options.mainSurface() === 'failure' && mainWindow !== null) bindErrorPageSeats(mainWindow)
       releaseSmartBridgeHandoff(mainWindow?.webContents.getURL() ?? '')
       if (!targetNavigationSucceeded) return
       const target = currentTarget()

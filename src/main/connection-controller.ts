@@ -44,6 +44,20 @@ interface ConnectionOptions {
   }
 }
 
+/**
+ * Where the Web UI comes from, as one value: a probed instance without an
+ * address, or a pinned address beside a child's, cannot be written down.
+ *
+ * - `connect`: the address saved in settings.
+ * - `probe`: an instance this client found or adopted but did not start.
+ * - `local`: the managed child. `url` is set once it reports readiness and is
+ *   unset while it starts, restarts, or after a start was refused.
+ */
+export type ConnectionSource =
+  | { kind: 'connect'; url: string }
+  | { kind: 'probe'; url: string }
+  | { kind: 'local'; url: string | undefined }
+
 export function createConnectionController(options: ConnectionOptions) {
   const { catalog: runtimeCatalog, plugins, presentation, childHome, loadSettings, sharedDshDiscoveryEnabled, localeChinese } = options
   const { detectInstalledDsh } = runtimeCatalog
@@ -72,11 +86,23 @@ export function createConnectionController(options: ConnectionOptions) {
   let replacingLocalRuntime = false
   /** Last Smart-mode source apply; a faster toggle supersedes an in-flight stop. */
   let smartRuntimeApply = 0
-  /** The current Web UI origin: the probed/configured address, or the local child's URL. */
-  let configuredTarget: string | undefined
-  /** True when configuredTarget came from the startup probe (not the settings). */
-  let probeConnected = false
-  let childTarget: string | undefined
+  /** Where the Web UI comes from. Written only by the five transitions below. */
+  let source: ConnectionSource = { kind: 'local', url: undefined }
+  /** The address this client was pointed at or found, as opposed to its own child's. */
+  const configuredTarget = (): string | undefined => source.kind === 'local' ? undefined : source.url
+  /** True when that address came from the probe or an adoption, not from the settings. */
+  const probeConnected = (): boolean => source.kind === 'probe'
+  const childTarget = (): string | undefined => source.kind === 'local' ? source.url : undefined
+  /** The address saved in settings. */
+  function pinSource(url: string): void { source = { kind: 'connect', url } }
+  /** A running instance this client found or adopted. */
+  function reuseSource(url: string): void { source = { kind: 'probe', url } }
+  /** Leave a pinned or reused address for the managed child; a child already serving keeps its URL. */
+  function claimLocalSource(): void { if (source.kind !== 'local') source = { kind: 'local', url: undefined } }
+  /** Nothing is serving: a refusal, a fallback under way, or the child has exited. */
+  function releaseSource(): void { source = { kind: 'local', url: undefined } }
+  /** The managed child reported readiness. Never replaces a pinned or reused address. */
+  function serveLocalSource(url: string): void { if (source.kind === 'local') source = { kind: 'local', url } }
   /** Re-probe attempts before a probed instance is declared gone. */
   const PROBED_FALLBACK_GRACE_ATTEMPTS = 3
   const PROBED_FALLBACK_GRACE_INTERVAL_MS = 1_000
@@ -93,7 +119,7 @@ export function createConnectionController(options: ConnectionOptions) {
   }
 
   function currentTarget(): string | undefined {
-    return configuredTarget ?? childTarget
+    return source.url
   }
 
   /** Exponential delay derived from the number of retries already consumed. */
@@ -132,15 +158,15 @@ export function createConnectionController(options: ConnectionOptions) {
    * rather than in a reload loop.
    */
   async function handleProbedInstanceFailure(reason: string): Promise<void> {
-    if (!probeConnected || options.isQuitting() || probedFallbackInFlight) return
+    if (!probeConnected() || options.isQuitting() || probedFallbackInFlight) return
     probedFallbackInFlight = true
     try {
-      const failedTarget = configuredTarget
+      const failedTarget = configuredTarget()
       if (failedTarget === undefined) return
       const generation = connectionGeneration
       const probe = await probeWithGrace(failedTarget)
       if (probe.kind === 'verified') {
-        if (generation !== connectionGeneration || !probeConnected || currentTarget() !== failedTarget) return
+        if (generation !== connectionGeneration || !probeConnected() || currentTarget() !== failedTarget) return
         if (probedRecoveryReloads >= PROBED_RECOVERY_RELOAD_CAP) {
           probedRecoveryReloads = 0
           console.warn('[desktop] probed Web UI keeps failing after recovery reloads (' + reason + ')')
@@ -156,7 +182,7 @@ export function createConnectionController(options: ConnectionOptions) {
       // instance in the meantime. A stale failure must not tear down a target it
       // does not describe — the same generation guard the recovery path above
       // already carries.
-      if (generation !== connectionGeneration || !probeConnected || currentTarget() !== failedTarget) return
+      if (generation !== connectionGeneration || !probeConnected() || currentTarget() !== failedTarget) return
       if (probe.kind === 'authentication-required') {
         refuseUnauthenticatedProbeTarget(probe.url)
         return
@@ -183,9 +209,7 @@ export function createConnectionController(options: ConnectionOptions) {
         return
       }
       if (generation !== connectionGeneration || options.isQuitting()) return
-      configuredTarget = url
-      probeConnected = false
-      childTarget = undefined
+      pinSource(url)
       launchWindow(generation, force)
     })()
   }
@@ -203,15 +227,14 @@ export function createConnectionController(options: ConnectionOptions) {
     const port = await prepareLocalWebPort()
     if (generation !== connectionGeneration || options.isQuitting()) return
     selectedLocalWebPort = port
-    configuredTarget = undefined
-    probeConnected = false
+    claimLocalSource()
     launchWindow(generation, force)
   }
 
   /** Re-resolve automatic mode before every retry or runtime-source fallback. */
   async function respawnLocalRuntime(generation: number): Promise<void> {
     const port = await prepareLocalWebPort()
-    if (generation !== connectionGeneration || options.isQuitting() || configuredTarget !== undefined) return
+    if (generation !== connectionGeneration || options.isQuitting() || configuredTarget() !== undefined) return
     selectedLocalWebPort = port
     if (presentation.windowRequested()) {
       launchWindow(generation)
@@ -226,9 +249,7 @@ export function createConnectionController(options: ConnectionOptions) {
    */
   function settleSurvivingRuntime(survivor: SurvivingRuntime, generation: number, force: boolean): boolean {
     if (survivor.kind === 'adopt') {
-      configuredTarget = survivor.url
-      probeConnected = true
-      childTarget = undefined
+      reuseSource(survivor.url)
       launchWindow(generation, force)
       return true
     }
@@ -261,12 +282,12 @@ export function createConnectionController(options: ConnectionOptions) {
 
   /** Restore the retry budget only after one local generation proves stable. */
   function markLocalRuntimeReady(url: string): void {
-    childTarget = url
+    serveLocalSource(url)
     // The manager has persisted the credential-free origin before resolving readiness.
     plugins.onManagedReady(options.runtime()?.lastCommand)
     if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
     launchBudgetResetTimer = setTimeout(() => {
-      if (configuredTarget === undefined && childTarget === url) launchBudget = MAX_LAUNCH_RETRIES
+      if (childTarget() === url) launchBudget = MAX_LAUNCH_RETRIES
       launchBudgetResetTimer = undefined
     }, STABLE_RUNTIME_RESET_MS)
     launchBudgetResetTimer.unref()
@@ -278,12 +299,10 @@ export function createConnectionController(options: ConnectionOptions) {
    * detection was running, and it may use a port absent from the discovery list.
    */
   function fallbackFromProbedInstance(reason: string): boolean {
-    if (!probeConnected || options.isQuitting()) return false
-    const failedTarget = configuredTarget
+    if (!probeConnected() || options.isQuitting()) return false
+    const failedTarget = configuredTarget()
     const generation = ++connectionGeneration
-    configuredTarget = undefined
-    probeConnected = false
-    childTarget = undefined
+    releaseSource()
     probedRecoveryReloads = 0
     resetRuntimeRecoveryBudget()
     console.warn('[desktop] probed Web UI unavailable; starting local runtime (' + reason + '): ' + (failedTarget ?? 'unknown'))
@@ -300,8 +319,7 @@ export function createConnectionController(options: ConnectionOptions) {
         const previous = await inspectWebUi(failedTarget)
         if (options.isQuitting() || generation !== connectionGeneration) return
         if (previous.kind === 'verified') {
-          configuredTarget = previous.url
-          probeConnected = true
+          reuseSource(previous.url)
           launchWindow(generation, true)
           return
         }
@@ -321,9 +339,7 @@ export function createConnectionController(options: ConnectionOptions) {
    * same DSH_HOME. The instance is the user's — this client never terminates it.
    */
   function refuseOccupiedProbeTarget(url: string): void {
-    configuredTarget = undefined
-    probeConnected = false
-    childTarget = undefined
+    releaseSource()
     console.warn('[desktop] refusing local runtime: an official instance is already answering at ' + url)
     const chinese = localeChinese()
     showConnectionError({
@@ -346,9 +362,7 @@ export function createConnectionController(options: ConnectionOptions) {
    * Starting another writer against the same DSH_HOME would risk session loss.
    */
   function refuseUnauthenticatedProbeTarget(url: string): void {
-    configuredTarget = undefined
-    probeConnected = false
-    childTarget = undefined
+    releaseSource()
     console.warn('[desktop] refusing local runtime: a loopback service requires different DSH browser credentials at ' + url)
     const chinese = localeChinese()
     showConnectionError({
@@ -365,9 +379,7 @@ export function createConnectionController(options: ConnectionOptions) {
   }
 
   function refuseUncertainProbeTarget(url: string): void {
-    configuredTarget = undefined
-    probeConnected = false
-    childTarget = undefined
+    releaseSource()
     console.warn('[desktop] refusing local runtime: a loopback service is still listening but could not be verified at ' + url)
     const chinese = localeChinese()
     showConnectionError({
@@ -411,8 +423,7 @@ export function createConnectionController(options: ConnectionOptions) {
       // Detection may have taken seconds since the reuse probe. Repeat the
       // occupancy gate; isolated homes do not share the user's session store.
       if (sharedDshDiscoveryEnabled() && !devFlag('DSH_DESKTOP_SKIP_PROBE')) {
-        configuredTarget = undefined
-        probeConnected = false
+        claimLocalSource()
         if (!presentation.isLoading()) showLoadingDocument()
         updateLoadingStatus('正在确认会话数据未被占用…', 'Checking that this session data is not already in use…')
         const occupied = await probeSmartTargets()
@@ -459,10 +470,8 @@ export function createConnectionController(options: ConnectionOptions) {
           return
         }
         if (options.isQuitting() || generation !== connectionGeneration) return
-        configuredTarget = probed.url
-        probeConnected = true
+        reuseSource(probed.url)
         console.log('[desktop] reusing running dsh web: ' + probed.url)
-        childTarget = undefined
         probedRecoveryReloads = 0
         launchWindow(generation, force)
         return
@@ -495,9 +504,9 @@ export function createConnectionController(options: ConnectionOptions) {
    * for occupancy of a process we can already stop.
    */
   function isOwnManagedOrigin(url: string): boolean {
-    if (probeConnected) return false
+    if (probeConnected()) return false
     if (options.runtime()?.pid() === undefined) return false
-    const own = childTarget
+    const own = childTarget()
     return own !== undefined && appOrigin(own) === appOrigin(url)
   }
 
@@ -524,7 +533,7 @@ export function createConnectionController(options: ConnectionOptions) {
     const target = currentTarget()
     if (target === undefined || !originIsLoopback(target)) return undefined
     if (isOwnManagedOrigin(target)) return undefined
-    if (!probeConnected && !usesConfiguredServer(loadSettings())) return undefined
+    if (!probeConnected() && !usesConfiguredServer(loadSettings())) return undefined
     const inspected = await inspectWebUi(target)
     return inspected.kind === 'unavailable' ? undefined : inspected.url
   }
@@ -557,19 +566,19 @@ export function createConnectionController(options: ConnectionOptions) {
 
   function onExit({ wasReady, code, signal, retryable }: RuntimeExit): void {
     if (options.isQuitting() || options.isInstallerHandoff()) return
-    if (configuredTarget !== undefined) {
+    if (configuredTarget() !== undefined) {
       // Connect/probe mode: a child exit is irrelevant (there should be none).
       return
     }
     if (replacingLocalRuntime) {
       // Intentional stop from a Smart-mode source toggle. Not a crash, and
       // not a reason to reject PATH/npx for the rest of the session.
-      childTarget = undefined
+      releaseSource()
       return
     }
     const exitGeneration = connectionGeneration
     const exitRuntime = options.runtime()
-    childTarget = undefined
+    releaseSource()
     if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)
     launchBudgetResetTimer = undefined
     // A user-installed runtime that never reached readiness is not a base
@@ -615,7 +624,7 @@ export function createConnectionController(options: ConnectionOptions) {
           )
         }
         setTimeout(() => {
-          if (options.isQuitting() || configuredTarget !== undefined || generation !== connectionGeneration) return
+          if (options.isQuitting() || configuredTarget() !== undefined || generation !== connectionGeneration) return
           void respawnLocalRuntime(generation)
         }, delayMs)
         return
@@ -641,7 +650,7 @@ export function createConnectionController(options: ConnectionOptions) {
       if (pinned > 0 && options.runtime()?.lastSource !== undefined) {
         void loopbackPortHeld(pinned).then((held) => {
           if (exitGeneration !== connectionGeneration || exitRuntime !== options.runtime()
-            || options.isQuitting() || options.isInstallerHandoff() || configuredTarget !== undefined || replacingLocalRuntime) return
+            || options.isQuitting() || options.isInstallerHandoff() || configuredTarget() !== undefined || replacingLocalRuntime) return
           if (held) {
             console.error('[desktop] pinned port ' + String(pinned)
               + ' is still held after a failed spawn; not trying other runtimes')
@@ -684,10 +693,14 @@ export function createConnectionController(options: ConnectionOptions) {
     probeWithGrace, refuseUnauthenticatedProbeTarget, resetRuntimeRecoveryBudget,
     instanceOccupyingLocalSpawn, isOwnManagedOrigin, localWebSpawnPort, onExit,
     get generation() { return connectionGeneration },
-    get configuredTarget() { return configuredTarget },
-    get probeConnected() { return probeConnected },
-    get childTarget() { return childTarget },
-    upgradeConfiguredTarget(url: string): void { configuredTarget = appOrigin(url) },
+    get source(): ConnectionSource { return source },
+    get configuredTarget() { return configuredTarget() },
+    get probeConnected() { return probeConnected() },
+    get childTarget() { return childTarget() },
+    /** The pinned or reused address moved to HTTPS; where it came from is unchanged. */
+    upgradeConfiguredTarget(url: string): void {
+      source = { kind: source.kind === 'probe' ? 'probe' : 'connect', url: appOrigin(url) }
+    },
     resetProbeRecovery(): void { probedRecoveryReloads = 0 },
     dispose(): void {
       if (launchBudgetResetTimer !== undefined) clearTimeout(launchBudgetResetTimer)

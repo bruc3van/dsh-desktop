@@ -137,8 +137,8 @@ try {
   let owned = false
   const contents = { getURL: () => local, isDestroyed: () => false }
   const window = { webContents: contents, isDestroyed: () => false }
-  const bridge = createBridgePolicy({ getMainWindow: () => window, getLoadingDocumentActive: () => false,
-    getErrorDocumentActive: () => false, currentTarget: () => target, isClientOwnedOrigin: origin => owned && origin === target })
+  const bridge = createBridgePolicy({ getMainWindow: () => window, mainSurface: () => 'page',
+    currentTarget: () => target, isClientOwnedOrigin: origin => owned && origin === target })
   const event = { sender: contents, senderFrame: { url: local, parent: null } }
   assert.equal(bridge.bridgeCaller(event).remote, true)
   assert.equal(bridge.mainWindowShowsRemote(), true)

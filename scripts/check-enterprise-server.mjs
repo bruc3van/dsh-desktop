@@ -86,13 +86,28 @@ try {
   })
   app.process().stdout?.on('data', chunk => { log += chunk })
   app.process().stderr?.on('data', chunk => { log += chunk })
-  const page = await app.firstWindow()
-  const signIn = page.locator('#error-retry')
+  let page = await app.firstWindow()
+  let signIn = page.locator('#error-retry')
   await signIn.waitFor({ timeout: 60_000 }).catch(error => { throw new Error(String(error) + '\n' + log) })
   assert.match(await page.locator('h1').textContent(), /Acme/)
   assert.match(await signIn.textContent(), /企业账号登录|organisation account/)
   assert.equal(existsSync(join(home, 'desktop', 'enterprise', 'dsh')), false, 'nothing starts before sign-in')
   console.log('✓ an enrolled client opens on "sign in with your organisation account" and starts nothing yet')
+
+  // macOS destroys a closed window; the Dock icon then asks for a new one. The
+  // organisation has still not admitted this launch, so the new window is the
+  // same sign-in surface and no runtime starts behind it.
+  const reopened = app.waitForEvent('window')
+  await app.evaluate(({ app: client, BrowserWindow }) => {
+    for (const window of BrowserWindow.getAllWindows()) window.destroy()
+    client.emit('activate')
+  })
+  page = await reopened
+  signIn = page.locator('#error-retry')
+  await signIn.waitFor({ timeout: 30_000 }).catch(error => { throw new Error('a reopened window left the sign-in surface: ' + String(error) + '\n' + log.slice(-3000)) })
+  assert.match(await signIn.textContent(), /企业账号登录|organisation account/)
+  assert.equal(existsSync(join(home, 'desktop', 'enterprise', 'dsh')), false, 'reopening the window starts nothing before sign-in')
+  console.log('✓ reopening the window before sign-in shows the same surface and still starts nothing')
 
   // The person's browser, inside the main process (shell.openExternal is the only door out).
   await app.evaluate(({ shell }, server) => {

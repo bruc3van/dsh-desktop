@@ -25,8 +25,8 @@ export interface User {
   department_id: string | null
   /** The upstream directory that manages this person (ADR-0008); `null` when managed here. */
   source: string | null
-  /** 'admin' or 'sync'; only someone disabled by the sync comes back with the directory. */
-  disabled_by: string | null
+  /** Who disabled this person; only someone the sync disabled comes back with the directory. */
+  disabled_by: 'admin' | 'sync' | null
 }
 
 export interface Department { id: string; parent_id: string | null; name: string; external_id: string | null; source: string | null }
@@ -127,7 +127,7 @@ export function createStore(db: Db, tenantId: string, sealer: Sealer) {
     if (current.source !== null && ((patch.name !== undefined && patch.name !== current.name) || (patch.departmentId !== undefined && patch.departmentId !== current.department_id))) {
       throw new HttpError(409, 'managed_by_directory', 'Name and department come from the organisation directory.')
     }
-    const disabledBy = patch.status === undefined ? current.disabled_by : patch.status === 'disabled' ? 'admin' : null
+    const disabledBy: User['disabled_by'] = patch.status === undefined ? current.disabled_by : patch.status === 'disabled' ? 'admin' : null
     await db.run('UPDATE users SET name = $1, role = $2, status = $3, department_id = $4, disabled_by = $5, updated_at = $6 WHERE tenant_id = $7 AND id = $8', [
       patch.name ?? current.name, patch.role ?? current.role, patch.status ?? current.status,
       patch.departmentId === undefined ? current.department_id : patch.departmentId, disabledBy, Date.now(), tenantId, id,
