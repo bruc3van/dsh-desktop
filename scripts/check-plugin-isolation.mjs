@@ -175,8 +175,10 @@ process.exit(1)
   })
   const failureWindow = await app.firstWindow()
   await failureWindow.waitForSelector('#error-settings', { timeout: 35_000 })
+  // Listen before clicking: the window can open before the click call returns.
+  const failureSettingsOpened = app.waitForEvent('window', { timeout: 10_000 })
   await failureWindow.locator('#error-settings').click()
-  const settingsWindow = await app.waitForEvent('window', { timeout: 10_000 })
+  const settingsWindow = await failureSettingsOpened
   // The data environment opens on its own when it needs attention.
   await settingsWindow.waitForSelector('#data-shared')
   // The settings DOM appears before its asynchronous data environment response.

@@ -95,8 +95,11 @@ try {
 
   // The settings seat is the only way back when there is no page to carry the
   // official dialog's enhanced 连接 block.
+  // Listen before clicking: the window can open before the click call
+  // returns, and an event that has already fired is not delivered again.
+  const settingsOpened = app.waitForEvent('window', { timeout: 10_000 }).catch(() => null)
   await window.locator('#error-settings').click()
-  const settings = await app.waitForEvent('window', { timeout: 10_000 }).catch(() => null)
+  const settings = await settingsOpened
   // Either spelling of the title: the settings page follows the client
   // locale, and the runner's locale is not this check's business.
   const settingsTitle = settings === null ? null : await settings.waitForLoadState('domcontentloaded').then(() => settings.title())
