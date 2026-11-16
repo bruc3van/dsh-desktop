@@ -2,78 +2,29 @@
 
 [中文](README.md) | English
 
-**A professional desktop client for DeepSeek Harness (`dsh`), built around organisation-wide configuration. Individuals install it and start working; in a company, IT sets up models, plugins, skills and tool permissions once, and employees sign in and get to work.**
+**A desktop client for DeepSeek Harness (`dsh`). Individuals install it and start working; in a company, IT sets up models, plugins, skills and tool permissions once, and employees sign in and get to work.**
 
 > [!IMPORTANT]
 > **This is an unofficial community project.** It is not developed, published, endorsed, or supported by DeepSeek. `DeepSeek`, `DeepSeek Harness`, `dsh`, and related names and marks belong to their respective owners.
 
 ![DSH Desktop Pro home](docs/images/dsh-desktop-home.png)
 
-The client loads the official Web UI, and the installer includes a pinned version of the official `@deepseek-ai/dsh` runtime, so no separate Node.js or `dsh` CLI is needed. On top of that, the client manages the runtime, the tray, notifications, updates and security controls; the organisation features come from the client together with an open-source management server.
+The client loads the official Web UI, and the installer includes a pinned version of the official `@deepseek-ai/dsh` runtime, so no separate Node.js or `dsh` CLI is needed. The client manages the runtime, the tray, notifications, updates and security controls; the organisation features come from the client together with an open-source management server.
 
-## Secure, collaborative, convenient
-
-**Secure**
-
-- Employees' machines hold only a personal key; the real key for the company's model service stays on the management server.
-- When an employee is disabled, their personal key stops working at once and their device removes the organisation's configuration.
-- IT can disable specific tools. Disabled tools are not offered to the model, and blocked calls are recorded in the audit log.
-- Each audit record is chained to the previous one, so edited or deleted records can be detected.
-- Configuration sent to clients is signed and verified before it is applied; update packages are checked against SHA-256 before installation.
-- Electron windows run sandboxed with context isolation, and navigation and permissions are restricted.
-
-**Collaborative**
-
-- Profiles bundle models, plugin indexes, skills and tool permissions, and are assigned to everyone, a department or a person.
-- Online devices apply a changed configuration within seconds.
-- The console shows whether each device runs the current configuration, and which devices failed and why.
-- Requests, tokens and cost by member, department and model, with a request log you can export for finance.
-- Cost or token limits for the company, departments and people; when one is used up, requests are refused or continue on a cheaper model.
-- Plugins IT has reviewed go into the company plugin market and appear first on people's Discover page; a risky plugin can be blocked, which removes it from every computer.
-- A skill library for the company's skills: install one for everyone, or let people choose in the client.
-- The console is available in Chinese and English.
-
-**Convenient**
-
-- Employees install the client and sign in once with their company account; models and plugins are already set up.
-- IT can also place a single configuration file instead of running a server.
-- The client keeps running in the background after the window closes and reopens from the tray or menu bar.
-- On first launch the client subscribes to a curated plugin index you can browse and install from on the Discover page.
-- When IT allows it, employees can switch between organisation mode and personal mode.
-
-## Personal and organisation use
+## Two ways to use it
 
 | | Personal | Organisation |
 |---|---|---|
 | Getting started | Enter your own API key | IT provides a configuration; employees sign in with their company account |
-| Models | Your own DeepSeek or other model account | The company model gateway, with a personal key per person |
+| Models | Your own DeepSeek or other model account | The company model gateway, with each employee's own key |
 | Plugins and skills | Installed by you | Assigned by IT; people can add their own |
 | Data directory | `~/.dsh` or the client's own directory | A separate organisation directory; a personal `~/.dsh` is never touched |
 | Deployment | None | One configuration file, or the management server (Docker Compose) |
 
-On a machine without an organisation configuration, the client behaves exactly as for personal use.
+It is one installer. On a machine without an organisation configuration, the client behaves exactly as for personal use.
 
-## Organisation features
-
-![Management console overview: rollout progress, devices that need attention, and organisation figures](docs/images/console-overview-en.png)
-
-- **File mode**: place one `managed.json` in a system directory; the client opens straight onto the company's model gateway, with plugin indexes, skills and tool restrictions applied. The file can be signed against tampering.
-- **Server mode**: run the open-source management server (Docker Compose + PostgreSQL); employees sign in with company SSO (any OpenID Connect provider).
-- **Model gateway**: the server's built-in gateway connects to any OpenAI-compatible API, with as many upstreams as you need; LiteLLM can be used instead.
-- **Model catalog, usage and limits**: register models and prices, analyse usage and cost by member, department and model, and set limits for the company, departments or people.
-- **Plugin market and skill library**: pick and review plugins from public plugin indexes and approve one pinned version for employees; edit the company's skills in one place and deliver them to everyone or on request.
-- **Management console**: manage members, departments, profiles and devices, review usage and the audit log, and create the enrollment file employees install.
-
-See the [enterprise deployment guide](docs/enterprise.md).
-
-## Roadmap
-
-These are planned directions and are not available yet; see the [CHANGELOG](CHANGELOG.md) for what has shipped.
-
-- **Visualisation**: more charts of configuration rollout, device status and usage, with custom dashboards.
-- **Audit**: more event types, filtering by person, device and action, and exporting audit records.
-- **Knowledge sharing within the organisation**: employees submit the skills they write to the company skill library from the client, and colleagues install them once reviewed.
-- **Sign-in and directory sync**: Feishu (Lark), DingTalk and WeCom sign-in and directories.
+> [!NOTE]
+> The organisation features arrived in 0.7.0 and are in beta. Until the final release the protocol between client and server may change, so upgrade both together. See the [roadmap](docs/roadmap.md) (in Chinese) for progress.
 
 ## Download
 
@@ -115,12 +66,73 @@ macOS/Windows packages do not yet have full developer signing and notarization, 
 
 Once IT has placed the configuration, the client shows "Sign in to <company>". Click it, sign in with your company account in the system browser, and return to the client to use the models and plugins your company set up.
 
+**IT administrators**
+
+Start with the [enterprise deployment guide](docs/enterprise.md): try file mode on one computer first, then decide whether to run the management server.
+
+## The client
+
+- It keeps running in the background after the window closes and reopens from the tray or menu bar.
+- An official Web UI already running on the machine is reused; otherwise the client starts and manages the bundled runtime. It can also connect to an address you specify.
+- On first launch it subscribes to a curated plugin index you can browse and install from on the Discover page. The client only adds the subscription; it does not install plugins for you.
+- It updates itself, and checks update packages against SHA-256 before installing.
+- Windows run sandboxed with context isolation, and navigation and permissions are restricted.
+
+Connection modes, data directories and updates are covered in the [user guide](docs/user-guide.md).
+
+## Organisation features
+
+![Management console overview: rollout progress, devices that need attention, and organisation figures](docs/images/console-overview-en.png)
+
+### Two ways to deploy
+
+- **File mode**: place one `managed.json` in a system directory; the client opens straight onto the company's model gateway, with plugin indexes, skills and tool restrictions applied. No server is needed, and the file can be signed against tampering.
+- **Server mode**: run the open-source management server (Docker Compose + PostgreSQL); employees sign in with company SSO (any OpenID Connect provider), and IT manages everything below from the console.
+
+### Configuration rollout
+
+- Profiles bundle models, plugin indexes, skills and tool permissions, and are assigned to everyone, a department or a person.
+- Online devices apply a changed configuration within seconds; offline, a device keeps using the last configuration within a grace period.
+- The console shows whether each device runs the current configuration, and which devices failed and why.
+- When IT allows it, employees can switch between organisation mode and personal mode. Organisation mode uses a separate data directory, so personal data is unaffected.
+
+### Models, usage and limits
+
+- The server's built-in model gateway connects to any OpenAI-compatible API, with as many upstreams as you need; LiteLLM can be used instead.
+- The real key for the company's model service stays on the server; employees' machines hold only their own keys.
+- Requests, tokens and cost by member, department and model, with a request log you can export for finance.
+- Cost or token limits for the company, departments and people; when one is used up, requests are refused or continue on a cheaper model.
+
+### Plugin market and skill library
+
+- Plugins IT has reviewed go into the company plugin market at a pinned version and appear first on people's Discover page; a risky plugin can be blocked, which removes it from every computer.
+- A skill library for the company's skills: install one for everyone, or let people choose in the client.
+
+### Security and audit
+
+- When an employee is disabled, their key stops working at once and their device removes the organisation's configuration.
+- IT can disable specific tools. Disabled tools are not offered to the model, and blocked calls are recorded in the audit log.
+- Each audit record is chained to the previous one, so edited or deleted records can be detected.
+- Configuration sent to clients is signed and verified before it is applied.
+
+The console is available in Chinese and English. For deployment steps see the [enterprise deployment guide](docs/enterprise.md).
+
+## Status and roadmap
+
+- **Now**: 0.7.0 beta. No new features are added before the final release, only hardening, fixes and pilot feedback.
+- **Next beta**: Feishu (Lark), DingTalk and WeCom sign-in and directory sync (merged to the main branch, not yet released).
+- **After the final release**: more charts of configuration rollout, devices and usage; finer audit filtering and export; employees submitting the skills they write to the company skill library, for colleagues to install once reviewed.
+
+The [roadmap](docs/roadmap.md) (in Chinese) lists what each step must meet; the [CHANGELOG](CHANGELOG.md) records what has shipped.
+
 ## Documentation
 
 - [User guide](docs/user-guide.md): connection modes, data and security, background operation and updates, the bundled runtime, the preset plugin subscription.
 - [Enterprise deployment guide](docs/enterprise.md): file mode, server deployment, the model gateway, the console and SSO.
 - [Desktop client architecture](docs/desktop-client-architecture.md): process model, trust boundary and design decisions.
 - [Development guide](docs/development.md): running from source, verification and releases.
+- [Roadmap](docs/roadmap.md) (in Chinese) and [architecture decision records](docs/adr): the plan and the decisions already made.
+- [Contributing](CONTRIBUTING.md).
 
 ## FAQ
 
