@@ -13,7 +13,10 @@ const scratch = mkdtempSync(join(tmpdir(), 'dsh-runtime-selection-'))
 let app
 try {
   const entry = join(scratch, 'main.cjs')
-  writeFileSync(entry, `const {app,BrowserWindow}=require('electron');app.whenReady().then(()=>{const win=new BrowserWindow({show:false,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});win.loadURL('about:blank')})`)
+  // Shown off-screen rather than hidden: on Windows and Linux a hidden window
+  // answers each mouse input only after about a second, and this check sends
+  // over a hundred of them. showInactive keeps it from taking focus.
+  writeFileSync(entry, `const {app,BrowserWindow}=require('electron');app.whenReady().then(()=>{const win=new BrowserWindow({show:false,x:-4000,y:-4000,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});win.loadURL('about:blank');win.showInactive()})`)
   const rendered = join(scratch, 'settings.mjs')
   await build({ stdin: { contents: "export {renderSettingsPageHtml} from './src/main/pages/settings.ts';export {renderSettingsPageScript} from './src/main/pages/settings-script.ts'", resolveDir: root }, bundle: true, platform: 'node', format: 'esm', outfile: rendered, plugins: [{ name: 'release-link', setup(builder) {
     builder.onResolve({ filter: /\/updater\.ts$/ }, () => ({ path: 'updater', namespace: 'fixture' }))
