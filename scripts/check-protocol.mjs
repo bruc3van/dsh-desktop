@@ -69,7 +69,10 @@ const proof = createDeviceProof(privateKey, 'get', '/v1/desired-state', 1_800_00
 assert.equal(checkDeviceProof(publicKey, proof, 'GET', '/v1/desired-state', 1_800_000_060_000), true)
 assert.equal(checkDeviceProof(publicKey, proof, 'GET', '/v1/status', 1_800_000_060_000), false, 'bound to the path')
 assert.equal(checkDeviceProof(publicKey, proof, 'GET', '/v1/desired-state', 1_800_001_000_000), false, 'expires')
-console.log('✓ device proofs bind method, path and time')
+const posted = createDeviceProof(privateKey, 'POST', '/v1/status', 1_800_000_000_000, '{"result":"applied"}')
+assert.equal(checkDeviceProof(publicKey, posted, 'POST', '/v1/status', 1_800_000_000_000, '{"result":"applied"}'), true)
+assert.equal(checkDeviceProof(publicKey, posted, 'POST', '/v1/status', 1_800_000_000_000, '{"result":"failed"}'), false, 'bound to the body')
+console.log('✓ device proofs bind method, path, time and body')
 
 const day = 86_400_000
 assert.equal(usableOffline({ ...base, offline: { graceDays: 3 } }, 0, 2 * day), true)

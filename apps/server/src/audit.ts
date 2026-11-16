@@ -68,12 +68,17 @@ export async function appendAudit(db: Db, tenantId: string, input: AuditInput): 
   })
 }
 
-/** Walk the whole chain. Returns the first broken sequence number, if any. */
+/**
+ * Walk the whole chain. Returns the first broken sequence number, if any.
+ * After pruning, the chain starts from the recorded checkpoint instead of the
+ * genesis: removing events from the start without one still breaks it.
+ */
 export async function verifyAudit(db: Db, tenantId: string): Promise<{ ok: true; events: number } | { ok: false; brokenAt: number; events: number }> {
   const rows = await db.all<StoredEvent>(
     'SELECT seq, at, actor_type, actor_id, action, target, detail, source, prev_hash, hash FROM audit_events WHERE tenant_id = $1 ORDER BY seq', [tenantId])
-  let previous = GENESIS
-  let expectedSeq = 1
+  const checkpoint = await db.get<{ seq: number; hash: string }>('SELECT seq, hash FROM audit_checkpoints WHERE tenant_id = $1', [tenantId])
+  let previous = checkpoint?.hash ?? GENESIS
+  let expectedSeq = (checkpoint?.seq ?? 0) + 1
   for (const row of rows) {
     if (row.seq !== expectedSeq || row.prev_hash !== previous || eventHash(tenantId, row) !== row.hash) {
       return { ok: false, brokenAt: row.seq, events: rows.length }

@@ -8,7 +8,7 @@ import { createServer, type Server } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { createPublicKey } from 'node:crypto'
 import {
-  API, checkDeviceProof, DEVICE_ID_HEADER, DEVICE_PROOF_HEADER, ENROLLMENT_SCHEMA, PROTOCOL_VERSION,
+  API, checkDeviceProof, DEVICE_ID_HEADER, DEVICE_PROOF_HEADER, DEVICE_PROOF_WINDOW_MS, ENROLLMENT_SCHEMA, PROTOCOL_VERSION,
   validateProfileSpec, type AuditBatch, type DiscoveryResponse, type SkillListResponse, type Enrollment, type EnrollRequest, type StatusReport, type WatchResponse,
 } from '@dsh-desktop-pro/protocol'
 import { queryAudit, verifyAudit } from './audit.ts'
@@ -16,7 +16,7 @@ import { createAuth, isLoopbackRedirect, type Auth } from './auth.ts'
 import { messagePage, pageLanguage, signInPage } from './pages.ts'
 import { createComposer, type Composer } from './compose.ts'
 import type { ServerConfig } from './config.ts'
-import { createSealer, newId, safeEqual } from './crypto.ts'
+import { createSealer, newId } from './crypto.ts'
 import { parseCsv } from './csv.ts'
 import type { Db } from './db.ts'
 import { createGateway } from './gateway.ts'
@@ -26,6 +26,7 @@ import {
 import { migrate } from './migrations.ts'
 import { createMarket, type Market } from './market.ts'
 import { createMetering, localDay, type Metering } from './metering.ts'
+import { startRetention } from './retention.ts'
 import { installProxy, PROXY_PREFIX } from './proxy.ts'
 import { createStore, ROLES, type Role, type Store, type User } from './store.ts'
 
@@ -86,6 +87,23 @@ export async function createApp(options: AppOptions): Promise<App> {
   const secureCookies = config.publicUrl.startsWith('https:')
   /** Ends waiting long polls before the database closes. */
   let shuttingDown = false
+  const stopRetention = startRetention(db, store.tenantId, config.retention)
+
+  /**
+   * The console authenticates with a cookie, so a change must come from the
+   * console's own pages. Browsers name the page behind every write (Origin,
+   * Sec-Fetch-Site); a write that another site's page sent is refused even
+   * when SameSite let the cookie through. Scripts send neither header.
+   */
+  function crossSiteWrite(req: { method?: string; headers: Record<string, string | string[] | undefined> }, pathname: string): boolean {
+    const method = (req.method ?? 'GET').toUpperCase()
+    if (method === 'GET' || method === 'HEAD' || !pathname.startsWith('/admin/api/')) return false
+    const origin = req.headers['origin']
+    const site = req.headers['sec-fetch-site']
+    // Read each time: tests (and the demo) learn their port only after start.
+    if (typeof origin === 'string' && origin !== new URL(config.publicUrl).origin) return true
+    return typeof site === 'string' && site !== 'same-origin' && site !== 'none'
+  }
 
   // ---------- client API ----------
 
@@ -152,20 +170,34 @@ export async function createApp(options: AppOptions): Promise<App> {
     return found
   }
 
-  /** Bearer token plus a proof from the device key the server enrolled. */
-  async function device(ctx: Context): Promise<{ person: User; deviceId: string }> {
+  /** Proofs already accepted, until they expire: each one is good for a single request. */
+  const usedProofs = new Map<string, number>()
+
+  /**
+   * Bearer token plus a proof from the device key the server enrolled. The
+   * proof signs the body too, so the body is read here and handed back parsed.
+   */
+  async function device(ctx: Context): Promise<{ person: User; deviceId: string; body: unknown }> {
     const { person } = await signedIn(ctx)
+    const raw = ctx.method === 'GET' || ctx.method === 'HEAD' ? '' : await readText(ctx.req, 1_000_000)
     const deviceId = String(ctx.req.headers[DEVICE_ID_HEADER] ?? '')
     const row = await db.get<{ user_id: string; public_key: string; status: string }>(
       'SELECT user_id, public_key, status FROM devices WHERE tenant_id = $1 AND id = $2', [store.tenantId, deviceId])
     if (row === undefined || row.user_id !== person.id) throw new HttpError(401, 'unknown_device')
     if (row.status !== 'active') throw new HttpError(403, 'device_revoked')
     const key = createPublicKey({ key: Buffer.from(row.public_key, 'base64'), format: 'der', type: 'spki' })
-    if (!checkDeviceProof(key, String(ctx.req.headers[DEVICE_PROOF_HEADER] ?? ''), ctx.method, ctx.url.pathname)) {
-      throw new HttpError(401, 'invalid_device_proof')
+    const proof = String(ctx.req.headers[DEVICE_PROOF_HEADER] ?? '')
+    const now = Date.now()
+    if (!checkDeviceProof(key, proof, ctx.method, ctx.url.pathname, now, raw)) throw new HttpError(401, 'invalid_device_proof')
+    if ((usedProofs.get(proof) ?? 0) > now) throw new HttpError(401, 'replayed_device_proof')
+    for (const [seen, until] of usedProofs) if (until <= now) usedProofs.delete(seen)
+    usedProofs.set(proof, now + DEVICE_PROOF_WINDOW_MS * 2)
+    await db.run('UPDATE devices SET last_seen_at = $1 WHERE id = $2', [now, deviceId])
+    let body: unknown = {}
+    if (raw !== '') {
+      try { body = JSON.parse(raw) as unknown } catch { throw new HttpError(400, 'invalid_json') }
     }
-    await db.run('UPDATE devices SET last_seen_at = $1 WHERE id = $2', [Date.now(), deviceId])
-    return { person, deviceId }
+    return { person, deviceId, body }
   }
 
   router.post(API.devices, async (ctx) => {
@@ -189,10 +221,11 @@ export async function createApp(options: AppOptions): Promise<App> {
 
   router.get(API.desiredState, async (ctx) => {
     const { person, deviceId } = await device(ctx)
-    const signed = await composer.signedFor(person)
-    const served = await db.get<{ served_revision: number | null }>('SELECT served_revision FROM devices WHERE id = $1', [deviceId])
-    if (served?.served_revision !== signed.payload.revision) {
-      await db.run('UPDATE devices SET served_revision = $1 WHERE id = $2', [signed.payload.revision, deviceId])
+    const { signed, fingerprint } = await composer.signedFor(person, deviceId)
+    const served = await db.get<{ served_fingerprint: string | null }>('SELECT served_fingerprint FROM devices WHERE id = $1', [deviceId])
+    await db.run('UPDATE devices SET served_revision = $1, served_fingerprint = $2 WHERE id = $3', [signed.payload.revision, fingerprint, deviceId])
+    // Audited when the device is given something new, not on every fetch.
+    if (served?.served_fingerprint !== fingerprint) {
       await store.audit({ actorType: 'device', actorId: person.id, action: 'desired-state.served', target: deviceId, detail: { revision: signed.payload.revision } })
     }
     sendJson(ctx.res, 200, signed)
@@ -200,21 +233,31 @@ export async function createApp(options: AppOptions): Promise<App> {
 
   /**
    * Long poll, so a change in the console reaches online devices within
-   * seconds instead of at the next five-minute check. A cheap query every two
-   * seconds keeps it correct with several server instances behind one address.
+   * seconds instead of at the next five-minute check. A device is woken when
+   * what it should hold differs from what it was last given — a change for
+   * someone else moves the revision but wakes nobody else. One query every two
+   * seconds keeps it correct with several server instances behind one address;
+   * the expected content is recomputed only when the revision moves.
    */
   router.get(API.watch, async (ctx) => {
     const { person, deviceId } = await device(ctx)
-    const known = Number(ctx.url.searchParams.get('revision'))
     const deadline = Date.now() + 50_000
     let closed = false
     ctx.res.on('close', () => { closed = true })
+    let seenRevision = -1
+    let expected: string | undefined
     for (;;) {
       if (shuttingDown) { if (!ctx.res.headersSent) sendJson(ctx.res, 503, { error: 'shutting_down' }); return }
-      const revision = (await store.tenant()).config_revision
-      const deviceRow = await db.get<{ status: string }>('SELECT status FROM devices WHERE id = $1', [deviceId])
-      const personRow = await store.user(person.id)
-      const changed = revision !== known || deviceRow?.status !== 'active' || personRow?.status !== 'active'
+      const row = await db.get<{ revision: number; device_status: string | null; served_fingerprint: string | null; person_status: string | null }>(
+        'SELECT t.config_revision AS revision, d.status AS device_status, d.served_fingerprint AS served_fingerprint, u.status AS person_status FROM tenants t LEFT JOIN devices d ON d.id = $2 AND d.tenant_id = t.id LEFT JOIN users u ON u.id = $3 AND u.tenant_id = t.id WHERE t.id = $1',
+        [store.tenantId, deviceId, person.id])
+      const revision = row?.revision ?? 0
+      if (revision !== seenRevision) {
+        seenRevision = revision
+        const current = await store.user(person.id)
+        expected = current === undefined ? undefined : (await composer.expected([{ id: deviceId, user_id: person.id }])).get(deviceId)
+      }
+      const changed = row?.device_status !== 'active' || row.person_status !== 'active' || expected !== row.served_fingerprint
       if (changed || closed || Date.now() >= deadline) {
         if (!closed) sendJson(ctx.res, 200, { revision, changed } satisfies WatchResponse)
         return
@@ -225,21 +268,31 @@ export async function createApp(options: AppOptions): Promise<App> {
   })
 
   router.post(API.status, async (ctx) => {
-    const { person, deviceId } = await device(ctx)
-    const report = await readJson(ctx.req) as Partial<StatusReport>
+    const { person, deviceId, body } = await device(ctx)
+    const report = body as Partial<StatusReport>
     const result = report.result === 'applied' || report.result === 'partial' || report.result === 'failed' ? report.result : 'failed'
     const problems = Array.isArray(report.problems) ? report.problems.filter((item): item is string => typeof item === 'string').map(item => item.slice(0, 500)).slice(0, 20) : []
-    await db.run("UPDATE devices SET applied_revision = $1, applied_result = $2, applied_problems = $3, applied_at = $4, client_version = $5, dsh_version = $6, mode = 'organization' WHERE id = $7", [
-      typeof report.revision === 'number' ? report.revision : null, result, JSON.stringify(problems), Date.now(),
-      String(report.clientVersion ?? '').slice(0, 40), String(report.dshVersion ?? '').slice(0, 40), deviceId,
+    const revision = typeof report.revision === 'number' ? report.revision : null
+    const before = await db.get<{ served_revision: number | null; served_fingerprint: string | null; applied_fingerprint: string | null; applied_result: string | null }>(
+      'SELECT served_revision, served_fingerprint, applied_fingerprint, applied_result FROM devices WHERE id = $1', [deviceId])
+    // The report names the revision it applied; it applied what was served if
+    // that is the document last handed to this device. An older report (a
+    // newer document is already on its way) leaves the record as it was.
+    const applied = revision !== null && revision === before?.served_revision ? before.served_fingerprint : before?.applied_fingerprint ?? null
+    await db.run("UPDATE devices SET applied_revision = $1, applied_result = $2, applied_problems = $3, applied_at = $4, client_version = $5, dsh_version = $6, mode = 'organization', applied_fingerprint = $7 WHERE id = $8", [
+      revision, result, JSON.stringify(problems), Date.now(),
+      String(report.clientVersion ?? '').slice(0, 40), String(report.dshVersion ?? '').slice(0, 40), applied, deviceId,
     ])
-    await store.audit({ actorType: 'device', actorId: person.id, action: 'desired-state.' + result, target: deviceId, detail: { revision: report.revision ?? null, problems: problems.length } })
+    // Audited when the outcome changes, not on every report.
+    if (applied !== before?.applied_fingerprint || result !== before?.applied_result || result !== 'applied') {
+      await store.audit({ actorType: 'device', actorId: person.id, action: 'desired-state.' + result, target: deviceId, detail: { revision, problems: problems.length } })
+    }
     sendJson(ctx.res, 200, { ok: true })
   })
 
   router.post(API.audit, async (ctx) => {
-    const { person, deviceId } = await device(ctx)
-    const batch = await readJson(ctx.req) as Partial<AuditBatch>
+    const { person, deviceId, body } = await device(ctx)
+    const batch = body as Partial<AuditBatch>
     const events = Array.isArray(batch.events) ? batch.events.slice(0, 500) : []
     for (const event of events) {
       if (typeof event.action !== 'string' || !/^[a-z][a-z0-9._-]{0,63}$/.test(event.action)) continue
@@ -265,17 +318,15 @@ export async function createApp(options: AppOptions): Promise<App> {
   router.post('/admin/api/session', async ({ req, res }) => {
     // The bootstrap token is only for the first administrator.
     const body = await readJson(req) as { token?: unknown }
-    if (config.bootstrapToken === undefined || typeof body.token !== 'string' || !safeEqual(body.token, config.bootstrapToken)) {
-      throw new HttpError(401, 'invalid_token')
-    }
-    setCookie(res, CONSOLE_COOKIE, 'bootstrap:' + body.token, { secure: secureCookies, maxAge: 8 * 3600 })
+    const session = await auth.bootstrapSession(typeof body.token === 'string' ? body.token : '')
+    setCookie(res, CONSOLE_COOKIE, 'bootstrap:' + session, { secure: secureCookies, maxAge: 8 * 3600 })
     await store.audit({ actorType: 'admin', actorId: 'bootstrap', action: 'console.login', detail: { method: 'bootstrap-token' } })
     sendJson(res, 200, { ok: true })
   })
 
   router.post('/admin/api/logout', async ({ req, res }) => {
     const cookie = cookies(req)[CONSOLE_COOKIE] ?? ''
-    if (!cookie.startsWith('bootstrap:')) await auth.consoleLogout(cookie)
+    await auth.consoleLogout(cookie.startsWith('bootstrap:') ? cookie.slice(10) : cookie)
     setCookie(res, CONSOLE_COOKIE, '', { secure: secureCookies, maxAge: 0 })
     sendJson(res, 200, { ok: true })
   })
@@ -283,8 +334,9 @@ export async function createApp(options: AppOptions): Promise<App> {
   interface Admin { id: string; name: string; role: Role | 'bootstrap' }
   async function admin(ctx: Context, write = true): Promise<Admin> {
     const cookie = cookies(ctx.req)[CONSOLE_COOKIE] ?? bearer(ctx.req) ?? ''
-    if (cookie.startsWith('bootstrap:') && config.bootstrapToken !== undefined && safeEqual(cookie.slice(10), config.bootstrapToken)) {
-      return { id: 'bootstrap', name: 'Bootstrap administrator', role: 'bootstrap' }
+    if (cookie.startsWith('bootstrap:')) {
+      if (await auth.bootstrapValid(cookie.slice(10))) return { id: 'bootstrap', name: 'Bootstrap administrator', role: 'bootstrap' }
+      throw new HttpError(401, 'unauthorized')
     }
     const person = await auth.consolePerson(cookie)
     if (person === undefined) throw new HttpError(401, 'unauthorized')
@@ -442,12 +494,24 @@ export async function createApp(options: AppOptions): Promise<App> {
   router.get('/admin/api/devices', async (ctx) => {
     await admin(ctx, false)
     const rows = await db.all('SELECT d.id AS id, d.user_id AS user_id, u.name AS user_name, d.platform AS platform, d.arch AS arch, d.hostname AS hostname, d.client_version AS client_version, d.dsh_version AS dsh_version, d.status AS status, d.applied_revision AS applied_revision, d.applied_result AS applied_result, d.applied_problems AS applied_problems, d.applied_at AS applied_at, d.served_revision AS served_revision, d.last_seen_at AS last_seen_at, d.created_at AS created_at, d.mode AS mode FROM devices d LEFT JOIN users u ON u.id = d.user_id WHERE d.tenant_id = $1 ORDER BY d.last_seen_at DESC', [store.tenantId])
-    sendJson(ctx.res, 200, rows.map(row => ({ ...row, applied_problems: typeof row['applied_problems'] === 'string' ? JSON.parse(row['applied_problems']) as unknown : [] })))
+    const fingerprints = await db.all<{ id: string; user_id: string; applied_fingerprint: string | null }>(
+      "SELECT id, user_id, applied_fingerprint FROM devices WHERE tenant_id = $1 AND status = 'active'", [store.tenantId])
+    const expected = await composer.expected(fingerprints)
+    const inSync = new Map(fingerprints.map(row => [row.id, row.applied_fingerprint !== null && row.applied_fingerprint === expected.get(row.id)]))
+    sendJson(ctx.res, 200, rows.map(row => ({
+      ...row,
+      applied_problems: typeof row['applied_problems'] === 'string' ? JSON.parse(row['applied_problems']) as unknown : [],
+      // Whether the device holds what its person should have now: per device, not the organisation-wide revision.
+      in_sync: inSync.get(String(row['id'])) === true,
+    })))
   })
   router.post('/admin/api/devices/:id/revoke', async (ctx) => {
     const me = await admin(ctx)
-    if ((await db.run("UPDATE devices SET status = 'revoked' WHERE tenant_id = $1 AND id = $2", [store.tenantId, ctx.params['id'] ?? ''])) === 0) throw new HttpError(404, 'device_not_found')
-    await store.audit({ actorType: 'admin', actorId: me.id, action: 'device.revoked', target: ctx.params['id'] ?? '' })
+    const id = ctx.params['id'] ?? ''
+    if ((await db.run("UPDATE devices SET status = 'revoked' WHERE tenant_id = $1 AND id = $2", [store.tenantId, id])) === 0) throw new HttpError(404, 'device_not_found')
+    // The device's gateway key stops working now, wherever a copy of it went.
+    await composer.revokeDeviceKey(id)
+    await store.audit({ actorType: 'admin', actorId: me.id, action: 'device.revoked', target: id })
     sendJson(ctx.res, 200, { ok: true })
   })
 
@@ -635,8 +699,8 @@ export async function createApp(options: AppOptions): Promise<App> {
     sendJson(ctx.res, 200, { skills: await market.skillsForClient(person.id) } satisfies SkillListResponse)
   })
   router.put(API.skills + '/:id/subscription', async (ctx) => {
-    const { person, deviceId } = await device(ctx)
-    const body = await readJson(ctx.req) as { installed?: unknown }
+    const { person, deviceId, body: payload } = await device(ctx)
+    const body = payload as { installed?: unknown }
     if (typeof body.installed !== 'boolean') throw new HttpError(400, 'invalid_installed')
     const id = ctx.params['id'] ?? ''
     if (await market.subscribe(person.id, id, body.installed)) {
@@ -770,6 +834,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     const found = router.match(method, url.pathname)
     if (found === undefined) { sendJson(res, 404, { error: 'not_found' }); return }
     if (found === 'method') { sendJson(res, 405, { error: 'method_not_allowed' }); return }
+    if (crossSiteWrite(req, url.pathname)) { sendJson(res, 403, { error: 'cross_site_request' }); return }
     Promise.resolve(found.handler({ req, res, url, params: found.params, method })).catch((error: unknown) => {
       if (res.headersSent) { res.end(); return }
       if (error instanceof HttpError) {
@@ -799,6 +864,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     }),
     close: async () => {
       shuttingDown = true
+      stopRetention()
       const closing = new Promise<void>(resolve => { server.close(() => { resolve() }) })
       // Long polls wake every two seconds; idle keep-alive sockets close now.
       server.closeIdleConnections()

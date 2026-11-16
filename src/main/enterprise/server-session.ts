@@ -243,8 +243,21 @@ export class ServerSession {
     this.writeSession({ server: this.server, refreshToken: token.refresh_token, user: token.user })
   }
 
+  /**
+   * One refresh at a time. The server rotates the refresh token on every use
+   * and treats an already-used one as stolen (it ends the session), so two
+   * calls refreshing side by side would sign this device out.
+   */
+  private refreshing: Promise<void> | undefined
+
   private async bearer(): Promise<string> {
     if (this.accessToken !== undefined && Date.now() < this.accessExpiresAt) return this.accessToken
+    this.refreshing ??= this.refresh().finally(() => { this.refreshing = undefined })
+    await this.refreshing
+    return this.accessToken ?? ''
+  }
+
+  private async refresh(): Promise<void> {
     const session = this.readSession()
     if (session === undefined) throw new SessionError('sign-in-required', 'not signed in')
     try {
@@ -253,7 +266,6 @@ export class ServerSession {
       if (error instanceof SessionError && error.kind === 'sign-in-required') this.forgetSession()
       throw error
     }
-    return this.accessToken ?? ''
   }
 
   private forgetSession(): void {
@@ -286,18 +298,20 @@ export class ServerSession {
         [PROTOCOL_HEADER]: String(PROTOCOL_VERSION),
       }
       if (body !== undefined) headers['content-type'] = 'application/json'
+      // The proof signs these exact bytes, so they are serialised once.
+      const text = body === undefined ? undefined : JSON.stringify(body)
       if (options.proof !== false) {
         const { record, privateKey } = this.device()
         if (record.deviceId === undefined) throw new SessionError('sign-in-required', 'this device is not enrolled')
         headers[DEVICE_ID_HEADER] = record.deviceId
-        headers[DEVICE_PROOF_HEADER] = createDeviceProof(privateKey, method, path)
+        headers[DEVICE_PROOF_HEADER] = createDeviceProof(privateKey, method, path, Date.now(), text ?? '')
       }
       let response: Response
       try {
         // The device proof covers the path; a query only tunes the request.
         response = await this.fetch(new URL(path + (options.query ?? ''), this.server), {
           method, headers, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
-          ...body !== undefined && { body: JSON.stringify(body) },
+          ...text !== undefined && { body: text },
         })
       } catch (error) {
         throw new SessionError('network', 'cannot reach ' + this.server + ': ' + (error instanceof Error ? error.message : String(error)))

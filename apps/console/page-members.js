@@ -210,7 +210,6 @@ export async function renderDetail(ctx, id) {
   if (!person) throw new Error(t('这个成员不存在。'))
   const path = departmentPaths(departments)
   const mine = devices.filter(device => device.user_id === id)
-  const revision = ctx.me.organization.revision
   const writable = ctx.canWrite()
   const preview = h('div', {}, h('p', { class: 'muted' }, t('正在计算…')))
   const usageHost = h('div', {}, h('p', { class: 'muted' }, t('正在读取…')))
@@ -249,7 +248,7 @@ export async function renderDetail(ctx, id) {
           flush: true,
           body: table([
             { label: t('设备'), cell: device => h('div', {}, h('div', { class: 'cell-title' }, device.hostname || t('未命名设备')), h('div', { class: 'cell-sub' }, platformLabel(device))) },
-            { label: t('配置'), cell: device => { const state = DEVICE_STATE[deviceState(device, revision)]; return badge(state.label, state.tone) } },
+            { label: t('配置'), cell: device => { const state = DEVICE_STATE[deviceState(device)]; return badge(state.label, state.tone) } },
             { label: t('版本'), cell: device => h('span', { class: 'num' }, device.applied_revision === null ? '—' : 'r' + device.applied_revision) },
             { label: t('最后在线'), cell: device => timeCell(device.last_seen_at) },
           ], mine, { onRow: () => { location.hash = '#/devices?user=' + id }, emptyState: empty({ iconName: 'device', title: t('还没有设备'), text: tf('{name} 第一次在电脑上登录 DSH Desktop Pro 后，设备会出现在这里。', { name: person.name }) }) }),

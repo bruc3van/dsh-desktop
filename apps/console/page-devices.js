@@ -14,14 +14,14 @@ export async function render(ctx) {
   const draw = () => {
     const text = filters.text.trim().toLowerCase()
     const rows = devices.filter(device =>
-      (filters.state === '' ? device.status === 'active' : deviceState(device, revision) === filters.state)
+      (filters.state === '' ? device.status === 'active' : deviceState(device) === filters.state)
       && (filters.user === '' || device.user_id === filters.user)
       && (text === '' || (device.hostname ?? '').toLowerCase().includes(text) || (device.user_name ?? '').toLowerCase().includes(text)))
     result.textContent = tf('{n} 台', { n: rows.length })
     tableHost.replaceChildren(table([
       { label: t('设备'), cell: device => h('div', {}, h('div', { class: 'cell-title' }, device.hostname || t('未命名设备')), h('div', { class: 'cell-sub' }, (OS[device.platform] ?? device.platform) + ' ' + device.arch)) },
       { label: t('成员'), cell: device => h('a', { href: '#/members/' + device.user_id }, device.user_name ?? device.user_id) },
-      { label: t('配置'), cell: device => { const state = DEVICE_STATE[deviceState(device, revision)]; return badge(state.label, state.tone) } },
+      { label: t('配置'), cell: device => { const state = DEVICE_STATE[deviceState(device)]; return badge(state.label, state.tone) } },
       { label: t('已用版本'), cell: device => h('span', { class: 'num' }, device.applied_revision === null ? '—' : 'r' + device.applied_revision) },
       { label: t('客户端'), cell: device => h('span', { class: 'num' }, device.client_version || '—') },
       { label: t('最后在线'), cell: device => timeCell(device.last_seen_at) },
@@ -49,7 +49,7 @@ export async function render(ctx) {
 }
 
 function deviceDrawer(ctx, device, revision) {
-  const state = DEVICE_STATE[deviceState(device, revision)]
+  const state = DEVICE_STATE[deviceState(device)]
   return openDialog({
     title: device.hostname || t('未命名设备'),
     drawer: true,

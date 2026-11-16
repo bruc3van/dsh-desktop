@@ -141,6 +141,7 @@ jobs:
           pnpm run check:server
           pnpm run check:gateway
           pnpm run check:market
+          pnpm run check:oidc
 
       # The pure-Node contract checks are offline, fast, and assert exactly the
       # invariants a release must not break (single-writer lock, platform

@@ -129,6 +129,35 @@ const MIGRATIONS: Array<{ id: number; statements: string[] }> = [
         PRIMARY KEY (tenant_id, user_id, skill_id))`,
     ],
   },
+  {
+    id: 5,
+    statements: [
+      // Gateway keys belong to a device, so revoking one device ends its key.
+      // Keys issued per person before this are dropped: every device gets its
+      // own on its next sync. (Keys LiteLLM issued earlier run out on their own.)
+      `CREATE TABLE IF NOT EXISTS device_keys (
+        tenant_id TEXT NOT NULL, device_id TEXT NOT NULL, user_id TEXT NOT NULL, gateway TEXT NOT NULL, key_sealed TEXT NOT NULL,
+        expires_at BIGINT, created_at BIGINT NOT NULL, PRIMARY KEY (tenant_id, device_id, gateway))`,
+      `CREATE INDEX IF NOT EXISTS device_keys_user ON device_keys (tenant_id, user_id)`,
+      `DROP TABLE gateway_keys`,
+      `DELETE FROM proxy_keys`,
+      `ALTER TABLE proxy_keys ADD COLUMN device_id TEXT`,
+      `CREATE INDEX IF NOT EXISTS proxy_keys_device ON proxy_keys (tenant_id, device_id)`,
+      // Which device sent a request through the built-in gateway.
+      `ALTER TABLE gateway_requests ADD COLUMN device_id TEXT`,
+      // What a device was last given and last applied: a hash of its person's
+      // configuration and of its key. Up to date means these match what it should hold.
+      `ALTER TABLE devices ADD COLUMN served_fingerprint TEXT`,
+      `ALTER TABLE devices ADD COLUMN applied_fingerprint TEXT`,
+      // The refresh token a session used before its current one: seeing it again means it was copied.
+      `ALTER TABLE sessions ADD COLUMN prev_refresh_hash TEXT`,
+      // Set when an administrator first signs in through the identity provider; the bootstrap token stops working.
+      `ALTER TABLE tenants ADD COLUMN bootstrap_closed_at BIGINT`,
+      // Where the audit chain starts after old events were pruned.
+      `CREATE TABLE IF NOT EXISTS audit_checkpoints (
+        tenant_id TEXT PRIMARY KEY, seq BIGINT NOT NULL, hash TEXT NOT NULL, pruned_at BIGINT NOT NULL)`,
+    ],
+  },
 ]
 
 export async function migrate(db: Db): Promise<void> {

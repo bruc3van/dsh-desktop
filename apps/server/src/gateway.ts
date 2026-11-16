@@ -1,6 +1,6 @@
 /**
- * Model gateway adapters: issue each person their own virtual key, and revoke
- * it when they leave. The real provider keys never leave the gateway; the
+ * Model gateway adapters: issue each device of a person its own virtual key,
+ * and revoke it when the device is revoked or the person leaves. The real provider keys never leave the gateway; the
  * gateway enforces budgets, model allow-lists and content rules — the hard
  * limits the desktop client cannot provide.
  *
@@ -18,7 +18,7 @@ export interface IssuedKey { key: string; expiresAt?: number }
 
 export interface GatewayAdapter {
   readonly kind: string
-  issue(person: { id: string; email?: string | null; name: string }, models: string[]): Promise<IssuedKey>
+  issue(person: { id: string; email?: string | null; name: string }, models: string[], deviceId: string): Promise<IssuedKey>
   revoke(key: string): Promise<void>
 }
 
@@ -26,7 +26,7 @@ function litellm(config: GatewayConfig, fetchImpl: typeof fetch): GatewayAdapter
   const headers = { authorization: 'Bearer ' + (config.masterKey ?? ''), 'content-type': 'application/json' }
   return {
     kind: 'litellm',
-    async issue(person, models) {
+    async issue(person, models, deviceId) {
       const response = await fetchImpl(config.url + '/key/generate', {
         method: 'POST',
         headers,
@@ -36,7 +36,7 @@ function litellm(config: GatewayConfig, fetchImpl: typeof fetch): GatewayAdapter
           duration: config.duration,
           ...models.length > 0 && { models },
           ...config.maxBudget !== undefined && { max_budget: config.maxBudget },
-          metadata: { issued_by: 'dsh-desktop-pro-server', email: person.email ?? undefined, name: person.name },
+          metadata: { issued_by: 'dsh-desktop-pro-server', email: person.email ?? undefined, name: person.name, device: deviceId },
         }),
         signal: AbortSignal.timeout(20_000),
       })
@@ -59,9 +59,9 @@ function litellm(config: GatewayConfig, fetchImpl: typeof fetch): GatewayAdapter
 function direct(db: Db, tenantId: string): GatewayAdapter {
   return {
     kind: 'direct',
-    async issue(person) {
+    async issue(person, _models, deviceId) {
       const key = 'sk-dsh-' + randomToken(32)
-      await db.run('INSERT INTO proxy_keys (key_hash, tenant_id, user_id, created_at) VALUES ($1, $2, $3, $4)', [sha256(key), tenantId, person.id, Date.now()])
+      await db.run('INSERT INTO proxy_keys (key_hash, tenant_id, user_id, device_id, created_at) VALUES ($1, $2, $3, $4, $5)', [sha256(key), tenantId, person.id, deviceId, Date.now()])
       return { key }
     },
     async revoke(key) {

@@ -23,6 +23,8 @@ export interface GatewayConfig {
   duration: string
   /** Optional per-person budget in USD. */
   maxBudget?: number
+  /** `direct`: requests one person may have running at once. */
+  maxConcurrent: number
 }
 
 export interface OidcConfig {
@@ -31,6 +33,12 @@ export interface OidcConfig {
   clientSecret?: string
   scopes: string
   label: string
+  /**
+   * Match people by an e-mail the provider does not mark as verified. Only
+   * for providers that never send `email_verified` and only let their own
+   * administrators set addresses.
+   */
+  trustEmail: boolean
 }
 
 export interface ServerConfig {
@@ -54,6 +62,15 @@ export interface ServerConfig {
   consoleDir?: string
   /** IANA time zone that days, weeks and months of usage and limits follow. */
   timeZone: string
+  /** How long records are kept; see retention.ts. */
+  retention: { requestDays: number; auditDays: number }
+}
+
+function days(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === '') return fallback
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error('retention days must be 0 (keep) or a positive number: ' + value)
+  return Math.floor(parsed)
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -70,12 +87,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const publicUrl = new URL(required(env, 'DSH_PUBLIC_URL')).origin
   const secret = required(env, 'DSH_SERVER_SECRET')
   if (Buffer.byteLength(secret) < 32) throw new Error('DSH_SERVER_SECRET must be at least 32 characters')
-  const gatewayKind = env['DSH_GATEWAY'] ?? 'none'
+  const gatewayKind = env['DSH_GATEWAY'] ?? 'direct'
   if (gatewayKind !== 'none' && gatewayKind !== 'litellm' && gatewayKind !== 'direct') throw new Error('DSH_GATEWAY must be none, direct or litellm')
   const gateway: GatewayConfig = {
     kind: gatewayKind,
     credential: env['DSH_GATEWAY_CREDENTIAL'] ?? 'DSH_ORG_GATEWAY_KEY',
     duration: env['DSH_GATEWAY_KEY_DURATION'] ?? '30d',
+    maxConcurrent: Math.max(1, Math.floor(Number(env['DSH_GATEWAY_MAX_CONCURRENT'] ?? 8)) || 8),
   }
   if (gatewayKind === 'litellm') {
     gateway.url = new URL(required(env, 'LITELLM_URL')).href.replace(/\/$/, '')
@@ -105,6 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     accessTokenSeconds: Number(env['DSH_ACCESS_TOKEN_SECONDS'] ?? 3600),
     refreshTokenDays: Number(env['DSH_REFRESH_TOKEN_DAYS'] ?? 30),
     timeZone,
+    retention: { requestDays: days(env['DSH_REQUEST_RETENTION_DAYS'], 400), auditDays: days(env['DSH_AUDIT_RETENTION_DAYS'], 0) },
   }
   if (env['DSH_BOOTSTRAP_TOKEN'] !== undefined && env['DSH_BOOTSTRAP_TOKEN'] !== '') config.bootstrapToken = env['DSH_BOOTSTRAP_TOKEN']
   if (env['OIDC_ISSUER'] !== undefined && env['OIDC_ISSUER'] !== '') {
@@ -113,6 +132,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       clientId: required(env, 'OIDC_CLIENT_ID'),
       scopes: env['OIDC_SCOPES'] ?? 'openid profile email',
       label: env['OIDC_LABEL'] ?? 'SSO',
+      trustEmail: flag(env['OIDC_TRUST_EMAIL']),
       ...env['OIDC_CLIENT_SECRET'] !== undefined && { clientSecret: env['OIDC_CLIENT_SECRET'] },
     }
   }

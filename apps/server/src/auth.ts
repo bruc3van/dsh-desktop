@@ -9,7 +9,14 @@
  * automatic provisioning is on.
  *
  * Tokens are opaque random strings stored only as SHA-256 hashes. Refresh
- * tokens rotate on every use; access tokens are short-lived.
+ * tokens rotate on every use, and presenting one that was already rotated
+ * away ends the session: one of the two holders is not the device. Codes and
+ * refresh tokens are spent by a conditional write, so two requests racing with
+ * the same one cannot both succeed.
+ *
+ * An e-mail address only identifies someone when the identity provider says
+ * it verified it (or the deployment states that it does), so an account at the
+ * provider cannot claim a member by setting their address.
  * @module @dsh-desktop-pro/server/auth
  */
 
@@ -22,6 +29,7 @@ import type { Store, User } from './store.ts'
 
 const FLOW_TTL_MS = 10 * 60 * 1000
 const CODE_TTL_MS = 2 * 60 * 1000
+const BOOTSTRAP_TTL_MS = 8 * 60 * 60 * 1000
 
 export type FlowKind = 'client' | 'console'
 
@@ -128,9 +136,13 @@ export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof
     const { payload } = await jwtVerify(tokens.id_token, jwks, { issuer: metadata.issuer, audience: config.oidc.clientId })
     if (payload['nonce'] !== current.oidc_nonce) throw new HttpError(400, 'idp_nonce')
     const subject = String(payload.sub ?? '')
-    const email = typeof payload['email'] === 'string' ? payload['email'] : undefined
-    const name = typeof payload['name'] === 'string' ? payload['name'] : email ?? subject
-    return { flow: current, person: await resolvePerson('oidc', subject, email, name) }
+    const claimed = typeof payload['email'] === 'string' ? payload['email'] : undefined
+    const verified = payload['email_verified'] === true || payload['email_verified'] === 'true' || config.oidc.trustEmail
+    const name = typeof payload['name'] === 'string' ? payload['name'] : claimed ?? subject
+    if (claimed !== undefined && !verified) {
+      await store.audit({ actorType: 'system', action: 'login.email_unverified', detail: { provider: 'oidc', email: claimed } })
+    }
+    return { flow: current, person: await resolvePerson('oidc', subject, verified ? claimed : undefined, name) }
   }
 
   async function resolvePerson(provider: string, subject: string, email: string | undefined, name: string): Promise<User> {
@@ -198,27 +210,38 @@ export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof
       const code = form.get('code') ?? ''
       const row = await store.db.get<{ user_id: string; client_redirect: string; code_challenge: string; expires_at: number }>(
         'SELECT user_id, client_redirect, code_challenge, expires_at FROM auth_codes WHERE code_hash = $1 AND tenant_id = $2', [sha256(code), store.tenantId])
-      // Single use, whatever happens next.
-      await store.db.run('DELETE FROM auth_codes WHERE code_hash = $1', [sha256(code)])
-      if (row === undefined || row.expires_at < Date.now()) throw new HttpError(400, 'invalid_grant')
+      // Single use, whatever happens next: only the request that deletes the row may spend it.
+      const spent = await store.db.run('DELETE FROM auth_codes WHERE code_hash = $1', [sha256(code)])
+      if (row === undefined || spent !== 1 || row.expires_at < Date.now()) throw new HttpError(400, 'invalid_grant')
       if (row.client_redirect !== form.get('redirect_uri')) throw new HttpError(400, 'invalid_grant')
       if (!safeEqual(pkceChallenge(form.get('code_verifier') ?? ''), row.code_challenge)) throw new HttpError(400, 'invalid_grant')
       person = await store.user(row.user_id)
       if (person?.status !== 'active') throw new HttpError(400, 'invalid_grant')
       issued = await createSession(person, 'client')
     } else if (grant === 'refresh_token') {
-      const presented = form.get('refresh_token') ?? ''
+      const presented = sha256(form.get('refresh_token') ?? '')
       const session = await store.db.get<{ id: string; user_id: string; expires_at: number; revoked: number }>(
-        "SELECT id, user_id, expires_at, revoked FROM sessions WHERE refresh_hash = $1 AND tenant_id = $2 AND kind = 'client'", [sha256(presented), store.tenantId])
-      if (session === undefined) throw new HttpError(400, 'invalid_grant')
+        "SELECT id, user_id, expires_at, revoked FROM sessions WHERE refresh_hash = $1 AND tenant_id = $2 AND kind = 'client'", [presented, store.tenantId])
+      if (session === undefined) {
+        // A token rotated away is back: it was copied. End the session for both holders.
+        const reused = await store.db.get<{ id: string; user_id: string }>(
+          "SELECT id, user_id FROM sessions WHERE prev_refresh_hash = $1 AND tenant_id = $2 AND kind = 'client' AND revoked = 0", [presented, store.tenantId])
+        if (reused !== undefined) {
+          await revokeSession(reused.id)
+          await store.audit({ actorType: 'system', action: 'session.refresh_reused', actorId: reused.user_id, target: reused.id })
+        }
+        throw new HttpError(400, 'invalid_grant')
+      }
       person = await store.user(session.user_id)
       // Off-boarded: say so explicitly (before "revoked", which off-boarding
       // also sets), so the device removes the organisation's configuration.
       if (person?.status !== 'active') throw new HttpError(403, 'user_disabled')
       if (session.revoked !== 0 || session.expires_at < Date.now()) throw new HttpError(400, 'invalid_grant')
-      // Rotate: the presented refresh token stops working now.
+      // Rotate: the presented refresh token stops working now. The condition
+      // makes the swap the single point where a racing duplicate loses.
       const refreshToken = randomToken(32)
-      await store.db.run('UPDATE sessions SET refresh_hash = $1 WHERE id = $2', [sha256(refreshToken), session.id])
+      const rotated = await store.db.run('UPDATE sessions SET refresh_hash = $1, prev_refresh_hash = $2 WHERE id = $3 AND refresh_hash = $2', [sha256(refreshToken), presented, session.id])
+      if (rotated !== 1) throw new HttpError(400, 'invalid_grant')
       issued = { refreshToken, accessToken: await issueAccess(session.id, session.user_id), expiresIn: config.accessTokenSeconds }
     } else {
       throw new HttpError(400, 'unsupported_grant_type')
@@ -263,7 +286,41 @@ export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof
     if (person.role === 'member') throw new HttpError(403, 'not_an_administrator', 'Only administrators and auditors can open the console.')
     const { refreshToken } = await createSession(person, 'console')
     await store.audit({ actorType: 'admin', actorId: person.id, action: 'console.login' })
+    // An administrator can sign in for real: the bootstrap token is done.
+    if (person.role === 'admin') {
+      const closed = await store.db.run('UPDATE tenants SET bootstrap_closed_at = $1 WHERE id = $2 AND bootstrap_closed_at IS NULL', [Date.now(), store.tenantId])
+      if (closed === 1) await store.audit({ actorType: 'system', action: 'bootstrap.closed', detail: { by: person.id } })
+    }
     return refreshToken
+  }
+
+  async function bootstrapOpen(): Promise<boolean> {
+    if (config.bootstrapToken === undefined) return false
+    const row = await store.db.get<{ bootstrap_closed_at: number | null }>('SELECT bootstrap_closed_at FROM tenants WHERE id = $1', [store.tenantId])
+    return row !== undefined && row.bootstrap_closed_at === null
+  }
+
+  /**
+   * The bootstrap token opens one short console session, held as a hashed
+   * random value like any other; the token itself never goes into a cookie.
+   * It stops working for good once an administrator signs in through the
+   * identity provider.
+   */
+  async function bootstrapSession(token: string): Promise<string> {
+    if (config.bootstrapToken === undefined || !safeEqual(token, config.bootstrapToken)) throw new HttpError(401, 'invalid_token')
+    if (!await bootstrapOpen()) throw new HttpError(403, 'bootstrap_closed', 'An administrator has signed in; use your organisation account.')
+    const value = randomToken(32)
+    const now = Date.now()
+    await store.db.run("INSERT INTO sessions (id, tenant_id, user_id, kind, refresh_hash, created_at, expires_at, revoked) VALUES ($1, $2, 'bootstrap', 'bootstrap', $3, $4, $5, 0)",
+      [newId('ses'), store.tenantId, sha256(value), now, now + BOOTSTRAP_TTL_MS])
+    return value
+  }
+
+  async function bootstrapValid(value: string): Promise<boolean> {
+    if (value === '' || !await bootstrapOpen()) return false
+    const session = await store.db.get<{ expires_at: number; revoked: number }>(
+      "SELECT expires_at, revoked FROM sessions WHERE refresh_hash = $1 AND tenant_id = $2 AND kind = 'bootstrap'", [sha256(value), store.tenantId])
+    return session !== undefined && session.revoked === 0 && session.expires_at >= Date.now()
   }
 
   async function consolePerson(cookie: string | undefined): Promise<User | undefined> {
@@ -276,12 +333,12 @@ export function createAuth(store: Store, config: ServerConfig, fetchImpl: typeof
   }
 
   async function consoleLogout(cookie: string): Promise<void> {
-    await store.db.run("UPDATE sessions SET revoked = 1 WHERE refresh_hash = $1 AND kind = 'console'", [sha256(cookie)])
+    await store.db.run("UPDATE sessions SET revoked = 1 WHERE refresh_hash = $1 AND kind IN ('console', 'bootstrap')", [sha256(cookie)])
   }
 
   return {
     signInMethods, startFlow, flow, oidcRedirect, oidcCallback, devLogin, issueCode, token, logout, revokeUserSessions,
-    authenticate, consoleSession, consolePerson, consoleLogout,
+    authenticate, consoleSession, consolePerson, consoleLogout, bootstrapSession, bootstrapValid,
   }
 }
 

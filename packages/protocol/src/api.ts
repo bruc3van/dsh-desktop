@@ -11,7 +11,8 @@
 
 import { createHash, sign, verify, type KeyObject } from 'node:crypto'
 
-export const PROTOCOL_VERSION = 1
+/** 2: device proofs cover the request body. */
+export const PROTOCOL_VERSION = 2
 
 export const API = {
   authorize: '/v1/auth/authorize',
@@ -111,23 +112,24 @@ export function pkceChallenge(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url')
 }
 
-function proofMessage(method: string, path: string, timestamp: string): Buffer {
-  return Buffer.from(method.toUpperCase() + '\n' + path + '\n' + timestamp, 'utf8')
+/** Method, path, time and a hash of the exact body bytes: a proof cannot be moved to another request. */
+function proofMessage(method: string, path: string, timestamp: string, body: string): Buffer {
+  return Buffer.from(method.toUpperCase() + '\n' + path + '\n' + timestamp + '\n' + createHash('sha256').update(body, 'utf8').digest('hex'), 'utf8')
 }
 
-/** `<timestamp>.<base64 signature>` for one request. */
-export function createDeviceProof(privateKey: KeyObject, method: string, path: string, now = Date.now()): string {
+/** `<timestamp>.<base64 signature>` for one request; `body` is the exact text sent ('' for none). */
+export function createDeviceProof(privateKey: KeyObject, method: string, path: string, now = Date.now(), body = ''): string {
   const timestamp = String(now)
-  return timestamp + '.' + sign(null, proofMessage(method, path, timestamp), privateKey).toString('base64')
+  return timestamp + '.' + sign(null, proofMessage(method, path, timestamp, body), privateKey).toString('base64')
 }
 
-export function checkDeviceProof(publicKey: KeyObject, proof: string, method: string, path: string, now = Date.now()): boolean {
+export function checkDeviceProof(publicKey: KeyObject, proof: string, method: string, path: string, now = Date.now(), body = ''): boolean {
   const match = /^(\d{10,16})\.([A-Za-z0-9+/]+={0,2})$/.exec(proof)
   if (match === null) return false
   const [, timestamp = '', signature = ''] = match
   if (Math.abs(now - Number(timestamp)) > DEVICE_PROOF_WINDOW_MS) return false
   try {
-    return verify(null, proofMessage(method, path, timestamp), publicKey, Buffer.from(signature, 'base64'))
+    return verify(null, proofMessage(method, path, timestamp, body), publicKey, Buffer.from(signature, 'base64'))
   } catch {
     return false
   }
