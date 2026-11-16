@@ -1,4 +1,5 @@
 diff --git a/lib/runner.js b/lib/runner.js
+index 9c54621bc7c4608e710aabf878a86ee674f63a7c..61da2aa6c7ed83fa221a43d17abb2399a6937f1c 100644
 --- a/lib/runner.js
 +++ b/lib/runner.js
 @@ -1,6 +1,7 @@
@@ -9,21 +10,27 @@ diff --git a/lib/runner.js b/lib/runner.js
  import { SUBPROCESS_CONTROL_ENV, SUBPROCESS_CONTROL_FD } from "@deepseek-ai/dsh-subprocess/control";
  //#region lib/types/runner.js
  /**
-@@ -119,7 +120,12 @@ async function main() {
+@@ -119,7 +120,17 @@ async function main() {
  	if (parsed.mode === "workspace-write" && parsed.writeSid === void 0 !== (parsed.tempWriteSid === void 0)) fail("workspace-write requires --write-sid and --temp-write-sid together");
  	if (parsed.mode === "workspace-write") assertTempRootOutsideWorkspace(parsed.workspace, parsed.temp);
  	const api = await win32();
 -	if (api.setConsoleCtrlHandler(null, 1) === 0) fail(`SetConsoleCtrlHandler failed (Win32 ${api.getLastError()})`);
-+	// Electron Node mode belongs to this bootstrap, never the confined command.
++	// Electron Node mode belongs to this bootstrap, never an ordinary confined
++	// command. A confined command that IS this executable (the PTC worker) is a
++	// Node program and needs the mode back, or it boots a second GUI instance
++	// that exits at once (desktop #31).
 +	if (process.versions.electron) {
-+		delete process.env.ELECTRON_RUN_AS_NODE;
-+		if (api.setEnvironmentVariableW("ELECTRON_RUN_AS_NODE", null) === 0) fail(`SetEnvironmentVariableW ELECTRON_RUN_AS_NODE failed (Win32 ${api.getLastError()})`);
++		const selfTarget = parsed.command.toLowerCase() === process.execPath.toLowerCase();
++		for (const key of Object.keys(process.env)) if (key.toUpperCase() === "ELECTRON_RUN_AS_NODE") delete process.env[key];
++		if (selfTarget) process.env.ELECTRON_RUN_AS_NODE = "1";
++		if (api.setEnvironmentVariableW("ELECTRON_RUN_AS_NODE", selfTarget ? "1" : null) === 0) fail(`SetEnvironmentVariableW ELECTRON_RUN_AS_NODE failed (Win32 ${api.getLastError()})`);
 +	}
 +	prepareRunnerConsole(api);
  	let ownedTempDir;
  	let sandbox;
  	let initialized = false;
 diff --git a/lib/types-DXWX0PXB.js b/lib/types-DXWX0PXB.js
+index 6783e8a03815d697a47902b7db3a783302407cc5..420368a114e2fab220821c16a8d1c0e1f44cbc81 100644
 --- a/lib/types-DXWX0PXB.js
 +++ b/lib/types-DXWX0PXB.js
 @@ -135,6 +135,7 @@ let cached;
@@ -47,6 +54,7 @@ diff --git a/lib/types-DXWX0PXB.js b/lib/types-DXWX0PXB.js
  			"uint32",
 diff --git a/lib/types-desktop-console.js b/lib/types-desktop-console.js
 new file mode 100644
+index 0000000000000000000000000000000000000000..d2008cb9ff10674158579d8ff5e953d68bba38d8
 --- /dev/null
 +++ b/lib/types-desktop-console.js
 @@ -0,0 +1,31 @@
