@@ -88,8 +88,15 @@ try {
 
   const imported = await admin('POST', '/admin/api/users/import', 'name,email,department,role\nAlice,alice@acme.example,Finance/Payables,member\nBob,bob@acme.example,Sales,member\nAudrey,audit@acme.example,,auditor\nBroken,not-an-email,,member\n')
   assert.deepEqual([imported.body.created, imported.body.updated, imported.body.errors.length], [3, 0, 1])
+  // Adding one person by hand: the e-mail is how sign-in finds them, so a
+  // malformed or already used one is refused with a reason the console can show.
+  const refused = async (body) => { const answer = await admin('POST', '/admin/api/users', body); return [answer.status, answer.body.error] }
+  assert.deepEqual(await refused({ name: '', email: 'x@acme.example' }), [400, 'invalid_name'])
+  assert.deepEqual(await refused({ name: 'Typo', email: 'not-an-email' }), [400, 'invalid_email'])
+  assert.deepEqual(await refused({ name: 'Second Alice', email: 'ALICE@acme.example' }), [409, 'email_taken'])
   const users = (await admin('GET', '/admin/api/users')).body
-  const alice = users.find(user => user.email === 'alice@acme.example')
+  assert.equal(users.length, 3, 'refused members are not created')
+  const alice =users.find(user => user.email === 'alice@acme.example')
   const departments = (await admin('GET', '/admin/api/departments')).body
   const finance = departments.find(dep => dep.name === 'Finance')
   assert.equal(departments.find(dep => dep.name === 'Payables').parent_id, finance.id, 'department paths become a tree')

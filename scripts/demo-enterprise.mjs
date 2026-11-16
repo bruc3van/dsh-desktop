@@ -110,16 +110,18 @@ const financeProfile = await store.createProfile({ name: '财务部', descriptio
 await store.bind({ profileId: company.id, targetType: 'tenant', targetId: '' })
 await store.bind({ profileId: financeProfile.id, targetType: 'department', targetId: finance ?? '' })
 
-// Demo devices in every rollout state, so the console has something to show
-// before anyone signs in. Real devices appear beside them once people do.
-await seedDemoDevices(store)
-
 // The model catalog, a month of gateway traffic and a few limits, so the
 // usage and limits pages have something to show.
 await seedDemoUsage(server, gatewayUrl)
 
 // A reviewed plugin catalog and a skill library, for the market pages and the client's Discover page.
 await seedDemoMarket(server, gatewayUrl)
+
+// Demo devices in every rollout state, so the console has something to show
+// before anyone signs in. Real devices appear beside them once people do.
+// Seeded last: everything above moves the configuration revision, and devices
+// seeded before it would all look out of date.
+await seedDemoDevices(store)
 
 // What IT would install on the machine.
 const managedDir = join(home, 'managed')

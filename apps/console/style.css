@@ -140,6 +140,10 @@ table.data tr.clickable { cursor: pointer; }
 table.data tr.clickable:hover td { background: var(--hover); }
 table.data td.wrap { white-space: normal; min-width: 260px; }
 table.data td.right, table.data th.right { text-align: right; }
+/* Row actions stay in view when a wide table scrolls sideways. */
+table.data td.right:last-child, table.data th.right:last-child { position: sticky; right: 0; }
+table.data td.right:last-child { background: var(--surface); box-shadow: -10px 0 10px -10px rgba(18, 24, 38, .14); }
+table.data tr.clickable:hover td.right:last-child { background: var(--hover); }
 .cell-title { font-weight: 500; color: var(--text); }
 .cell-sub { font-size: 12.5px; color: var(--text-2); }
 .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
@@ -270,7 +274,11 @@ dialog.drawer .dialog-body { max-height: calc(100vh - 128px); }
 }
 
 /* ---------- toast & save bar ---------- */
-.toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 8px; z-index: 50; }
+/* Top centre: clear of dialog and drawer buttons, which sit at the bottom right. */
+.toasts { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; justify-items: center; z-index: 50; }
+/* Shown as a popover so it stays above modal dialogs; undo the popover defaults. */
+.toasts[popover] { inset: 16px auto auto 50%; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; overflow: visible; }
+.toasts[popover]:not(:popover-open) { display: none; }
 .toast { display: flex; align-items: flex-start; gap: 10px; min-width: 280px; max-width: 420px; padding: 12px 14px; background: var(--text); color: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-pop); font-size: 13.5px; }
 .toast svg { margin-top: 2px; }
 .toast.bad { background: var(--bad); color: #fff; }

@@ -66,7 +66,7 @@ export async function render(ctx, section = 'approved') {
         { label: t('插件'), cell: plugin => pluginTitle(plugin, plugin.featured && badge(t('推荐'), 'accent'), plugin.category && badge(loc(plugin.category.title), 'plain')) },
         { label: t('版本'), cell: plugin => h('div', {}, h('div', { class: 'mono' }, plugin.version?.version ?? '—'), h('div', { class: 'cell-sub' }, sourceText(plugin.version))) },
         { label: t('来源'), cell: plugin => plugin.sourceId === null ? h('span', { class: 'muted' }, t('手动添加')) : sourceName.get(plugin.sourceId) ?? h('span', { class: 'muted' }, t('来源已删除')) },
-        { label: t('审核'), cell: plugin => h('div', {}, plugin.note ? h('div', { class: 'note-text' }, plugin.note) : h('div', { class: 'faint' }, t('没有备注')), h('div', { class: 'cell-sub' }, reviewer(plugin.reviewedBy), ' · ', timeCell(plugin.reviewedAt))) },
+        { label: t('审核'), className: 'wrap', cell: plugin => h('div', {}, plugin.note ? h('div', { class: 'note-text' }, plugin.note) : h('div', { class: 'faint' }, t('没有备注')), h('div', { class: 'cell-sub' }, reviewer(plugin.reviewedBy), ' · ', timeCell(plugin.reviewedAt))) },
         { label: '', className: 'right', cell: plugin => writable && h('div', { class: 'row-actions' },
           button(plugin.featured ? t('取消推荐') : t('推荐'), { kind: 'small ghost', onclick: (event) => feature(plugin, event.currentTarget) }),
           button(t('换版本'), { kind: 'small ghost', onclick: () => changeVersion(plugin) }),

@@ -48,6 +48,22 @@ export interface App {
   close(): Promise<void>
 }
 
+/** The same shape the CSV import accepts: one @, no spaces. Intranet domains need no dot. */
+const EMAIL = /^[^@\s]+@[^@\s]+$/
+
+/** Chinese wording for the reasons a browser sign-in step can stop; other codes keep their own message. */
+const SIGN_IN_ERRORS_ZH: Record<string, string> = {
+  not_a_member: '你的账号还没有开通 DSH Desktop Pro，请联系公司 IT 管理员添加。',
+  user_disabled: '你的 DSH Desktop Pro 账号已被停用，请联系公司 IT 管理员。',
+  not_an_administrator: '只有管理员和审计员可以打开控制台。',
+  login_expired: '这个登录链接已过期，请回到 DSH Desktop Pro 重新点击登录。',
+  login_state: '登录步骤不完整，请回到 DSH Desktop Pro 重新点击登录。',
+  idp_error: '公司登录系统拒绝了这次登录，请重试，或联系公司 IT 管理员。',
+  idp_token: '公司登录系统没有返回登录凭据，请稍后重试，或联系公司 IT 管理员。',
+  idp_nonce: '登录校验没有通过，请回到 DSH Desktop Pro 重新点击登录。',
+  oidc_disabled: '这台服务端没有配置公司登录，请联系公司 IT 管理员。',
+}
+
 function str(value: unknown, field: string, max = 200): string {
   if (typeof value !== 'string' || value.trim() === '' || value.length > max) throw new HttpError(400, 'invalid_' + field)
   return value.trim()
@@ -291,7 +307,12 @@ export async function createApp(options: AppOptions): Promise<App> {
     const me = await admin(ctx)
     const body = await readJson(ctx.req) as { name?: unknown; email?: unknown; role?: unknown; departmentId?: unknown }
     const role = (ROLES as readonly unknown[]).includes(body.role) ? body.role as Role : 'member'
-    const person = await store.createUser({ name: str(body.name, 'name'), email: typeof body.email === 'string' && body.email !== '' ? body.email : null, role, departmentId: typeof body.departmentId === 'string' ? body.departmentId : null })
+    const name = str(body.name, 'name')
+    // The e-mail is how sign-in finds this person: a mistyped one locks them out silently.
+    const email = typeof body.email === 'string' && body.email.trim() !== '' ? body.email.trim().toLowerCase() : null
+    if (email !== null && (email.length > 254 || !EMAIL.test(email))) throw new HttpError(400, 'invalid_email')
+    if (email !== null && await store.userByEmail(email) !== undefined) throw new HttpError(409, 'email_taken')
+    const person = await store.createUser({ name, email, role, departmentId: typeof body.departmentId === 'string' && body.departmentId !== '' ? body.departmentId : null })
     await store.audit({ actorType: 'admin', actorId: me.id, action: 'user.created', target: person.id, detail: { role } })
     sendJson(ctx.res, 200, person)
   })
@@ -330,7 +351,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       const name = row[column('name')]?.trim() ?? ''
       const email = row[column('email')]?.trim().toLowerCase() ?? ''
       const role = (row[column('role')]?.trim() || 'member') as Role
-      if (name === '' || !/^[^@\s]+@[^@\s]+$/.test(email) || !ROLES.includes(role)) { errors.push('row ' + String(index + 2) + ': invalid name, email or role'); continue }
+      if (name === '' || !EMAIL.test(email) || !ROLES.includes(role)) { errors.push('row ' + String(index + 2) + ': invalid name, email or role'); continue }
       const departmentId = column('department') >= 0 && (row[column('department')]?.trim() ?? '') !== '' ? await store.departmentByPath(row[column('department')] ?? '') : null
       const existing = await store.userByEmail(email)
       if (existing === undefined) { await store.createUser({ name, email, role, departmentId }); created += 1 }
@@ -757,7 +778,8 @@ export async function createApp(options: AppOptions): Promise<App> {
           || (method === 'POST' && url.pathname === '/v1/auth/dev')
         if (browserStep) {
           const lang = pageLanguage(req.headers['accept-language'])
-          sendHtml(res, error.status, messagePage(lang, lang === 'zh' ? '登录没有完成' : 'Sign-in did not complete', error.message, host()))
+          const reason = lang === 'zh' ? SIGN_IN_ERRORS_ZH[error.code] ?? error.message : error.message
+          sendHtml(res, error.status, messagePage(lang, lang === 'zh' ? '登录没有完成' : 'Sign-in did not complete', reason, host()))
         }
         else sendJson(res, error.status, { error: error.code, message: error.message })
         return

@@ -98,8 +98,15 @@ export function callout(tone, text) {
   return h('div', { class: 'callout ' + tone }, icon(tone === 'bad' || tone === 'warn' ? 'alert' : tone === 'ok' ? 'check' : 'info'), h('div', {}, text))
 }
 
+let fieldSerial = 0
 export function field(label, control, help, error) {
-  return h('div', { class: 'field' }, h('label', {}, label), control, help && h('div', { class: 'help' }, help), error && h('div', { class: 'error' }, error))
+  // Tie the label to its control, so clicking the label focuses it and screen readers name it.
+  let target = null
+  if (control instanceof HTMLElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(control.tagName)) {
+    if (control.id === '') control.id = 'field-' + String(fieldSerial += 1)
+    target = control.id
+  }
+  return h('div', { class: 'field' }, h('label', { for: target }, label), control, help && h('div', { class: 'help' }, help), error && h('div', { class: 'error' }, error))
 }
 
 export function tabs(items, active) {
@@ -146,10 +153,26 @@ export const timeCell = (ms) => h('span', { title: absolute(ms) }, relative(ms))
 // ---------- toast ----------
 let toastHost
 export function toast(message, tone = '') {
-  toastHost ??= document.body.appendChild(h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' }))
+  toastHost ??= document.body.appendChild(h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite', popover: 'manual' }))
   const node = h('div', { class: 'toast ' + tone }, icon(tone === 'bad' ? 'alert' : 'check'), h('div', {}, message))
   toastHost.append(node)
-  setTimeout(() => node.remove(), tone === 'bad' ? 8000 : 4000)
+  raiseToasts()
+  setTimeout(() => {
+    node.remove()
+    if (toastHost.childElementCount === 0 && toastHost.matches?.(':popover-open')) toastHost.hidePopover()
+  }, tone === 'bad' ? 8000 : 4000)
+}
+
+/**
+ * A modal dialog sits in the browser's top layer, above every z-index, so a
+ * toast left in the page was hidden behind the dialog that caused it. Showing
+ * the host as a popover puts it in the top layer too; showing it again moves
+ * it above a dialog opened since.
+ */
+function raiseToasts() {
+  if (toastHost === undefined || toastHost.childElementCount === 0 || typeof toastHost.showPopover !== 'function') return
+  if (toastHost.matches(':popover-open')) toastHost.hidePopover()
+  toastHost.showPopover()
 }
 
 // ---------- dialogs ----------
@@ -178,6 +201,9 @@ export function openDialog({ title, wide = false, drawer = false, build }) {
     dialog.addEventListener('click', (event) => { if (event.target === dialog) close(undefined) })
     document.body.append(dialog)
     dialog.showModal()
+    // Start in the first field, not on the close button; keep toasts above this dialog.
+    dialog.querySelector('.dialog-body input:not([type=hidden]):not([type=checkbox]):not([type=radio]), .dialog-body textarea')?.focus()
+    raiseToasts()
   })
 }
 
