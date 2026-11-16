@@ -228,8 +228,13 @@ writeStore({ a: HOME + '/Documents/app' })
   writeStore({ a: HOME + '/code/app' })
   await h.controller.onWebUiLoaded()
   equal('no protected workspace, no hint', h.asked.length, 0)
-  writeStore({ a: HOME + '/code/app', b: HOME + '/Downloads/site' })
-  for (let i = 0; i < 40 && h.asked.length === 0; i++) await settle(50)
+  // A directory watch on macOS starts delivering a moment after it is created,
+  // so a change made right behind onWebUiLoaded() can go unseen. Registering
+  // again is what a person adding a workspace later amounts to.
+  for (let i = 0; i < 100 && h.asked.length === 0; i++) {
+    if (i % 10 === 0) writeStore({ a: HOME + '/code/app', b: HOME + '/Downloads/site' })
+    await settle(50)
+  }
   equal('registering a workspace in a refused folder raises the hint', h.asked.length, 1)
   check('the hint names the new workspace', h.asked[0]?.detail.includes('「site」') === true, h.asked[0]?.detail)
   h.controller.dispose()
