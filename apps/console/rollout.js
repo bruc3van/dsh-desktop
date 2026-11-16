@@ -1,19 +1,19 @@
-// The rollout bar: how far the current configuration revision has reached.
+// The rollout bar: how many devices hold what their person should have now.
 import { t, tf } from './i18n.js'
 import { DEVICE_STATE, deviceState } from './api.js'
 import { h } from './ui.js'
 
 const ORDER = ['current', 'pending', 'attention', 'offline']
 
-export function tally(devices, revision) {
+export function tally(devices) {
   const counts = { current: 0, pending: 0, attention: 0, offline: 0, revoked: 0, personal: 0 }
-  for (const device of devices) counts[deviceState(device, revision)] += 1
+  for (const device of devices) counts[deviceState(device)] += 1
   return counts
 }
 
 /** `compact` drops the headline figure, for use inside other pages. */
 export function rolloutPanel(devices, revision, { compact = false, caption } = {}) {
-  const counts = tally(devices, revision)
+  const counts = tally(devices)
   const total = ORDER.reduce((sum, state) => sum + counts[state], 0)
   const percent = total === 0 ? 0 : Math.round(counts.current / total * 100)
   const bar = h('div', { class: 'rollout-bar', role: 'img', 'aria-label': tf('已生效 {n} 台，共 {total} 台', { n: counts.current, total }) },
@@ -33,7 +33,7 @@ export function rolloutPanel(devices, revision, { compact = false, caption } = {
   return h('div', { class: 'rollout' + (compact ? ' compact' : '') },
     !compact && h('div', { class: 'rollout-top' },
       h('div', { class: 'rollout-figure' }, percent, h('small', {}, '%')),
-      h('div', { class: 'rollout-caption' }, caption ?? tf('的设备已用上当前配置（{n} / {total} 台）', { n: counts.current, total })),
+      h('div', { class: 'rollout-caption' }, caption ?? tf('的设备已用上最新配置（{n} / {total} 台）', { n: counts.current, total })),
       h('div', { class: 'rollout-revision' }, h('div', { class: 'faint' }, t('当前配置版本')), h('b', {}, 'r' + revision))),
     compact && h('div', { class: 'muted' }, caption ?? tf('已生效 {n} / {total} 台', { n: counts.current, total })),
     bar, legend)

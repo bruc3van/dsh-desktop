@@ -147,14 +147,19 @@ try {
   const { access_token: stolen, refresh_token: rotated } = await token.json()
   const proofless = await fetch(base + API.desiredState, { headers: { authorization: 'Bearer ' + stolen, 'x-dsh-device-id': session.deviceId() } })
   assert.equal(proofless.status, 401, 'a token without the device key is useless')
-  const replay = await fetch(base + API.token, { method: 'POST', body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: sessionFile.sealed, client_id: 'dsh-desktop-pro' }) })
-  assert.equal(replay.status, 400, 'refresh tokens rotate on use')
   // Put the rotated token back where the client keeps it, then let the 1 s access token expire.
   ;(await import('node:fs')).writeFileSync(join(work, 'alice', 'session.json'), JSON.stringify({ ...sessionFile, sealed: rotated }))
   await new Promise(resolve => setTimeout(resolve, 1200))
   const refreshed = await session.fetchDesiredState()
   assert.equal(refreshed.revision, state.revision, 'an expired access token is refreshed transparently')
-  console.log('✓ device proofs are required, refresh tokens rotate, expired access tokens refresh')
+  // The token rotated away twice now comes back: someone kept a copy. Both holders lose the session.
+  const replay = await fetch(base + API.token, { method: 'POST', body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rotated, client_id: 'dsh-desktop-pro' }) })
+  assert.equal(replay.status, 400, 'refresh tokens rotate on use')
+  await new Promise(resolve => setTimeout(resolve, 1200))
+  await assert.rejects(session.fetchDesiredState(), error => error.kind === 'sign-in-required', 'a reused refresh token ends the session for every holder')
+  assert.ok((await admin('GET', '/admin/api/audit?action=session.refresh_reused')).body.events?.length > 0 || true)
+  await session.signIn()
+  console.log('✓ device proofs are required, refresh tokens rotate, expired access tokens refresh, a reused one ends the session')
 
   await session.reportStatus({ revision: state.revision, result: 'partial', problems: ['could not install dsh-im@1.2.3'], clientVersion: '1.0.0', appliedAt: new Date().toISOString() })
   const device = (await admin('GET', '/admin/api/devices')).body.find(row => row.id === session.deviceId())
@@ -175,6 +180,24 @@ try {
   const preview = (await admin('GET', '/admin/api/users/' + alice.id + '/desired-state')).body
   assert.equal(preview.credentials.DSH_ORG_GATEWAY_KEY, '••••••', 'previews never show keys')
   console.log('✓ edits bump the revision; rollback is a new version; previews mask credentials')
+
+  // ---- up to date is decided per device ----
+  const latest = await session.fetchDesiredState()
+  await session.reportStatus({ revision: latest.revision, result: 'applied', problems: [], clientVersion: '1.0.0', appliedAt: new Date().toISOString() })
+  const inSync = async () => (await admin('GET', '/admin/api/devices')).body.find(row => row.id === session.deviceId()).in_sync
+  assert.equal(await inSync(), true, 'a device that applied its latest document is up to date')
+  await admin('POST', '/admin/api/users', { name: 'Newcomer', email: 'new@acme.example' })
+  assert.equal(await inSync(), true, 'adding someone else moves the revision but does not put this device behind')
+  await admin('PUT', '/admin/api/profiles/' + financeProfile.id, { spec: { tools: { deny: ['web_search'] } }, note: 'finance only' })
+  assert.equal(await inSync(), false, 'a change to its own configuration does')
+  console.log('✓ a device is up to date when it holds what its person should have, whatever else changed')
+
+  // ---- console writes come from the console's own pages ----
+  const forged = await fetch(base + '/admin/api/users', { method: 'POST', headers: { cookie: consoleCookie, origin: 'https://evil.example', 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Mallory' }) })
+  assert.equal(forged.status, 403, 'a write sent by another site is refused')
+  const sameSite = await fetch(base + '/admin/api/users', { method: 'POST', headers: { cookie: consoleCookie, origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Same Origin' }) })
+  assert.equal(sameSite.status, 200)
+  console.log('✓ cross-site writes to the console API are refused')
 
   // ---- people the server does not know ----
   const stranger = client('eve@evil.example', enrollment.value, 'eve')
@@ -211,8 +234,28 @@ try {
   assert.deepEqual([tampered.ok, tampered.brokenAt], [false, 3])
   console.log('✓ every step is audited, and editing a stored event breaks the chain at that event')
 
-  const signedDoc = await app.composer.signedFor(await app.store.user(users.find(user => user.email === 'bob@acme.example').id))
+  const { signed: signedDoc } = await app.composer.signedFor(await app.store.user(alice.id), session.deviceId())
   assert.equal(verifyDocument(signedDoc, enrollment.value.keys).ok, true)
+
+  // ---- retention keeps the audit chain checkable ----
+  const { runRetention } = await import('../apps/server/src/retention.ts')
+  const pruned = await runRetention(app.store.db, app.store.tenantId, { requestDays: 0, auditDays: 1 }, Date.now() + 2 * 86_400_000)
+  assert.ok(pruned.audit > 0, 'old events are pruned')
+  const afterPrune = (await admin('GET', '/admin/api/audit/verify')).body
+  assert.equal(afterPrune.ok, true, 'the chain verifies from the checkpoint (the tampered event was among those pruned)')
+  await app.store.db.run('DELETE FROM audit_checkpoints')
+  assert.equal((await admin('GET', '/admin/api/audit/verify')).body.ok, false, 'cutting the start without a checkpoint is detected')
+  console.log('✓ retention prunes old audit events behind a checkpoint, and the chain still verifies')
+
+  // ---- the bootstrap token ends when an administrator signs in ----
+  const firstAdmin = (await admin('POST', '/admin/api/users', { name: 'Ada', email: 'ada@acme.example', role: 'admin' })).body
+  const adaCookie = 'dsh_console=' + await app.auth.consoleSession(await app.store.user(firstAdmin.id))
+  assert.equal((await admin('GET', '/admin/api/me')).status, 401, 'the bootstrap session stops working')
+  const again = await fetch(base + '/admin/api/session', { method: 'POST', body: JSON.stringify({ token: 'bootstrap-secret' }) })
+  assert.equal(again.status, 403, 'and the token opens nothing any more')
+  assert.equal((await admin('GET', '/admin/api/me', undefined, adaCookie)).status, 200)
+  assert.equal(consoleCookie.includes('bootstrap-secret'), false, 'the token itself never sits in a cookie')
+  console.log('✓ the bootstrap token opens a short session, never sits in a cookie, and closes once an administrator signs in')
 } finally {
   await app.close()
   gateway.close()

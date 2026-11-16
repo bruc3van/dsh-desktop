@@ -59,13 +59,17 @@ function describeError(code, status) {
 
 export const ROLE_LABEL = { member: lang === 'en' ? 'Member' : '成员', admin: t('管理员'), auditor: t('审计员'), bootstrap: t('初始管理员') }
 
-/** One device's place in the rollout of the current revision. */
-export function deviceState(device, revision) {
+/**
+ * One device's place in the rollout. "Up to date" is decided by the server per
+ * device: it holds what its person should have now. A change for someone else
+ * does not put this device behind.
+ */
+export function deviceState(device) {
   if (device.status !== 'active') return 'revoked'
   if (device.mode === 'personal') return 'personal'
   if (device.applied_result === 'failed' || device.applied_result === 'partial') return 'attention'
   if (Date.now() - device.last_seen_at > 3 * 86_400_000) return 'offline'
-  if (device.applied_revision === revision && device.applied_result === 'applied') return 'current'
+  if (device.in_sync === true && device.applied_result === 'applied') return 'current'
   return 'pending'
 }
 

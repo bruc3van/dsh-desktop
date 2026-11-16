@@ -132,6 +132,8 @@ export interface Quota {
 
 export interface RequestRecord {
   userId: string
+  /** The device whose key sent the request. */
+  deviceId?: string | null
   departmentId: string | null
   startedAt: number
   endpoint: string
@@ -306,12 +308,12 @@ export function createMetering(db: Db, tenantId: string, sealer: Sealer, config:
 
   async function record(entry: RequestRecord): Promise<void> {
     await db.run('INSERT INTO gateway_requests (id, tenant_id, user_id, department_id, started_at, day, endpoint, model, served_model, upstream_id, fallback_from, client, stream, '
-      + 'status, http_status, error, stop_reason, input_tokens, cache_read_tokens, output_tokens, reasoning_tokens, cost_micros, ttft_ms, duration_ms) '
-      + 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)', [
+      + 'status, http_status, error, stop_reason, input_tokens, cache_read_tokens, output_tokens, reasoning_tokens, cost_micros, ttft_ms, duration_ms, device_id) '
+      + 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)', [
       newId('req'), tenantId, entry.userId, entry.departmentId, entry.startedAt, localDay(entry.startedAt, timeZone), entry.endpoint, entry.model,
       entry.servedModel ?? null, entry.upstreamId ?? null, entry.fallbackFrom ?? null, entry.client ?? null, entry.stream ? 1 : 0,
       entry.status, entry.httpStatus, entry.error ?? null, entry.stopReason ?? null,
-      entry.tokens.input, entry.tokens.cacheRead, entry.tokens.output, entry.tokens.reasoning, entry.costMicros, entry.ttftMs ?? null, entry.durationMs,
+      entry.tokens.input, entry.tokens.cacheRead, entry.tokens.output, entry.tokens.reasoning, entry.costMicros, entry.ttftMs ?? null, entry.durationMs, entry.deviceId ?? null,
     ])
   }
 

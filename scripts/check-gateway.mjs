@@ -211,8 +211,19 @@ try {
   await admin('DELETE', '/admin/api/quotas/' + budget.id)
   console.log('✓ department limits include sub-departments')
 
+  // Each device has its own key: revoking one leaves the person's others working.
+  const laptop = new ServerSession({ enrollment, home: join(work, 'alice-laptop'), secrets: PLAIN_CODEC, openBrowser: browserFor('alice@acme.example'), clientVersion: '1.0.0', signInTimeoutMs: 3000 })
+  await laptop.signIn()
+  const laptopKey = (await laptop.fetchDesiredState()).credentials.DSH_ORG_GATEWAY_KEY
+  assert.notEqual(laptopKey, key, 'a second device gets its own key')
+  await admin('POST', '/admin/api/devices/' + session.deviceId() + '/revoke')
+  assert.equal((await llm(key, 'chat/completions', { model: 'deepseek-chat', messages: [] })).status, 401, 'a revoked device key stops working at once')
+  assert.equal((await llm(laptopKey, 'chat/completions', { model: 'deepseek-chat', messages: [] })).status, 200, 'the other device of the person keeps working')
+  console.log('✓ gateway keys belong to a device: revoking one ends only its key')
+
   const alice = (await admin('GET', '/admin/api/users')).body.find(user => user.email === 'alice@acme.example')
   await admin('PATCH', '/admin/api/users/' + alice.id, { status: 'disabled' })
+  assert.equal((await llm(laptopKey, 'chat/completions', { model: 'deepseek-chat', messages: [] })).status, 401)
   assert.equal((await llm(key, 'chat/completions', { model: 'deepseek-chat', messages: [] })).status, 401, 'a disabled person\'s key stops working at once')
   assert.equal((await app.store.db.all('SELECT key_hash FROM proxy_keys')).length, 0, 'and is deleted')
   console.log('✓ disabling a person revokes their gateway key immediately')

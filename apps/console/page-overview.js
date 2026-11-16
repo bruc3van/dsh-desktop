@@ -11,7 +11,7 @@ export async function render(ctx) {
   const usage = ctx.me.gateway === 'direct' ? await api('GET', '/admin/api/usage/summary?' + new URLSearchParams({ from: shiftDay(ctx.me.today, -29), to: ctx.me.today })).catch(() => null) : null
   const revision = ctx.me.organization.revision
   const active = devices.filter(device => device.status === 'active')
-  const attention = active.filter(device => deviceState(device, revision) === 'attention')
+  const attention = active.filter(device => deviceState(device) === 'attention')
   const dayAgo = Date.now() - 86_400_000
   const people = new Map(users.map(user => [user.id, user.name]))
   const changes = events.filter(event => event.actorType === 'admin').slice(0, 8)

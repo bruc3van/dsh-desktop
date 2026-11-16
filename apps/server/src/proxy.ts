@@ -2,7 +2,8 @@
  * The built-in model gateway (`DSH_GATEWAY=direct`): an OpenAI-compatible
  * endpoint at `<public URL>/llm/v1`. For each request it
  *
- * 1. checks the person's own key;
+ * 1. checks the key of the person's device — a revoked device or a disabled
+ *    person is refused at once;
  * 2. allows only the models their profiles route through the gateway;
  * 3. checks the limits that cover them — a spent limit refuses the request,
  *    or sends it to a cheaper model when the limit says so;
@@ -12,6 +13,11 @@
  * 5. forwards it with the organisation's key and passes the reply through,
  *    streamed or not;
  * 6. records the request: tokens, cost, time to first token, how it ended.
+ *
+ * Limits are only as good as the record they are checked against, so the
+ * gateway stops forwarding while requests cannot be recorded. Each person may
+ * run a bounded number of requests at once, and a slow reader slows the
+ * upstream read instead of filling this process's memory.
  * @module @dsh-desktop-pro/server/proxy
  */
 
@@ -49,13 +55,33 @@ export function installProxy(router: Router, store: Store, config: ServerConfig,
   const gateway = config.gateway
   if (gateway.kind !== 'direct') return
 
-  async function person(ctx: Context): Promise<User | undefined> {
+  /** The person behind a device key; nobody when the key, the device or the person is no longer good. */
+  async function caller(ctx: Context): Promise<{ person: User; deviceId: string } | undefined> {
     const key = bearer(ctx.req) ?? String(ctx.req.headers['x-api-key'] ?? '')
     if (!key.startsWith('sk-dsh-')) return undefined
-    const row = await store.db.get<{ user_id: string }>('SELECT user_id FROM proxy_keys WHERE key_hash = $1 AND tenant_id = $2', [sha256(key), store.tenantId])
-    if (row === undefined) return undefined
+    const row = await store.db.get<{ user_id: string; device_id: string | null; device_status: string | null }>(
+      'SELECT k.user_id AS user_id, k.device_id AS device_id, d.status AS device_status FROM proxy_keys k LEFT JOIN devices d ON d.id = k.device_id AND d.tenant_id = k.tenant_id WHERE k.key_hash = $1 AND k.tenant_id = $2',
+      [sha256(key), store.tenantId])
+    if (row === undefined || row.device_id === null || row.device_status !== 'active') return undefined
     const found = await store.user(row.user_id)
-    return found?.status === 'active' ? found : undefined
+    return found?.status === 'active' ? { person: found, deviceId: row.device_id } : undefined
+  }
+
+  /** Requests each person has in flight. */
+  const inFlight = new Map<string, number>()
+  /** Requests in a row whose record could not be written. */
+  let unrecorded = 0
+  const UNRECORDED_LIMIT = 3
+  const recorded = async (entry: RequestRecord): Promise<boolean> => {
+    try {
+      await metering.record(entry)
+      unrecorded = 0
+      return true
+    } catch (error) {
+      unrecorded += 1
+      console.error('[gateway] could not record a request (' + String(unrecorded) + ' in a row)', error)
+      return false
+    }
   }
 
   /** Models the person's profiles route through this gateway, read at request time. */
@@ -76,7 +102,7 @@ export function installProxy(router: Router, store: Store, config: ServerConfig,
   }
 
   router.get(PROXY_PREFIX + '/models', async (ctx) => {
-    const found = await person(ctx)
+    const found = (await caller(ctx))?.person
     if (found === undefined) { openAiError(ctx.res, 401, 'invalid_api_key', 'Invalid or revoked DSH gateway key'); return }
     const catalog = new Map((await metering.models()).map(model => [model.id, model]))
     const models = (await allowedModels(found)).filter(id => catalog.get(id)?.enabled !== false)
@@ -87,19 +113,44 @@ export function installProxy(router: Router, store: Store, config: ServerConfig,
   for (const path of FORWARDED) {
     router.post(PROXY_PREFIX + '/' + path, async (ctx) => {
       const startedAt = Date.now()
-      const found = await person(ctx)
-      if (found === undefined) { openAiError(ctx.res, 401, 'invalid_api_key', 'Invalid or revoked DSH gateway key'); return }
+      const from = await caller(ctx)
+      if (from === undefined) { openAiError(ctx.res, 401, 'invalid_api_key', 'Invalid or revoked DSH gateway key'); return }
+      const found = from.person
+      const running = inFlight.get(found.id) ?? 0
+      if (running >= gateway.maxConcurrent) {
+        openAiError(ctx.res, 429, 'too_many_requests', 'You already have ' + String(running) + ' requests running through the organisation gateway; wait for one to finish', { 'retry-after': '5' })
+        return
+      }
+      inFlight.set(found.id, running + 1)
+      try {
+        await forward(ctx, path, found, from.deviceId, startedAt)
+      } finally {
+        const left = (inFlight.get(found.id) ?? 1) - 1
+        if (left <= 0) inFlight.delete(found.id)
+        else inFlight.set(found.id, left)
+      }
+    })
+  }
+
+  async function forward(ctx: Context, path: string, found: User, deviceId: string, startedAt: number): Promise<void> {
+    {
       const text = await readText(ctx.req, 32_000_000)
       let body: { model?: unknown; stream?: unknown; stream_options?: unknown }
       try { body = JSON.parse(text) as typeof body } catch { openAiError(ctx.res, 400, 'invalid_request_error', 'Request body is not JSON'); return }
       const asked = typeof body.model === 'string' ? body.model : ''
       const stream = body.stream === true
       const base: Omit<RequestRecord, 'status' | 'httpStatus' | 'durationMs' | 'tokens' | 'costMicros'> = {
-        userId: found.id, departmentId: found.department_id, startedAt, endpoint: path, model: asked, client: clientName(ctx.req.headers['user-agent']), stream,
+        userId: found.id, deviceId, departmentId: found.department_id, startedAt, endpoint: path, model: asked, client: clientName(ctx.req.headers['user-agent']), stream,
       }
       const refuse = async (status: number, type: string, message: string, headers: Record<string, string> = {}): Promise<void> => {
-        await metering.record({ ...base, status: 'refused', httpStatus: status, error: type, tokens: NO_TOKENS, costMicros: null, durationMs: Date.now() - startedAt }).catch(() => undefined)
+        await recorded({ ...base, status: 'refused', httpStatus: status, error: type, tokens: NO_TOKENS, costMicros: null, durationMs: Date.now() - startedAt })
         openAiError(ctx.res, status, type, message, headers)
+      }
+      // Usage that cannot be written cannot be limited: stop forwarding until a
+      // record goes through again. Writing this refusal is that probe.
+      if (unrecorded >= UNRECORDED_LIMIT) {
+        await refuse(503, 'metering_unavailable', 'The organisation gateway cannot record usage right now, so it is not forwarding requests. Try again shortly.', { 'retry-after': '30' })
+        return
       }
 
       const allowed = await allowedModels(found)
@@ -151,7 +202,7 @@ export function installProxy(router: Router, store: Store, config: ServerConfig,
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        await metering.record({ ...record, status: 'error', httpStatus: 502, error: 'upstream_unreachable', tokens: NO_TOKENS, costMicros: null, durationMs: Date.now() - startedAt }).catch(() => undefined)
+        await recorded({ ...record, status: 'error', httpStatus: 502, error: 'upstream_unreachable', tokens: NO_TOKENS, costMicros: null, durationMs: Date.now() - startedAt })
         openAiError(ctx.res, 502, 'upstream_unreachable', 'The organisation model service is unreachable: ' + message)
         return
       }
@@ -165,7 +216,8 @@ export function installProxy(router: Router, store: Store, config: ServerConfig,
         try {
           for await (const chunk of Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream<Uint8Array>)) {
             ttftMs ??= Date.now() - startedAt
-            ctx.res.write(chunk)
+            // A reader slower than the upstream holds the upstream back instead of growing our buffer.
+            if (!ctx.res.write(chunk)) await new Promise<void>((resolve) => { ctx.res.once('drain', resolve); ctx.res.once('close', resolve) })
             tail = (tail + Buffer.from(chunk as Uint8Array).toString('utf8')).slice(-24_000)
           }
         } catch {
@@ -176,7 +228,7 @@ export function installProxy(router: Router, store: Store, config: ServerConfig,
       const reply = readReply(tail, type)
       const tokens = tokensFrom(reply.usage)
       const ok = upstream.ok && !cut
-      await metering.record({
+      await recorded({
         ...record, status: ok ? 'ok' : 'error', httpStatus: upstream.status, error: ok ? null : cut ? 'stream_interrupted' : reply.error ?? 'upstream_' + String(upstream.status),
         servedModel: reply.model ?? null, stopReason: reply.stop ?? null, tokens, costMicros: entry === undefined ? null : costOf(tokens, {
           input: entry.prices.input === null ? null : Math.round(entry.prices.input * 1_000_000),
@@ -184,11 +236,11 @@ export function installProxy(router: Router, store: Store, config: ServerConfig,
           cacheRead: entry.prices.cacheRead === null ? null : Math.round(entry.prices.cacheRead * 1_000_000),
         }),
         ttftMs: stream ? ttftMs : null, durationMs: Date.now() - startedAt,
-      }).catch(() => undefined)
+      })
       if (ok) await countDaily(found.id, tokens.input + tokens.cacheRead, tokens.output).catch(() => undefined)
       // Ended only after the request is recorded, so the next request already sees it against the limits.
       ctx.res.end()
-    })
+    }
   }
 }
 

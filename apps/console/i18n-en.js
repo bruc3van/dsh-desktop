@@ -448,7 +448,7 @@ export const EN = {
   '已生效 {n} 台，共 {total} 台': '{n} of {total} devices up to date',
   '{label} {n} 台': '{label}: {n} devices',
   '还没有设备注册。把注册文件分发给员工电脑后，这里会显示配置的生效进度。': 'No devices yet. Once the enrollment file reaches employees\' computers, rollout progress appears here.',
-  '的设备已用上当前配置（{n} / {total} 台）': 'of devices run the current configuration ({n} / {total})',
+  '的设备已用上最新配置（{n} / {total} 台）': 'of devices run the current configuration ({n} / {total})',
   '当前配置版本': 'Configuration revision',
   '已生效 {n} / {total} 台': '{n} / {total} up to date',
   '刚刚': 'just now',
