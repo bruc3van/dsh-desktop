@@ -13,7 +13,7 @@ import { sanitizedElectronEnv } from './lib/electron-env.mjs'
 if (process.platform !== 'linux') throw new Error('smoke:appimage requires a Linux host')
 const root = fileURLToPath(new URL('..', import.meta.url))
 const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
-const image = resolve(process.argv[2] ?? join(root, 'release', `dsh-desktop-${version}-linux-x86_64.AppImage`))
+const image = resolve(process.argv[2] ?? join(root, 'release', `dsh-desktop-pro-${version}-linux-x86_64.AppImage`))
 const work = await mkdtemp(join(tmpdir(), 'dsh-appimage-'))
 const run = promisify(execFile)
 let runtimeApp

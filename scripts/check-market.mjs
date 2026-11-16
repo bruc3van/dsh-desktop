@@ -11,7 +11,7 @@
  * of the same name winning, and every change audited.
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,11 +23,15 @@ import { openDb } from '../apps/server/src/db.ts'
 import { compareSemver, readSourceDocument } from '../apps/server/src/market.ts'
 import { PLAIN_CODEC, ServerSession } from '../src/main/enterprise/server-session.ts'
 
-// The official validator, from the bundled DSH runtime's dependencies.
+// The official validator, from the bundled DSH runtime's dependencies. pnpm
+// shortens long store directory names to a hash on Windows, so find the package
+// by what the directory holds, not by how the directory is spelled.
 const store = join(import.meta.dirname, '..', 'node_modules', '.pnpm')
-const validatorDir = readdirSync(store).find(name => name.startsWith('@deepseek-ai+dsh-plugin-market-index@'))
-assert.ok(validatorDir, 'the official plugin index validator is installed with the DSH runtime')
-const { parseMarketIndex } = await import(pathToFileURL(join(store, validatorDir, 'node_modules', '@deepseek-ai', 'dsh-plugin-market-index', 'lib', 'index.js')).href)
+const validatorEntry = readdirSync(store)
+  .map(name => join(store, name, 'node_modules', '@deepseek-ai', 'dsh-plugin-market-index', 'lib', 'index.js'))
+  .find(entry => existsSync(entry))
+assert.ok(validatorEntry, 'the official plugin index validator is installed with the DSH runtime')
+const { parseMarketIndex } = await import(pathToFileURL(validatorEntry).href)
 
 const COMMIT = 'a'.repeat(40)
 const PNG = 'data:image/png;base64,' + Buffer.from('not really a png').toString('base64')
