@@ -2,19 +2,22 @@
 
 对应 [Issue #16](https://github.com/bruc3van/dsh-desktop/issues/16) 和 [Issue #19](https://github.com/bruc3van/dsh-desktop/issues/19)。仅影响客户端内置的 DSH 运行时；外部 CLI / 远程服务需要在其运行环境升级或修复。
 
-四个 `0.2.2-rc.3` 依赖通过 `pnpm patchedDependencies` 交付修复：
+五个 `0.2.2-rc.3` 依赖通过 `pnpm patchedDependencies` 交付修复：
 
 - 上游已为 Windows Job helper 和 fallback `spawnSubprocess` 设置 `windowsHide: true`，本次移除重复补丁并保留回归检查；不改变独立的交互终端实现。
 - `dsh-win32-process` 的 `spawnCurrentTokenJobProcess` 给普通目标的 `CreateProcessW` 添加 `CREATE_NO_WINDOW`，保留 Unicode 环境、挂起创建、Job 关联及恢复执行流程。
 - `dsh-sandbox-windows-acl` 的 runner 在没有控制台时创建自己的控制台并隐藏，让受限子进程继承。保留已有控制台，不隐藏用户终端；保存和恢复标准句柄，随后设置 Ctrl+C 行为。控制台分配失败时沿用原来的启动行为；恢复标准句柄失败则停止启动，避免命令输出被错误重定向。
-- `dsh-subprocess-local` 在构造 Windows 目标环境时，仅当宿主为 Electron 且目标是自身可执行文件时补入 `ELECTRON_RUN_AS_NODE=1`，让该值随 Job IPC 到达第二层 ACL runner。Windows 路径和变量名按大小写不敏感处理。宿主的 spawn monkey-patch 无法覆盖 Job runner 的原生目标启动，这正是 #19 的缺口。ACL runner 启动后清除 JS 和原生环境中的该变量，防止扩散到用户命令。
+- `dsh-subprocess-local` 在构造 Windows 目标环境时，仅当宿主为 Electron 且目标是自身可执行文件时补入 `ELECTRON_RUN_AS_NODE=1`，让该值随 Job IPC 到达第二层 ACL runner。Windows 路径和变量名按大小写不敏感处理。宿主的 spawn monkey-patch 无法覆盖 Job runner 的原生目标启动，这正是 #19 的缺口。ACL runner 启动后清除 JS 和原生环境中的该变量，防止扩散到用户命令；只有被包住的目标就是客户端自身（PTC 工作进程）时，才把它重新设为 `1`，否则该工作进程会作为第二个 GUI 实例启动并立即退出（#31）。
 - `dsh-sandbox-local` 的 Windows ACL 功能探测同时要求退出码 0 和约定 stdout 标记，拒绝 Electron GUI 空输出退出造成的伪成功。该探测仅用于多候选链；保留上游单候选链直接选择的行为，不宣称每次执行前都会探测。
+- `dsh-ptc-runtime-node` 在 Electron 下启动 PTC 工作进程时，若工作进程就是客户端自身，显式在工作进程环境中设置 `ELECTRON_RUN_AS_NODE=1`。宿主运行时的环境里没有这个变量，而 macOS／Linux 的沙箱前缀（sandbox-exec、bwrap）又让宿主的 spawn 补丁认不出目标，所以必须由工作进程环境自己带上（#31）。
 
 另有 `dsh-plugin-manager` 补丁接收 launcher 提供的内置 pnpm 调用参数，在 execa 执行 Windows 命令转义前改用 Electron Node 加载内置 pnpm。CLI 和运行中的插件管理服务共用此适配；调用信息仅保存在进程内，pnpm 启动安装脚本前会清除 Electron Node 模式。`check:pnpm-runtime` 使用仅含系统工具的 PATH 验证真实插件安装及生命周期脚本。
 
 Electron 固定为 `44.7.0`（内置 Node `24.21.0`），这是 `node-addon-require-builtin@0.1.9` 在 44.x 线上支持的最新指纹。`44.9.3` / `45.0.0` 的 Node 更新，但指纹未收录，不能用。`check:pnpm-engine` 除了检查 Node 版本和安全基线，还实际加载 dsh 所需的内部模块。稳定版尚无 Node `24.22.1`；见 [#28](https://github.com/bruc3van/dsh-desktop/issues/28)。
 
 #19 的回归覆盖实际 launcher → Windows Job runner → Electron ACL runner → pwsh 链，使用 `PwshLocalExecutor.spawnSpec` 构造请求，检查 `read-only`、`workspace-write` 和 `danger-full-access` 的输出、非零退出码、工作区内外写入及目标环境隔离。测试额外断言 IPC 环境，避免开发版 Electron 把 runner.js 当 GUI 应用加载时掩盖缺失变量的问题；旧的直接 ACL runner 测试不能覆盖这一跳。
+
+#31 的回归在同一条 launcher → Windows Job runner → Electron ACL runner 链路上，以客户端自身为目标跑 read-only、workspace-write 和 danger-full-access 三种模式，确认 PTC 工作进程以 Node 模式启动；同一链路上的 pwsh 目标仍然拿不到该变量。
 
 设置 `DSH_DESKTOP_TEST_ELECTRON` 为已打包 `DSH Desktop.exe` 的绝对路径，可用同一脚本验证打包后的可执行文件。测试仍加载当前 `.build` launcher 和 `.runtime` 依赖，不代表该旧安装包已包含新补丁。
 

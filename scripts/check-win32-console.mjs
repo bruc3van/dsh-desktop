@@ -58,15 +58,28 @@ const runner = await readFile(join(acl, 'lib', 'runner.js'), 'utf8')
 assert.match(runner, /import \{ prepareRunnerConsole \} from "\.\/types-desktop-console\.js"/)
 assert.ok(runner.includes('prepareRunnerConsole(api)'))
 assert.ok(runner.indexOf('prepareRunnerConsole(api)') < runner.indexOf('sandbox = new AclSandbox'))
-// Keep both environment layers clean, including on non-Windows CI.
+// Keep both environment layers clean for ordinary commands, and give Node mode
+// back only to a confined command that is this executable (Issue #31: the PTC
+// worker), including on non-Windows CI.
 for (const cleanup of [
-  'delete process.env.ELECTRON_RUN_AS_NODE;',
-  'api.setEnvironmentVariableW("ELECTRON_RUN_AS_NODE", null)',
+  'const selfTarget = parsed.command.toLowerCase() === process.execPath.toLowerCase();',
+  'if (key.toUpperCase() === "ELECTRON_RUN_AS_NODE") delete process.env[key];',
+  'if (selfTarget) process.env.ELECTRON_RUN_AS_NODE = "1";',
+  'api.setEnvironmentVariableW("ELECTRON_RUN_AS_NODE", selfTarget ? "1" : null)',
 ]) {
   assert.ok(runner.includes(cleanup), `ACL runner must retain ${cleanup}`)
   assert.ok(runner.indexOf(cleanup) < runner.indexOf('sandbox.spawn('),
-    'Clear bootstrap environment before spawning the confined command')
+    'Settle the bootstrap environment before spawning the confined command')
 }
+// Issue #31: the PTC worker states Electron Node mode on its own environment,
+// because the host strips it and a sandbox prefix hides the worker from the
+// host spawn patch.
+const ptcSource = await readFile(join(modules, '@deepseek-ai', 'dsh-ptc-runtime-node', 'lib', 'index.js'), 'utf8')
+const ptcStart = ptcSource.slice(ptcSource.indexOf('async start(cwd) {'))
+const ptcModeLine = 'env.ELECTRON_RUN_AS_NODE = "1";'
+assert.ok(ptcStart.includes(ptcModeLine), 'PTC worker must restore Electron Node mode for itself')
+assert.ok(ptcStart.indexOf(ptcModeLine) < ptcStart.indexOf('this.ctx.subprocess.spawn('),
+  'Restore Node mode before spawning the PTC worker')
 
 function fixture({ existing = null, allocation = 1, restoreFailure, handler = 1 } = {}) {
   const calls = []
@@ -293,12 +306,33 @@ try {
         }
         console.log('shell-ok: ' + shellPath);
       }
+      // Issue #31: the PTC worker is this Electron executable, confined by the
+      // same runner. It must start as Node (not a second GUI instance), with
+      // the environment the patched PTC runtime hands the subprocess layer.
+      for (const mode of ['read-only', 'workspace-write', 'danger-full-access']) {
+        const worker = [process.execPath, '-e', 'if (process.env.ELECTRON_RUN_AS_NODE !== "1" || !process.versions.node) process.exit(98); console.log("ptc-worker-node-ok"); process.exit(7)'];
+        const argv = mode === 'danger-full-access' ? worker : [process.execPath,
+          ${JSON.stringify(join(acl, 'lib', 'runner.js'))}, '--workspace', ${JSON.stringify(workspace)},
+          '--temp', ${JSON.stringify(temp)}, '--mode', mode, '--', ...worker];
+        const handle = ctx.subprocess.spawn({ argv, cwd: ${JSON.stringify(workspace)}, env: { ELECTRON_RUN_AS_NODE: '1' },
+          graceMs: 200, signal: AbortSignal.timeout(20000),
+          stdio: { stdin: 'ignore', stdout: { maxBytes: 64000 }, stderr: { maxBytes: 64000 } } });
+        const outcome = await handle.done;
+        assert.equal(await handle.waitForExit(), true);
+        const stdout = handle.collected.stdout.readFrom(0).text;
+        const stderr = handle.collected.stderr.readFrom(0).text;
+        assert.equal(outcome.exitCode, 7, JSON.stringify({ mode, outcome, stdout, stderr }));
+        assert.match(stdout, /ptc-worker-node-ok/);
+        console.log('ptc-worker-' + mode + '-ok');
+      }
     } finally { await fiber.dispose(); }
   `)
-  // Up to two shells x three modes x 20s deadlines, plus startup/teardown margin.
-  const nestedResult = await run([launcher], '', { DSH_DESKTOP_RUNTIME_ENTRY: nestedEntry }, 150_000)
+  // Up to two shells x three modes plus three PTC worker modes x 20s deadlines,
+  // plus startup/teardown margin.
+  const nestedResult = await run([launcher], '', { DSH_DESKTOP_RUNTIME_ENTRY: nestedEntry }, 210_000)
   assert.equal(nestedResult.code, 0, JSON.stringify(nestedResult))
   assert.match(nestedResult.stdout, /nested-workspace-write-ok/)
+  assert.match(nestedResult.stdout, /ptc-worker-workspace-write-ok/)
   console.log(nestedResult.stdout.trim())
   console.log('✓ Job -> Electron ACL -> pwsh preserves output, exit code, write boundaries and clean target environment')
 
