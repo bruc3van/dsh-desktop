@@ -10,3 +10,6 @@
 | [0004](0004-hard-and-soft-controls.md) | 硬管控在网关，软管控在客户端 |
 | [0005](0005-portable-storage-tenant-id.md) | 可移植 SQL、全表 `tenant_id`、单仓库 monorepo |
 | [0006](0006-open-source-apache.md) | 全部开源，Apache-2.0，不做商业版 |
+| [0007](0007-paid-support.md) | 可持续方式：付费支持，代码仍全部开源 |
+
+0002、0003、0004、0005 在 0.7.0-beta.3 有修订，见各文末尾。
