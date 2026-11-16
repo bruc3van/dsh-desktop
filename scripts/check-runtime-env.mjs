@@ -224,6 +224,15 @@ const AUDITED_INDIRECT = new Map([
   ]],
   ['@deepseek-ai/dsh-ptc-runtime-node/lib/index.js', [
     { label: 'PTC executable default for subprocess', context: 'kind: "pkg" in process ? "embedded" : "node-script",\n\t\texecutable: process.execPath', expected: 1 },
+    // Issue #31: comparisons, not spawns. They restore Node mode on the
+    // worker's own environment when the worker is this Electron executable.
+    { label: 'PTC worker self check (win32)', context: '"win32" ? executable.toLowerCase() === process.execPath.toLowerCase() : executable', expected: 1 },
+    { label: 'PTC worker self check', context: ': executable === process.execPath)) env.ELECTRON_RUN_AS_NODE = "1";', expected: 1 },
+  ]],
+  // Issue #31: a comparison, not a spawn. The ACL runner keeps Node mode only
+  // when its confined command is this executable (the PTC worker).
+  ['@deepseek-ai/dsh-sandbox-windows-acl/lib/runner.js', [
+    { label: 'ACL runner self-target check', context: 'const selfTarget = parsed.command.toLowerCase() === process.execPath.toLowerCase();', expected: 1 },
   ]],
   // LiveShare passes both commands to TunnelWorker, which uses patched spawn().
   ['@deepseek-ai/dsh-experimental-liveshare/lib/index.js', [
