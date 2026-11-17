@@ -16,7 +16,7 @@ if (process.platform !== 'linux') throw new Error('check:linux requires a Linux 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const executable = process.argv[2] === undefined ? createRequire(import.meta.url)('electron') : resolve(process.argv[2])
 // Packaged: inside the runtime archive, which the Electron Node below reads.
-const modules = process.argv[2] === undefined ? join(root, '.runtime/node_modules') : join(executable, '..', 'resources/dsh-runtime.asar/node_modules')
+const modules = process.argv[2] === undefined ? join(root, '.runtime/node_modules') : join(executable, '..', 'resources/dsh-runtime/app.asar/node_modules')
 const work = await mkdtemp(join(tmpdir(), 'dsh-linux-'))
 const run = promisify(execFile)
 let app
@@ -60,17 +60,20 @@ await new Promise((resolve, reject) => {
 })
 console.log('✓ packaged node-pty starts a terminal')
 const landlock = await import(pathToFileURL(require.resolve('@deepseek-ai/node-addon-system/landlock-run')).href)
-const enforcement = landlock.probe()
+// The same in-archive to unpacked mapping the patched dsh-sandbox-local applies;
+// a launcher the kernel cannot exec would make the sandbox report 'unusable'.
+const launcher = landlock.launcherPath().replace(/([\\\\/])app\\.asar(?=[\\\\/])/u, '$1app.asar.unpacked')
+const enforcement = landlock.probe(launcher)
 assert.notEqual(enforcement, 'unusable', 'Host kernel must enforce Landlock for this validation')
 const granted = join(work, 'granted')
 mkdirSync(granted)
 writeFileSync(join(granted, 'allowed'), 'allowed')
 writeFileSync(join(work, 'denied'), 'denied')
 const grants = landlock.grantArgs({ readOnly: ['/usr', '/lib', '/lib64', '/etc', granted] })
-const allowed = spawnSync(landlock.launcherPath(), [...grants, '--', '/bin/cat', join(granted, 'allowed')], { encoding: 'utf8' })
+const allowed = spawnSync(launcher, [...grants, '--', '/bin/cat', join(granted, 'allowed')], { encoding: 'utf8' })
 assert.equal(allowed.status, 0, allowed.stderr)
 assert.equal(allowed.stdout, 'allowed')
-const denied = spawnSync(landlock.launcherPath(), [...grants, '--', '/bin/cat', join(work, 'denied')], { encoding: 'utf8' })
+const denied = spawnSync(launcher, [...grants, '--', '/bin/cat', join(work, 'denied')], { encoding: 'utf8' })
 assert.notEqual(denied.status, 0)
 assert.match(denied.stderr, /Permission denied/)
 console.log('✓ Landlock permits granted reads and blocks ungranted reads (' + enforcement + ')')

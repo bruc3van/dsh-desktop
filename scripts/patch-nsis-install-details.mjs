@@ -30,7 +30,7 @@ import { chmodSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFile
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { RUNTIME_ARCHIVE_DIR, RUNTIME_ARCHIVE_NAME } from './runtime-archive.mjs'
+import { RUNTIME_ARCHIVE_DIR, RUNTIME_ARCHIVE_NAME, RUNTIME_RESOURCES_DIR } from './runtime-archive.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const INSTALLER_NSH = join(APP_DIR, 'resources', 'installer.nsh')
@@ -46,7 +46,7 @@ const RUNTIME_UNPACKED = join(RUNTIME_ARCHIVE_DIR, RUNTIME_ARCHIVE_NAME + '.unpa
  * Kept in step with electron-builder.yml; smoke-package.mjs is what proves the
  * two still agree, by re-deriving the longest path from the packed output.
  */
-export const RUNTIME_PACKED_PREFIX = 'resources\\' + RUNTIME_ARCHIVE_NAME + '.unpacked\\'
+export const RUNTIME_PACKED_PREFIX = 'resources\\' + RUNTIME_RESOURCES_DIR + '\\' + RUNTIME_ARCHIVE_NAME + '.unpacked\\'
 /** Records the budget beforePack computed, for smoke-package.mjs to check. */
 export const PATH_BUDGET_FILE = join(APP_DIR, '.build', 'nsis-path-budget.json')
 
@@ -194,9 +194,9 @@ export function fastPathInstDirBudget(longestRelativePath) {
  *
  * For scale: the default per-user target
  * `C:\\Users\\<name>\\AppData\\Local\\Programs\\DSH Desktop Pro` is 49 characters
- * for a 5-character user name, against a 175-character deepest path (measured
+ * for a 5-character user name, against a 179-character deepest path (measured
  * when the runtime moved into its archive and only the unpacked half still
- * lands at depth) — 225 total, comfortably inside. A user name past ~39
+ * lands at depth) — 229 total, comfortably inside. A user name past ~35
  * characters is what tips over into the staged copy.
  */
 const BUDGET_TOKEN = '__DSH_FAST_PATH_INSTDIR_BUDGET__'
