@@ -15,7 +15,8 @@ import { respondToConfirmations } from './lib/confirmation-fixture.mjs'
 if (process.platform !== 'linux') throw new Error('check:linux requires a Linux host')
 const root = fileURLToPath(new URL('..', import.meta.url))
 const executable = process.argv[2] === undefined ? createRequire(import.meta.url)('electron') : resolve(process.argv[2])
-const modules = process.argv[2] === undefined ? join(root, '.runtime/node_modules') : join(executable, '..', 'resources/dsh-runtime/node_modules')
+// Packaged: inside the runtime archive, which the Electron Node below reads.
+const modules = process.argv[2] === undefined ? join(root, '.runtime/node_modules') : join(executable, '..', 'resources/dsh-runtime.asar/node_modules')
 const work = await mkdtemp(join(tmpdir(), 'dsh-linux-'))
 const run = promisify(execFile)
 let app
@@ -40,7 +41,9 @@ const png = await sharp(Buffer.from('<svg width="3" height="2" xmlns="http://www
 assert.equal((await sharp(png).metadata()).width, 3)
 console.log('✓ packaged Sharp encodes and decodes an image')
 const rg = await import(pathToFileURL(require.resolve('@vscode/ripgrep')).href)
-const rgRun = spawnSync(rg.rgPath, ['--version'], { encoding: 'utf8' })
+// The operating system cannot run a file inside an archive: rewrite to the
+// unpacked copy, exactly as the runtime's own dsh-util-ripgrep does.
+const rgRun = spawnSync(rg.rgPath.replace(/\\.asar(?=[\\\\/])/u, '.asar.unpacked'), ['--version'], { encoding: 'utf8' })
 assert.equal(rgRun.status, 0)
 assert.match(rgRun.stdout, /ripgrep/)
 console.log('✓ packaged ripgrep executes')

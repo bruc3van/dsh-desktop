@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 .build/
 .runtime/
+.runtime-archive/
 dist/
 release/
 shots/

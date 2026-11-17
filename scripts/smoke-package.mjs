@@ -14,6 +14,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import * as esbuild from 'esbuild'
+import { packagedRuntimePaths, verifyRuntimeArchive } from './runtime-archive.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE_DIR = join(APP_DIR, 'release')
@@ -114,11 +115,24 @@ function assertPackagedGateway(packagedExecutable) {
 }
 
 function assertPackagedPnpm(packagedExecutable) {
-  const resources = packagedResourcesDir(packagedExecutable)
-  const pnpm = join(resources, 'dsh-runtime', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
-  if (!existsSync(pnpm)) throw new Error('packaged resources missing pnpm/bin/pnpm.mjs: ' + pnpm)
-  const artifacts = join(resources, 'dsh-runtime', 'node_modules', 'pnpm', 'artifacts')
+  const { pnpmEntry } = packagedRuntimePaths(packagedResourcesDir(packagedExecutable))
+  if (!existsSync(pnpmEntry)) throw new Error('packaged resources missing pnpm/bin/pnpm.mjs: ' + pnpmEntry)
+  const artifacts = join(dirname(dirname(pnpmEntry)), 'artifacts')
   if (existsSync(artifacts)) throw new Error('packaged pnpm artifacts/ was not pruned: ' + artifacts)
+}
+
+/**
+ * The archive this app carries — packed, installed, or extracted from a DMG or
+ * AppImage — must be the closure prepare:runtime just checked, with every
+ * native binary outside it. A stale archive, or a binary the unpack rules
+ * missed, would otherwise boot fine and fail only when that binary is needed.
+ */
+async function assertPackagedRuntimeArchive(packagedExecutable) {
+  const { archive } = packagedRuntimePaths(packagedResourcesDir(packagedExecutable))
+  if (!existsSync(archive)) throw new Error('packaged resources missing ' + archive)
+  const result = await verifyRuntimeArchive(archive, join(APP_DIR, '.runtime', 'node_modules'))
+  console.log('✓ packaged runtime archive matches the prepared closure (' + result.files + ' files, '
+    + result.unpacked + ' unpacked, every native binary among them)')
 }
 
 /**
@@ -166,6 +180,7 @@ async function assertPackedPathBudget() {
 await assertLocalePacks(executable)
 assertPackagedGateway(executable)
 assertPackagedPnpm(executable)
+await assertPackagedRuntimeArchive(executable)
 await assertPackedPathBudget()
 
 const smokeHome = await mkdtemp(join(tmpdir(), 'dsh-desktop-package-smoke-'))
@@ -380,7 +395,7 @@ try {
   console.log('✓ packaged app selected its bundled @deepseek-ai/dsh runtime')
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
   console.log('✓ packaged resources include dsh-cli.mjs')
-  console.log('✓ packaged pnpm.mjs is present and artifacts/ was pruned')
+  console.log('✓ packaged pnpm.mjs is present outside the runtime archive and artifacts/ was pruned')
   console.log('✓ bundled node shim runs without system Node/pnpm: ' + nodeShim)
   console.log('✓ bundled dsh shim reports a version')
   console.log('✓ bundled pnpm shim reports a version')

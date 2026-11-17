@@ -26,21 +26,27 @@
  */
 
 import { createHash } from 'node:crypto'
-import { chmodSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { RUNTIME_ARCHIVE_DIR, RUNTIME_ARCHIVE_NAME } from './runtime-archive.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const INSTALLER_NSH = join(APP_DIR, 'resources', 'installer.nsh')
 const BUILDER_YML = join(APP_DIR, 'electron-builder.yml')
-const RUNTIME_MODULES = join(APP_DIR, '.runtime', 'node_modules')
 /**
- * Where extraResources puts `.runtime/node_modules` inside the packaged tree.
+ * The runtime ships as one archive plus an unpacked directory beside it
+ * (scripts/runtime-archive.mjs). Only the unpacked half lands in the install
+ * directory as files at depth; the archive itself is a single short path.
+ */
+const RUNTIME_UNPACKED = join(RUNTIME_ARCHIVE_DIR, RUNTIME_ARCHIVE_NAME + '.unpacked')
+/**
+ * Where extraResources puts that unpacked directory inside the packaged tree.
  * Kept in step with electron-builder.yml; smoke-package.mjs is what proves the
  * two still agree, by re-deriving the longest path from the packed output.
  */
-export const RUNTIME_PACKED_PREFIX = 'resources\\dsh-runtime\\node_modules\\'
+export const RUNTIME_PACKED_PREFIX = 'resources\\' + RUNTIME_ARCHIVE_NAME + '.unpacked\\'
 /** Records the budget beforePack computed, for smoke-package.mjs to check. */
 export const PATH_BUDGET_FILE = join(APP_DIR, '.build', 'nsis-path-budget.json')
 
@@ -188,9 +194,10 @@ export function fastPathInstDirBudget(longestRelativePath) {
  *
  * For scale: the default per-user target
  * `C:\\Users\\<name>\\AppData\\Local\\Programs\\DSH Desktop Pro` is 49 characters
- * for a 5-character user name, against a 188-character deepest path — 238
- * total, comfortably inside. A pre-rename install directory, or a user name
- * past ~26 characters, is what tips over into the staged copy.
+ * for a 5-character user name, against a 175-character deepest path (measured
+ * when the runtime moved into its archive and only the unpacked half still
+ * lands at depth) — 225 total, comfortably inside. A user name past ~39
+ * characters is what tips over into the staged copy.
  */
 const BUDGET_TOKEN = '__DSH_FAST_PATH_INSTDIR_BUDGET__'
 const FAST_EXTRACT_PROLOGUE = `\
@@ -333,8 +340,9 @@ export function longestRelativePath(directory, prefix = '') {
  * that is about to be packed rather than pinned to a number that would rot as
  * the dependency closure moves.
  *
- * Only the bundled runtime is measured: everything else in the packed tree —
- * Electron's own files, app.asar, the locale packs — sits far shallower, and
+ * Only the runtime archive's unpacked half is measured: everything else in the
+ * packed tree — Electron's own files, app.asar, the runtime archive itself, the
+ * locale packs — sits far shallower, and
  * smoke-package.mjs re-derives the real maximum from the packed output so a
  * future layout that breaks that assumption fails the build instead of
  * quietly handing the fast path a budget that is too generous.
@@ -342,9 +350,12 @@ export function longestRelativePath(directory, prefix = '') {
  * @returns {{ longestPackedPath: number, budget: number }}
  */
 export function computePathBudget() {
-  const longest = longestRelativePath(RUNTIME_MODULES, RUNTIME_PACKED_PREFIX)
+  if (!existsSync(join(RUNTIME_ARCHIVE_DIR, RUNTIME_ARCHIVE_NAME))) {
+    throw new Error('no runtime archive under ' + RUNTIME_ARCHIVE_DIR + ' — run `pnpm run prepare:runtime` before packaging')
+  }
+  const longest = longestRelativePath(RUNTIME_UNPACKED, RUNTIME_PACKED_PREFIX)
   if (longest === 0) {
-    throw new Error('no files under ' + RUNTIME_MODULES + ' — run `pnpm run prepare:runtime` before packaging')
+    throw new Error('no files under ' + RUNTIME_UNPACKED + ' — run `pnpm run prepare:runtime` before packaging')
   }
   return { longestPackedPath: longest, budget: fastPathInstDirBudget(longest) }
 }

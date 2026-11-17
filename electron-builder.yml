@@ -21,8 +21,17 @@ files:
   - "!node_modules/**/*"
 
 extraResources:
-  - from: .runtime/node_modules
-    to: dsh-runtime/node_modules
+  # The runtime closure as one archive plus the binaries no archive can hold;
+  # scripts/runtime-archive.mjs explains the split, and prepare:runtime writes
+  # both. It stays out of app.asar so the shell's own archive keeps its size
+  # and the closure keeps its own integrity check.
+  - from: .runtime-archive/dsh-runtime.asar
+    to: dsh-runtime.asar
+  # Named down to node_modules on purpose: electron-builder silently skips a
+  # source directory's root-level node_modules, which here is all of it.
+  # smoke:package fails if any unpacked file goes missing.
+  - from: .runtime-archive/dsh-runtime.asar.unpacked/node_modules
+    to: dsh-runtime.asar.unpacked/node_modules
   # The runtime child reads this as an ordinary file, outside app.asar, the
   # same way it reads the bundled CLI entry beside it.
   - from: .build/runtime-launcher.mjs
