@@ -1,14 +1,17 @@
 /**
  * Installed-runtime preference integration check.
  *
- * Smart mode prefers, in order: an official instance already running on this
- * machine, a dsh the user installed themselves, then the bundled runtime. This
- * covers the middle rung and its safety net, against a synthetic `dsh` on PATH
- * so the result does not depend on what the developer has installed:
+ * Smart mode starts the bundled runtime whenever it is enabled; a dsh the user
+ * installed themselves (PATH, then the npx cache) runs only once the bundled
+ * source is turned off. This covers that ordering and the user-installed
+ * rungs, against a synthetic `dsh` on PATH so the result does not depend on
+ * what the developer has installed. Unless a scenario says otherwise it runs
+ * with the bundled source off, the setting a user picks to use their own dsh:
  *
- *  1. a working installed dsh is detected and preferred over the bundled one;
- *  2. an installed dsh that cannot start falls back to the bundled runtime
- *     instead of spending the recovery budget on the same failure;
+ *  0. with the default sources, the bundled runtime wins over an installed dsh;
+ *  1. with bundled off, a working installed dsh is detected and used;
+ *  2. an installed dsh that cannot start falls back to the next enabled source
+ *     (the npx cache) instead of spending the recovery budget on the same failure;
  *  3. switching Smart-mode sources while a local child is running (ready, or
  *     still booting) respawns from the new set without treating the stop as a
  *     crash — PATH/npx stay eligible, and the retry budget is not spent;
@@ -49,11 +52,11 @@ function fixtureBinDir() {
   mkdirSync(binDir, { recursive: true })
   if (process.platform === 'win32') {
     writeFileSync(join(binDir, 'dsh.cmd'),
-      ['@echo off', '"' + process.execPath + '" "' + FIXTURE + '" %*', ''].join('\r\n'))
+      ['@echo off', 'set DSH_FIXTURE_VIA_PATH=1', '"' + process.execPath + '" "' + FIXTURE + '" %*', ''].join('\r\n'))
     return binDir
   }
   const shim = join(binDir, 'dsh')
-  writeFileSync(shim, ['#!/bin/sh', 'exec "' + process.execPath + '" "' + FIXTURE + '" "$@"', ''].join('\n'))
+  writeFileSync(shim, ['#!/bin/sh', 'DSH_FIXTURE_VIA_PATH=1 exec "' + process.execPath + '" "' + FIXTURE + '" "$@"', ''].join('\n'))
   chmodSync(shim, 0o755)
   return binDir
 }
@@ -325,9 +328,12 @@ async function closeApp(app) {
 }
 
 /** One Electron run against its own homes, with the fixture ahead on PATH. */
+/** Every source but the bundled one: the user-installed rungs only run with it off. */
+const OWN_RUNTIMES = ['probe', 'installed', 'npx']
+
 async function launch(name, extraEnv = {}, {
   pathDsh = true,
-  settings = { connectionMode: 'smart' },
+  settings = { connectionMode: 'smart', smartRuntimes: OWN_RUNTIMES },
 } = {}) {
   const home = join(checkHome, name)
   mkdirSync(join(home, 'desktop'), { recursive: true })
@@ -436,14 +442,31 @@ function alive(pid) {
   }
 }
 
-// 1. A working installed dsh wins over the bundled runtime, and does not
-//    outlive the client that started it.
+// 0. With the default sources, the bundled runtime wins even though a working
+//    dsh is on PATH and in the npx cache — and neither is even probed.
 let app
+try {
+  const home = join(checkHome, 'bundled-first')
+  mkdirSync(home, { recursive: true })
+  const cacheRoot = fixtureNpxCache(home, '9.9.9-npxfake')
+  app = await openApp('bundled-first', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, {
+    settings: { connectionMode: 'smart' },
+  })
+  const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined && s.targetUrl !== '', 60_000)
+  check('the bundled runtime is used by default', status.runtimeSource === 'bundled', status.runtimeSource)
+  check('no user-installed dsh is reported while bundled wins',
+    status.installedDshVersion === undefined, status.installedDshVersion)
+} finally {
+  await closeApp(app)
+}
+
+// 1. With bundled off, a working installed dsh is used, and does not outlive
+//    the client that started it.
 let startedPid
 try {
   app = await openApp('prefer', { DSH_DESKTOP_SKIP_PROBE: '1' })
   const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined)
-  check('installed dsh is preferred over the bundled runtime', status.runtimeSource === 'installed', status.runtimeSource)
+  check('with bundled off, the installed dsh is used', status.runtimeSource === 'installed', status.runtimeSource)
   check('the detected version is reported', status.installedDshVersion === FIXTURE_VERSION, status.installedDshVersion)
   const ready = await waitForStatus(app, s => typeof s.childPid === 'number' && s.targetUrl !== '')
   startedPid = ready.childPid
@@ -479,8 +502,8 @@ try {
   check('the ready child is replaced by the bundled runtime', bundled.runtimeSource === 'bundled', bundled.runtimeSource)
   check('that stop is not treated as a crash', !log.sawCrashLadder(), log.text().match(/dsh runtime: \w+|trying the next|意外退出|exited; restarting/g)?.join(' → '))
   const restored = await evaluateStable(app,
-    () => window.desktop.connection.setSmartRuntimes(['probe', 'installed', 'npx', 'bundled']))
-  check('re-enabling every source is accepted', restored.saved === true, JSON.stringify(restored))
+    ids => window.desktop.connection.setSmartRuntimes(ids), OWN_RUNTIMES)
+  check('switching back to the user-installed sources is accepted', restored.saved === true, JSON.stringify(restored))
   const back = await waitForStatus(app, s => s.runtimeSource === 'installed' && s.targetUrl !== '')
   check('PATH is still eligible after the toggle', back.runtimeSource === 'installed', back.runtimeSource)
 } finally {
@@ -509,18 +532,21 @@ try {
   await closeApp(app)
 }
 
-// 2. An installed dsh that cannot start falls back to the bundled runtime.
-//    The switch is asserted from the main process's own log: a failing runtime
-//    can be replaced faster than the status bridge can be polled.
+// 2. An installed dsh that cannot start falls back to the next enabled source,
+//    the npx cache. The switch is asserted from the main process's own log: a
+//    failing runtime can be replaced faster than the status bridge can be polled.
 try {
-  app = await openApp('fallback', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_FAIL: '1' })
+  const home = join(checkHome, 'fallback-cache')
+  mkdirSync(home, { recursive: true })
+  const cacheRoot = fixtureNpxCache(home, '9.9.9-npxfake')
+  app = await openApp('fallback', { DSH_DESKTOP_SKIP_PROBE: '1', DSH_FIXTURE_FAIL: 'path', npm_config_cache: cacheRoot })
   const record = logFor(app)
-  const fellBack = await waitForStatus(app, s => s.runtimeSource === 'bundled')
+  const fellBack = await waitForStatus(app, s => s.runtimeSource === 'npx')
   check('the failing installed runtime is tried first', /dsh runtime: installed/.test(record.text()),
     record.text().match(/dsh runtime: \w+/g)?.join(' → '))
-  check('a failed installed runtime falls back to the bundled one',
-    /trying the next enabled runtime/.test(record.text()) && fellBack.runtimeSource === 'bundled')
-  check('the rejected runtime is no longer offered', fellBack.installedDshVersion === undefined, fellBack.installedDshVersion)
+  check('a failed installed runtime falls back to the npx cache',
+    /trying the next enabled runtime/.test(record.text()) && fellBack.runtimeSource === 'npx')
+  check('the rejected runtime is no longer offered', fellBack.installedDshVersion === '9.9.9-npxfake', fellBack.installedDshVersion)
 } finally {
   await closeApp(app)
 }
@@ -541,10 +567,14 @@ const secondaryAvailable = await new Promise((resolve, reject) => {
 })
 const retryTakeover = createServer((_req, res) => { res.end('occupied during retry') })
 try {
+  const home = join(checkHome, 'retry-cache')
+  mkdirSync(home, { recursive: true })
+  const cacheRoot = fixtureNpxCache(home, '9.9.9-npxfake')
   app = await openApp('automatic-retry-port', {
     DSH_DESKTOP_SKIP_PROBE: '1',
-    DSH_FIXTURE_FAIL: '1',
+    DSH_FIXTURE_FAIL: 'path',
     DSH_FIXTURE_FAIL_DELAY_MS: '1000',
+    npm_config_cache: cacheRoot,
   })
   const record = logFor(app)
   const diagnosticDeadline = Date.now() + 15_000
@@ -556,7 +586,7 @@ try {
     retryTakeover.listen(3080, '127.0.0.1', resolve)
   })
   const fallback = await waitForStatus(app,
-    s => s.runtimeSource === 'bundled' && s.targetUrl !== '', 60_000)
+    s => s.runtimeSource === 'npx' && s.targetUrl !== '', 60_000)
   const fallbackOrigin = new URL(fallback.targetUrl).origin
   check('an automatic source fallback reselects an available port when 3080 becomes occupied',
     secondaryAvailable
@@ -580,7 +610,7 @@ const smartPinnedPort = allocatedAddress.port
 await new Promise(resolve => portAllocator.close(resolve))
 try {
   app = await openApp('smart-pinned', { DSH_DESKTOP_SKIP_PROBE: '1' }, {
-    settings: { connectionMode: 'smart', localWebPort: smartPinnedPort },
+    settings: { connectionMode: 'smart', localWebPort: smartPinnedPort, smartRuntimes: OWN_RUNTIMES },
   })
   const pinned = await waitForStatus(app, s => s.targetUrl !== '')
   check('Smart mode starts the selected runtime on the pinned port',
@@ -593,7 +623,7 @@ try {
 
 // 2c. A non-dsh listener on the pinned port is a bind failure shared by every
 //     runtime source, so the client must show the port problem and stop rather
-//     than silently falling through to bundled.
+//     than silently falling through to the next source (the npx cache here).
 const occupiedServer = createServer((_req, res) => { res.end('not dsh') })
 await new Promise((resolve, reject) => {
   occupiedServer.once('error', reject)
@@ -603,8 +633,11 @@ const occupiedAddress = occupiedServer.address()
 if (typeof occupiedAddress !== 'object' || occupiedAddress === null) throw new Error('occupied-port fixture did not bind')
 const occupiedPort = occupiedAddress.port
 try {
-  app = await openApp('smart-port-held', { DSH_DESKTOP_SKIP_PROBE: '1' }, {
-    settings: { connectionMode: 'smart', localWebPort: occupiedPort },
+  const home = join(checkHome, 'port-held-cache')
+  mkdirSync(home, { recursive: true })
+  const cacheRoot = fixtureNpxCache(home, '9.9.9-npxfake')
+  app = await openApp('smart-port-held', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, {
+    settings: { connectionMode: 'smart', localWebPort: occupiedPort, smartRuntimes: OWN_RUNTIMES },
   })
   const record = logFor(app)
   const deadline = Date.now() + 20_000
@@ -614,7 +647,7 @@ try {
   check('a non-dsh listener on the pinned port stops runtime fallback',
     /dsh runtime: installed/.test(record.text())
       && /pinned port .* is still held after a failed spawn/.test(record.text())
-      && !/dsh runtime: bundled/.test(record.text()),
+      && !/dsh runtime: npx/.test(record.text()),
     record.text().match(/dsh runtime: \w+|pinned port .*|trying the next enabled runtime/g)?.join(' → '))
 } finally {
   await closeApp(app)
@@ -662,16 +695,16 @@ try {
   await closeApp(app)
 }
 
-// 3b. A cache OLDER than the bundled runtime stays preferred — it is the
-//     user's own runtime — but the status carries the non-blocking note, so
-//     the connection surfaces can say "re-run npx to refresh".
+// 3b. With bundled off, a cache OLDER than the bundled runtime is still used —
+//     it is the user's own runtime — but the status carries the non-blocking
+//     note, so the connection surfaces can say "re-run npx to refresh".
 try {
   const home = join(checkHome, 'npx-old')
   mkdirSync(home, { recursive: true })
   const cacheRoot = fixtureNpxCache(home, '0.0.1-npxold')
   app = await openApp('npx-old', { DSH_DESKTOP_SKIP_PROBE: '1', npm_config_cache: cacheRoot }, { pathDsh: false })
   const status = await waitForStatus(app, s => s.mode === 'local' && s.runtimeSource !== undefined)
-  check('an outdated npx cache is still preferred over the bundled runtime',
+  check('with bundled off, an outdated npx cache is still used',
     status.runtimeSource === 'npx', status.runtimeSource)
   check('its real version is still the one reported',
     status.installedDshVersion === '0.0.1-npxold', status.installedDshVersion)

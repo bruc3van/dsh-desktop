@@ -132,7 +132,7 @@ try {
     console.error('runtime editor:', await page.locator('#dsh-enhance-runtime-editor').innerText())
     throw error
   })
-  assert.deepEqual(await page.evaluate(async () => (await window.desktop.connection.getStatus()).smartRuntimes), ['probe', 'bundled'])
+  assert.deepEqual(await page.evaluate(async () => (await window.desktop.connection.getStatus()).smartRuntimes), ['bundled', 'probe'])
   console.log('✓ source draft stays local; navigation warning preserves edits; one batch persists through real IPC')
 
   // A new wrapper breaks the known content hierarchy while preserving live

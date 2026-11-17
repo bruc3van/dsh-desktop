@@ -91,8 +91,8 @@ export function createSettingsCommands(options: Options) {
         saved: false,
         smartRuntimes: previous,
         error: localeChinese()
-          ? '独立环境无法复用本机已运行实例；请至少保留本机已安装、npx 缓存或客户端内置运行时'
-          : 'The isolated environment cannot reuse an already-running instance; keep installed, npx cache, or bundled enabled',
+          ? '独立环境无法复用本机已运行实例；请至少保留客户端内置、本机已安装或 npx 缓存运行时'
+          : 'The isolated environment cannot reuse an already-running instance; keep bundled, installed, or npx cache enabled',
       }
     }
     options.resetRuntimeFailure()
@@ -120,8 +120,8 @@ export function createSettingsCommands(options: Options) {
       const confirmed = await confirmSensitiveAction(
         localeChinese() ? '当前页面请求更改智能连接来源' : 'The current page asked to change Smart-mode sources',
         (localeChinese()
-          ? '这会决定智能模式下尝试哪些来源（本机已运行、本机已安装、npx 缓存、客户端内置）。请求来自：'
-          : 'This chooses which sources Smart mode may try (already running, installed, npx cache, bundled). Requested by: ')
+          ? '这会决定智能模式下尝试哪些来源（客户端内置、本机已运行、本机已安装、npx 缓存）。请求来自：'
+          : 'This chooses which sources Smart mode may try (bundled, already running, installed, npx cache). Requested by: ')
         + (currentTarget() ?? ''),
       )
       if (!confirmed) {
@@ -277,8 +277,8 @@ export function createSettingsCommands(options: Options) {
         saved: false,
         dshDataMode: current,
         error: chinese
-          ? '独立环境无法复用本机已运行实例；请先启用本机已安装、npx 缓存或客户端内置运行时'
-          : 'The isolated environment cannot reuse an already-running instance; enable installed, npx cache, or bundled first',
+          ? '独立环境无法复用本机已运行实例；请先启用客户端内置、本机已安装或 npx 缓存运行时'
+          : 'The isolated environment cannot reuse an already-running instance; enable bundled, installed, or npx cache first',
       }
     }
     if (value === current) return { saved: true, dshDataMode: current, applied: false }

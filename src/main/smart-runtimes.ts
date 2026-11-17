@@ -1,10 +1,12 @@
 /**
  * Which sources Smart mode may try, as a durable client preference.
  *
- * The four ids are the same ladder the client has always used — probe a
- * running instance, then PATH, then the npx cache, then the bundled runtime —
- * except each rung can now be skipped. Missing settings mean all four, so a
- * document written before this field existed keeps the old behaviour.
+ * Listed in the order the settings show them: the bundled runtime first, then
+ * a running instance, PATH and the npx cache. The bundled runtime is the first
+ * spawn rung; PATH and the npx cache only run when it is turned off. Reusing a
+ * running instance is not a competing spawn: with the shared data home it is
+ * still checked before any spawn, because two writers on one DSH_HOME corrupt
+ * the session store. Each rung can be skipped. Missing settings mean all four.
  *
  * Pure decision, no I/O. The same shape as `runtime-resolution.ts` /
  * `dsh-cli-policy.ts`, so the table is assertable from one machine
@@ -12,10 +14,10 @@
  * @module dsh-desktop/smart-runtimes
  */
 
-export const SMART_RUNTIME_IDS = ['probe', 'installed', 'npx', 'bundled'] as const
+export const SMART_RUNTIME_IDS = ['bundled', 'probe', 'installed', 'npx'] as const
 export type SmartRuntimeId = (typeof SMART_RUNTIME_IDS)[number]
 
-/** Legacy default: every rung of the Smart-mode ladder is live. */
+/** Default: every rung is live; the bundled runtime wins whenever it is present. */
 export const DEFAULT_SMART_RUNTIMES: readonly SmartRuntimeId[] = SMART_RUNTIME_IDS
 
 const SMART_RUNTIME_ID_SET: ReadonlySet<string> = new Set(SMART_RUNTIME_IDS)

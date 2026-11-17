@@ -50,8 +50,8 @@ const equal = (name, actual, expected) =>
     JSON.stringify(actual) + (JSON.stringify(actual) === JSON.stringify(expected) ? '' : ' ≠ ' + JSON.stringify(expected)))
 
 console.log('\n# ids')
-equal('the ladder is probe → installed → npx → bundled',
-  [...SMART_RUNTIME_IDS], ['probe', 'installed', 'npx', 'bundled'])
+equal('the ladder is bundled → probe → installed → npx',
+  [...SMART_RUNTIME_IDS], ['bundled', 'probe', 'installed', 'npx'])
 equal('the default is every rung', [...DEFAULT_SMART_RUNTIMES], [...SMART_RUNTIME_IDS])
 check('probe is an id', isSmartRuntimeId('probe') === true)
 check('a typo is not', isSmartRuntimeId('path') === false)
@@ -66,25 +66,25 @@ equal('unknown ids only become the default', normalizeSmartRuntimes(['path', 'fo
 
 console.log('\n# normalize: valid subsets')
 equal('a full list is kept in ladder order',
-  normalizeSmartRuntimes(['bundled', 'probe', 'npx', 'installed']),
-  ['probe', 'installed', 'npx', 'bundled'])
+  normalizeSmartRuntimes(['npx', 'probe', 'bundled', 'installed']),
+  ['bundled', 'probe', 'installed', 'npx'])
 equal('a subset keeps ladder order',
-  normalizeSmartRuntimes(['bundled', 'probe']),
-  ['probe', 'bundled'])
+  normalizeSmartRuntimes(['probe', 'bundled']),
+  ['bundled', 'probe'])
 equal('duplicates collapse',
   normalizeSmartRuntimes(['npx', 'npx', 'bundled']),
-  ['npx', 'bundled'])
+  ['bundled', 'npx'])
 equal('unknown ids are dropped from a mixed list',
   normalizeSmartRuntimes(['probe', 'nope', 'bundled']),
-  ['probe', 'bundled'])
+  ['bundled', 'probe'])
 
 console.log('\n# validate: refuse a save that would enable nothing')
 check('undefined is not persistable', validateSmartRuntimes(undefined) === undefined)
 check('an empty array is not persistable', validateSmartRuntimes([]) === undefined)
 check('unknown ids only are not persistable', validateSmartRuntimes(['foo']) === undefined)
 equal('a valid subset is persistable in ladder order',
-  validateSmartRuntimes(['bundled', 'installed']),
-  ['installed', 'bundled'])
+  validateSmartRuntimes(['installed', 'bundled']),
+  ['bundled', 'installed'])
 equal('the full list is persistable',
   validateSmartRuntimes(['probe', 'installed', 'npx', 'bundled']),
   [...DEFAULT_SMART_RUNTIMES])

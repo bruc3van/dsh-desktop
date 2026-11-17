@@ -87,7 +87,7 @@ try {
     assert.equal(await apply.isDisabled(), true)
     assert.equal(await pick('probe').isDisabled(), true)
     await apply.evaluate(el => el.click())
-    assert.deepEqual(await page.evaluate(() => window.saves), [['probe', 'bundled']], 'exactly one final batch')
+    assert.deepEqual(await page.evaluate(() => window.saves), [['bundled', 'probe']], 'exactly one final batch')
     await page.evaluate(() => window.finishSave({ saved: false, smartRuntimes: window.fixtureStatus.smartRuntimes, error: 'occupied fixture' }))
     await page.waitForFunction(() => !document.querySelector('[data-runtime-apply]').disabled)
     assert.equal(await pick('installed').getAttribute('aria-pressed'), 'false', 'refusal retains draft')

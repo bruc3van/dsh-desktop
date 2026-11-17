@@ -8,7 +8,9 @@
  * A numeric `--port` other than 0 is honoured so a pinned-port check can bind
  * a known address. Extra flags such as `--no-open` are ignored.
  * DSH_FIXTURE_FAIL=1 makes `web` exit immediately, standing in for an
- * installed runtime that is present but cannot start.
+ * installed runtime that is present but cannot start. DSH_FIXTURE_FAIL=path
+ * does that only for the copy published on PATH (its shim sets
+ * DSH_FIXTURE_VIA_PATH=1), so the npx-cached copy can serve as the fallback.
  * DSH_FIXTURE_FAIL_DELAY_MS delays that exit after the diagnostic so a test
  * can occupy the selected port before the desktop starts its fallback source.
  * DSH_FIXTURE_DELAY_MS delays the readiness line so a source toggle can land
@@ -31,7 +33,8 @@ if (args[0] !== 'web') {
   process.exit(2)
 }
 
-if (process.env.DSH_FIXTURE_FAIL === '1') {
+if (process.env.DSH_FIXTURE_FAIL === '1'
+  || (process.env.DSH_FIXTURE_FAIL === 'path' && process.env.DSH_FIXTURE_VIA_PATH === '1')) {
   process.stderr.write('fake-dsh: refusing to start (DSH_FIXTURE_FAIL)\n')
   const failDelayMs = Number(process.env.DSH_FIXTURE_FAIL_DELAY_MS)
   if (Number.isFinite(failDelayMs) && failDelayMs > 0) {

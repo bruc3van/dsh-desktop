@@ -109,12 +109,12 @@ export function injectEnhance(panel: Element): void {
     + '</div>'
     + '<div class="dsh-enhance-smart" id="dsh-enhance-smart">'
     + '<div id="dsh-enhance-runtime-editor">'
-    + '<p class="dsh-enhance-note">可多选，按优先级依次尝试；应用后生效。关掉的来源会跳过。至少保留一种。</p>'
+    + '<p class="dsh-enhance-note">可多选，应用后生效，至少保留一种。勾选客户端内置时总是用它，其余来源只在关掉内置后按顺序尝试；勾选本机已运行时，如果共用数据且本机已有 dsh 在运行，会直接连上它。</p>'
     + '<div class="dsh-enhance-row dsh-enhance-runtimes" id="dsh-enhance-runtimes">'
+    + runtimePick('bundled', '客户端内置', '用安装包自带的官方运行时，不用另装 Node 或 dsh。')
     + runtimePick('probe', '本机已运行', '本机已有官方 Web UI 在跑时直接连上（默认 3080），不另起一份。')
     + runtimePick('installed', '本机已安装', '用你 PATH 上自己安装的 dsh，由客户端在后台启动。')
     + runtimePick('npx', 'npx 缓存', '用你跑过 npx @deepseek-ai/dsh 留下的缓存包启动，不联网。')
-    + runtimePick('bundled', '客户端内置', '用安装包自带的官方运行时，不用另装 Node 或 dsh。')
     + '</div>'
     + '<p class="dsh-enhance-note" data-runtime-status role="status" aria-live="polite"></p>'
     + '<div class="dsh-enhance-row dsh-enhance-runtimes">'

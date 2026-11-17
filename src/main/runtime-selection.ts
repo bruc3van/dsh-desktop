@@ -15,7 +15,7 @@ export function installRuntimeSelection(options: {
   type Id = 'probe' | 'installed' | 'npx' | 'bundled'
   const { root, selectedClass, save } = options
   const t = (zh: string, en: string): string => options.chinese ? zh : en
-  const all: Id[] = ['probe', 'installed', 'npx', 'bundled']
+  const all: Id[] = ['bundled', 'probe', 'installed', 'npx']
   const buttons = [...root.querySelectorAll<HTMLButtonElement>('[data-smart-runtime]')]
   const apply = root.querySelector('[data-runtime-apply]') as HTMLButtonElement
   const undo = root.querySelector('[data-runtime-undo]') as HTMLButtonElement

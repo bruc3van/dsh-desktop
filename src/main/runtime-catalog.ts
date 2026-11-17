@@ -91,8 +91,21 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions) {
     return undefined
   }
 
+  /**
+   * The bundled runtime is the first spawn rung: when it is enabled and
+   * present, PATH and the npx cache are fallbacks only. A packaged build
+   * always counts as present — a missing closure there is damage, reported
+   * by resolveDshCommand, never a reason to quietly run something else.
+   */
+  function bundledPreferred(): boolean {
+    if (!smartRuntimeEnabled(enabledSmartRuntimes(), 'bundled')) return false
+    if (devOverride('DSH_DESKTOP_DSH')?.trim()) return false
+    return app.isPackaged || resolveBundledDsh() !== undefined
+  }
+
   /** The user-installed dsh Smart mode would spawn next, if any. */
   function selectedInstalledDsh(): InstalledDsh | undefined {
+    if (bundledPreferred()) return undefined
     const enabled = enabledSmartRuntimes()
     if (smartRuntimeEnabled(enabled, 'installed') && pathInstalledDsh !== undefined && !pathInstalledDshRejected) {
       return pathInstalledDsh
@@ -276,6 +289,9 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions) {
   }
 
   function detectInstalledDsh(): Promise<void> {
+    // Nothing to look for while the bundled runtime wins; unticking it later
+    // reaches this again with the detection still unstarted.
+    if (installedDshDetection === undefined && bundledPreferred()) return Promise.resolve()
     installedDshDetection ??= (async () => {
       if (devFlag('DSH_DESKTOP_SKIP_INSTALLED_DSH')) return
       // Both sources, independently: Smart-mode toggles pick between them later,
@@ -342,6 +358,14 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions) {
       }
     }
     const enabled = enabledSmartRuntimes()
+    if (smartRuntimeEnabled(enabled, 'bundled')) {
+      const bundled = resolveBundledDsh()
+      if (bundled !== undefined) return bundled
+      // A release artifact is self-contained by contract. Falling through to a
+      // PATH lookup hides packaging damage behind several guaranteed ENOENT
+      // retries on an ordinary user's machine.
+      if (app.isPackaged) throw new BundledRuntimeMissingError()
+    }
     const installed = selectedInstalledDsh()
     if (installed !== undefined) {
       return {
@@ -356,12 +380,6 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions) {
       }
     }
     if (smartRuntimeEnabled(enabled, 'bundled')) {
-      const bundled = resolveBundledDsh()
-      if (bundled !== undefined) return bundled
-      // A release artifact is self-contained by contract. Falling through to a
-      // PATH lookup hides packaging damage behind several guaranteed ENOENT
-      // retries on an ordinary user's machine.
-      if (app.isPackaged) throw new BundledRuntimeMissingError()
       // Dev convenience: probe sibling checkouts (read-only; never a package dependency).
       const siblings = fileURLToPath(new URL('../..', import.meta.url))
       for (const name of ['test-bruc3van', 'deepseek-harness']) {
