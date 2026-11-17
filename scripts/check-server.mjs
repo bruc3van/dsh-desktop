@@ -10,15 +10,16 @@
  * auditors, and the hash-chained audit log.
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { API, validateEnrollment, verifyDocument } from '@dsh-desktop-pro/protocol'
+import { API, keyFingerprint, normalizeKeyFingerprint, validateEnrollment, verifyDocument } from '@dsh-desktop-pro/protocol'
 import { createApp } from '../apps/server/src/app.ts'
 import { loadConfig } from '../apps/server/src/config.ts'
 import { openDb } from '../apps/server/src/db.ts'
 import { PLAIN_CODEC, ServerSession, SessionError } from '../src/main/enterprise/server-session.ts'
+import { createEnterpriseController, parseJoinAddress } from '../src/main/enterprise/controller.ts'
 
 const work = mkdtempSync(join(tmpdir(), 'dsh-server-check-'))
 const litellm = { issued: [], deleted: [] }
@@ -135,6 +136,23 @@ try {
   assert.equal(litellm.issued[0].user_id, alice.id)
   assert.equal(state.source.profiles.length, 2)
   console.log('✓ PKCE sign-in, device enrollment, and a signed, merged document with a personal gateway key')
+
+  // ---- joining from the client's settings ----
+  assert.equal((await fetch(base + API.enrollment)).status, 401, 'the enrollment is not handed to anyone who has not signed in')
+  assert.deepEqual(await session.fetchEnrollment(), { ...enrollment.value }, 'a signed-in device receives the same enrollment IT would distribute')
+  const code = '7F3A-92C1-0B44-DE10-5A6B-7C8D-9E0F-1A2B'
+  assert.deepEqual(parseJoinAddress('dsh.example.com'), { server: 'https://dsh.example.com' })
+  assert.deepEqual(parseJoinAddress('https://dsh.example.com/console/?x=1'), { server: 'https://dsh.example.com' })
+  assert.deepEqual(parseJoinAddress('http://dsh.example.com'), { problem: 'needs-code' }, 'plain HTTP without a check code is refused')
+  assert.deepEqual(parseJoinAddress('http://10.0.0.8:8080/#key=' + code), { server: 'http://10.0.0.8:8080', fingerprint: code }, 'plain HTTP with a check code is accepted')
+  assert.deepEqual(parseJoinAddress('http://10.0.0.8:8080/#key=' + code.toLowerCase().replaceAll('-', '')), { server: 'http://10.0.0.8:8080', fingerprint: code }, 'case and dashes do not matter')
+  assert.deepEqual(parseJoinAddress('https://dsh.example.com/#key=7F3A'), { problem: 'bad-code' })
+  assert.deepEqual(parseJoinAddress('http://127.0.0.1:8080'), { server: 'http://127.0.0.1:8080' }, 'this machine needs no code')
+  assert.deepEqual(parseJoinAddress('https://user:pass@dsh.example.com'), { problem: 'invalid' })
+  assert.deepEqual(parseJoinAddress('ftp://dsh.example.com'), { problem: 'invalid' })
+  assert.deepEqual(parseJoinAddress('  '), { problem: 'empty' })
+  assert.equal(normalizeKeyFingerprint(keyFingerprint(enrollment.value.keys)), keyFingerprint(enrollment.value.keys))
+  assert.equal(keyFingerprint([...enrollment.value.keys].reverse()), keyFingerprint(enrollment.value.keys), 'the code does not depend on key order')
 
   const bob = await (async () => { const s = client('bob@acme.example', enrollment.value, 'bob'); await s.signIn(); return s.fetchDesiredState() })()
   assert.deepEqual(bob.tools.deny, ['bash'], 'another department does not receive Finance settings')
@@ -256,6 +274,52 @@ try {
   assert.equal((await admin('GET', '/admin/api/me', undefined, adaCookie)).status, 200)
   assert.equal(consoleCookie.includes('bootstrap-secret'), false, 'the token itself never sits in a cookie')
   console.log('✓ the bootstrap token opens a short session, never sits in a cookie, and closes once an administrator signs in')
+  // ---- joining from the client's settings, as a new member ----
+  assert.equal((await admin('POST', '/admin/api/users', { name: 'Jo', email: 'jo@acme.example' }, adaCookie)).status, 200)
+  const joinHome = join(work, 'join-client')
+  const noSystem = join(work, 'join-system')
+  mkdirSync(noSystem)
+  const controllerFor = (managedDir = noSystem, email = 'jo@acme.example') => createEnterpriseController({
+    clientHome: joinHome, managedDir, clientVersion: '1.0.0', chinese: () => false, policyPluginPath: () => undefined,
+    secrets: () => PLAIN_CODEC, openBrowser: browserFor(email), runPluginCommand: async () => ({ ok: true }),
+    dshVersion: () => undefined, log: () => {},
+  })
+  const joinedFile = join(joinHome, 'enterprise', 'enrollment.json')
+  const personal = controllerFor()
+  assert.equal(personal.status().joinable, true, 'a computer nobody manages offers joining')
+  assert.match((await personal.joinOrganisation('http://dsh.example.com', async () => true)).error, /#key=/, 'an HTTP address without a check code is refused before anything is contacted')
+  const joining = (await admin('GET', '/admin/api/join-address', undefined, adaCookie)).body
+  assert.equal(joining.fingerprint, keyFingerprint(enrollment.value.keys))
+  assert.equal(joining.address, base + '/#key=' + joining.fingerprint, 'the console shows the server with its check code')
+  const asked = []
+  assert.deepEqual(await personal.joinOrganisation(joining.address, async (name, server, check) => { asked.push([name, server, check]); return false }), { ok: false, cancelled: true })
+  assert.deepEqual(asked, [['Acme', base, { checked: true, plainHttp: true }]], 'the confirmation names the organisation, its server and how the keys are checked')
+  const wrong = await personal.joinOrganisation(base + '/#key=0000-0000-0000-0000-0000-0000-0000-0000', async () => true)
+  assert.equal(wrong.ok, false)
+  assert.match(wrong.error, /check code/, 'keys that do not match the code are refused')
+  assert.equal(existsSync(joinedFile), false, 'a mismatch writes nothing')
+  assert.equal(existsSync(join(joinHome, 'enterprise', 'session.json')), false, 'and leaves no session behind')
+  assert.equal(existsSync(join(joinHome, 'enterprise', 'device.json')), false, 'nor a device identity')
+  assert.equal(existsSync(joinedFile), false, 'declining writes nothing')
+  assert.equal(existsSync(join(joinHome, 'enterprise', 'session.json')), false, 'declining signs nobody in')
+  assert.deepEqual(await personal.joinOrganisation(joining.address, async () => true), { ok: true, organization: 'Acme' })
+  assert.deepEqual(JSON.parse(readFileSync(joinedFile, 'utf8')), { ...enrollment.value }, 'the keys written are the organisation\'s, received after sign-in')
+  const member = controllerFor()
+  assert.equal(member.source.kind, 'server')
+  assert.equal(member.status().joined, true)
+  assert.equal(member.status().personalAllowed, true, 'someone who joined can always step back to personal use')
+  assert.deepEqual(await member.prepare(false), { kind: 'ready' }, 'the restart after joining needs no second sign-in')
+  const itManaged = join(work, 'join-it')
+  mkdirSync(itManaged)
+  writeFileSync(join(itManaged, 'enrollment.json'), JSON.stringify({ ...enrollment.value, organization: { id: 'other', name: 'Other' } }))
+  const overridden = controllerFor(itManaged)
+  assert.equal(overridden.status().organization, 'Other', 'what IT installs wins over an organisation the person joined')
+  assert.equal(overridden.status().joined, undefined)
+  assert.equal((await overridden.joinOrganisation(base, async () => true)).ok, false, 'a managed computer cannot join another organisation')
+  await member.signOut()
+  assert.equal(existsSync(joinedFile), false, 'leaving removes the enrollment')
+  assert.equal(controllerFor().status().joinable, true, 'and the next start is personal use again')
+  console.log('✓ joining from settings: the server is named first, keys arrive only after sign-in, IT wins, and leaving is clean')
 } finally {
   await app.close()
   gateway.close()

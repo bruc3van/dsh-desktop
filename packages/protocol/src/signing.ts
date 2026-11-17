@@ -52,6 +52,27 @@ export function keyIdFor(publicKey: KeyObject): string {
   return 'ed25519:' + createHash('sha256').update(der).digest('base64url').slice(0, 16)
 }
 
+/**
+ * A short, typeable check code for an organisation's signing keys: the first
+ * 128 bits of SHA-256 over `keyId:publicKey` lines sorted by key id, as eight
+ * groups of four hex digits. It travels in the join address the console
+ * shows (`<server>/#key=<code>`), out of band from the server itself, so a
+ * client joining over plain HTTP can tell the keys it received are the
+ * organisation's and not a stranger's on the same network.
+ */
+export function keyFingerprint(keys: readonly PublicKeyRecord[]): string {
+  const lines = [...keys].sort((a, b) => (a.keyId < b.keyId ? -1 : a.keyId > b.keyId ? 1 : 0))
+    .map(key => key.keyId + ':' + key.publicKey + '\n').join('')
+  const hex = createHash('sha256').update(lines).digest('hex').slice(0, 32).toUpperCase()
+  return hex.match(/.{4}/g)?.join('-') ?? hex
+}
+
+/** A check code as typed or pasted: case, spaces and dashes do not matter. */
+export function normalizeKeyFingerprint(value: string): string | undefined {
+  const hex = value.replace(/[\s-]/g, '').toUpperCase()
+  return /^[0-9A-F]{32}$/.test(hex) ? hex.match(/.{4}/g)?.join('-') : undefined
+}
+
 export function generateOrganizationKey(): { privateKeyPem: string; record: PublicKeyRecord } {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519')
   return {

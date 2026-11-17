@@ -90,6 +90,7 @@ const ACTIONS = {
   'logout': t('退出了登录'),
   'console.login': t('登录了控制台'),
   'device.enrolled': t('注册了一台设备'),
+  'device.joined': t('从客户端设置加入了组织'),
   'device.revoked': t('吊销了设备'),
   'desired-state.served': t('设备拉取了新配置'),
   'desired-state.applied': t('设备已应用配置'),

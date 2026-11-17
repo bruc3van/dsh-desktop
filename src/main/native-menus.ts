@@ -10,6 +10,8 @@ interface MenuActions {
   exportDiagnostics?: () => void
   /** Server mode only: sign out of the organisation account. */
   signOut?: () => void
+  /** The person joined this organisation themselves: signing out is leaving it. */
+  leaves?: boolean
   /** An enrolled machine that allows personal mode: switch between the two. */
   switchMode?: { zh: string; en: string; click: () => void }
 }
@@ -51,7 +53,7 @@ export function buildTrayMenu({ chinese, state, actions }: TrayMenuOptions): Ele
       { type: 'separator' as const },
       ...actions.switchMode === undefined ? [] : [{ label: chinese ? actions.switchMode.zh : actions.switchMode.en, click: actions.switchMode.click }],
       ...actions.exportDiagnostics === undefined ? [] : [{ label: chinese ? '导出诊断信息…' : 'Export Diagnostics…', click: actions.exportDiagnostics }],
-      ...actions.signOut === undefined ? [] : [{ label: chinese ? '退出企业账号…' : 'Sign Out of Organisation…', click: actions.signOut }],
+      ...actions.signOut === undefined ? [] : [{ label: actions.leaves === true ? (chinese ? '离开组织…' : 'Leave Organisation…') : (chinese ? '退出企业账号…' : 'Sign Out of Organisation…'), click: actions.signOut }],
     ],
     { type: 'separator' },
     { label: chinese ? '重启客户端' : 'Restart', click: actions.restart },

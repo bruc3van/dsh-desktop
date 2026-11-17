@@ -21,8 +21,8 @@ import { hostname as osHostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   API, createDeviceProof, DEVICE_ID_HEADER, DEVICE_PROOF_HEADER, pkceChallenge, PROTOCOL_HEADER, PROTOCOL_VERSION,
-  validateDesiredState, verifyDocument,
-  type AuditEventInput, type CompanySkill, type DesiredState, type Enrollment, type EnrollResponse, type StatusReport, type TokenResponse, type WatchResponse,
+  validateDesiredState, validateEnrollment, verifyDocument,
+  type AuditEventInput, type CompanySkill, type DesiredState, type DiscoveryResponse, type Enrollment, type EnrollResponse, type StatusReport, type TokenResponse, type WatchResponse,
 } from '@dsh-desktop-pro/protocol'
 
 export interface SecretCodec {
@@ -102,6 +102,31 @@ async function skillList(response: Response): Promise<CompanySkill[]> {
       distribution: item.distribution === 'optional' ? 'optional' : 'everyone', version: Number(item.version) || 1,
       updatedAt: String(item.updatedAt), installed: item.installed,
     }))
+}
+
+/**
+ * The public face of a management server: its organisation and protocol.
+ * Asked before a person joins, so the confirmation can name the organisation;
+ * nothing here is trusted beyond that — the signing keys come later, from
+ * the signed-in device (`ServerSession.fetchEnrollment`).
+ */
+export async function discoverServer(server: string, fetchImpl: typeof fetch = fetch): Promise<DiscoveryResponse> {
+  let response: Response
+  try {
+    response = await fetchImpl(new URL(API.discovery, server), { headers: { [PROTOCOL_HEADER]: String(PROTOCOL_VERSION) }, signal: AbortSignal.timeout(15_000) })
+  } catch (error) {
+    throw new SessionError('network', 'cannot reach ' + server + ': ' + (error instanceof Error ? error.message : String(error)))
+  }
+  if (!response.ok) throw new SessionError('invalid-response', server + ' is not a DSH Desktop Pro management server (HTTP ' + String(response.status) + ')')
+  const body = await response.json().catch(() => undefined) as Partial<DiscoveryResponse> | undefined
+  const organization = body?.organization
+  if (typeof body?.protocol !== 'number' || typeof organization?.id !== 'string' || typeof organization.name !== 'string') {
+    throw new SessionError('invalid-response', server + ' is not a DSH Desktop Pro management server')
+  }
+  if (body.protocol !== PROTOCOL_VERSION) {
+    throw new SessionError('invalid-response', 'protocol ' + String(body.protocol) + ' is not supported by this client (expects ' + String(PROTOCOL_VERSION) + ')')
+  }
+  return { protocol: body.protocol, organization: { id: organization.id, name: organization.name.slice(0, 200) }, signIn: Array.isArray(body.signIn) ? body.signIn : [] }
 }
 
 export class ServerSession {
@@ -331,6 +356,20 @@ export class ServerSession {
       return response
     }
     throw new SessionError('sign-in-required', 'the session is no longer valid')
+  }
+
+  /**
+   * The organisation's enrollment, for a person joining from the client. It
+   * must name this server and the organisation the person agreed to join.
+   */
+  async fetchEnrollment(): Promise<Enrollment> {
+    const response = await this.call('GET', API.enrollment)
+    const enrollment = validateEnrollment(await response.json().catch(() => undefined))
+    if (!enrollment.ok) throw new SessionError('invalid-response', 'enrollment ' + enrollment.path + ' ' + enrollment.reason)
+    if (enrollment.value.server !== new URL(this.server).origin) throw new SessionError('invalid-response', 'the enrollment names another server')
+    if (enrollment.value.organization.id !== this.options.enrollment.organization.id) throw new SessionError('invalid-response', 'the enrollment is for another organisation')
+    Reflect.deleteProperty(enrollment.value, 'allowPersonal')
+    return enrollment.value
   }
 
   /** The current signed document, verified against the pinned keys. */

@@ -18,14 +18,14 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { usableOffline, validateDesiredState, type AuditEventInput, type CompanySkill, type DesiredState, type StatusReport } from '@dsh-desktop-pro/protocol'
+import { ENROLLMENT_SCHEMA, keyFingerprint, normalizeKeyFingerprint, usableOffline, validateDesiredState, type AuditEventInput, type CompanySkill, type DesiredState, type StatusReport } from '@dsh-desktop-pro/protocol'
 import type { ClientSettings } from '../client-settings.ts'
 import { MANAGED_STATE_VARIABLE, type ManagedBootRequest } from './managed-boot.ts'
-import { loadManagedSource, type ManagedSource } from './managed-source.ts'
+import { ENROLLMENT_FILE, loadManagedSource, type ManagedSource } from './managed-source.ts'
 import { planPluginSync, runPluginSync, type PluginCommandRunner } from './plugin-sync.ts'
 import { WEB_PROFILE } from '../web-profile.ts'
 import { applyDesiredState, DENIAL_LOG_FILE, removeManagedConfiguration } from './reconcile.ts'
-import { ServerSession, SessionError, type SecretCodec } from './server-session.ts'
+import { discoverServer, ServerSession, SessionError, type SecretCodec } from './server-session.ts'
 
 export { MANAGED_STATE_VARIABLE }
 
@@ -77,16 +77,71 @@ export interface EnterpriseStatus {
   available?: string
   /** The organisation lets this person switch to personal mode. */
   personalAllowed?: boolean
+  /** Nothing is managed here, so the person may join an organisation from settings. */
+  joinable?: boolean
+  /** The person joined this organisation themselves; leaving returns the client to personal use. */
+  joined?: boolean
+}
+
+export type JoinResult =
+  | { ok: true; organization: string }
+  | { ok: false; cancelled?: boolean; error?: string }
+
+/** A join address, as the console shows it: `<server>/#key=<check code>`. */
+export interface JoinAddress {
+  /** The server's origin. */
+  server: string
+  /** The check code of the organisation's keys, when the address carries one. */
+  fingerprint?: string
+}
+
+export type JoinAddressProblem = 'empty' | 'invalid' | 'bad-code' | 'needs-code'
+
+/**
+ * Read the address a person pasted. HTTPS needs nothing more. Plain HTTP —
+ * common on internal networks — is accepted only with the check code from
+ * the console, because the organisation's keys then cross the network in the
+ * clear and the code is the only way to tell them from a stranger's. This
+ * machine (127.0.0.1, localhost) is exempt, for trying the server out.
+ */
+export function parseJoinAddress(input: string): JoinAddress | { problem: JoinAddressProblem } {
+  const text = input.trim()
+  if (text === '') return { problem: 'empty' }
+  let url: URL
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : 'https://' + text)
+  } catch {
+    return { problem: 'invalid' }
+  }
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username !== '' || url.password !== '') return { problem: 'invalid' }
+  const code = new URLSearchParams(url.hash.replace(/^#/, '')).get('key')
+  const fingerprint = code === null ? undefined : normalizeKeyFingerprint(code)
+  if (code !== null && fingerprint === undefined) return { problem: 'bad-code' }
+  const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]'
+  if (url.protocol === 'http:' && fingerprint === undefined && !loopback) return { problem: 'needs-code' }
+  return { server: url.origin, ...fingerprint !== undefined && { fingerprint } }
+}
+
+/** What the confirmation can tell the person about the address they gave. */
+export interface JoinCheck {
+  /** The organisation's keys will be checked against the code in the address. */
+  checked: boolean
+  /** The server is reached over plain HTTP. */
+  plainHttp: boolean
 }
 
 export function createEnterpriseController(options: EnterpriseOptions) {
-  const source: ManagedSource = loadManagedSource(options.managedDir)
   const root = join(options.clientHome, 'enterprise')
+  const source: ManagedSource = loadManagedSource(options.managedDir, root)
+  /** Present when the person joined from settings; removing it is leaving. */
+  const joinedPath = join(root, ENROLLMENT_FILE)
+  const joined = source.kind === 'server' && source.joined === true
   const statePath = join(root, 'state.json')
   /** Present when the person chose personal mode on an enrolled machine that allows it. */
   const personalChoicePath = join(root, 'personal-mode.json')
   // Server mode: the enrollment says so before anyone signs in. File mode: the managed file.
-  const personalAllowed = (source.kind === 'server' && source.enrollment.allowPersonal === true)
+  // Someone who joined by themselves can always step back to personal use.
+  const personalAllowed = joined || (source.kind === 'server' && source.enrollment.allowPersonal === true)
     || (source.kind === 'file' && source.state.allowPersonal === true)
   // Read once: switching either way restarts the client.
   const personalChosen = personalAllowed && existsSync(personalChoicePath)
@@ -125,15 +180,19 @@ export function createEnterpriseController(options: EnterpriseOptions) {
       secrets: options.secrets(),
       openBrowser: options.openBrowser,
       clientVersion: options.clientVersion,
-      callbackPage: {
-        done: zh('登录成功', 'Signed in'),
-        doneDetail: zh('DSH Desktop Pro 已回到前台，可以关闭这个页面了。', 'DSH Desktop Pro is back in front. You can close this tab.'),
-        failed: zh('登录没有完成', 'Sign-in did not complete'),
-        failedDetail: zh('请回到 DSH Desktop Pro 重新登录。', 'Return to DSH Desktop Pro and sign in again.'),
-        lang: zh('zh-CN', 'en'),
-      },
+      callbackPage: callbackPage(),
     })
     return session
+  }
+
+  function callbackPage() {
+    return {
+      done: zh('登录成功', 'Signed in'),
+      doneDetail: zh('DSH Desktop Pro 已回到前台，可以关闭这个页面了。', 'DSH Desktop Pro is back in front. You can close this tab.'),
+      failed: zh('登录没有完成', 'Sign-in did not complete'),
+      failedDetail: zh('请回到 DSH Desktop Pro 重新登录。', 'Return to DSH Desktop Pro and sign in again.'),
+      lang: zh('zh-CN', 'en'),
+    }
   }
 
   function readCache(): CachedState | undefined {
@@ -427,7 +486,8 @@ export function createEnterpriseController(options: EnterpriseOptions) {
   }
 
   function status(): EnterpriseStatus {
-    if (personalChosen) return { mode: 'personal', problems: [], ...personalOption() !== undefined && { available: personalOption() } }
+    if (personalChosen) return { mode: 'personal', problems: [], ...personalOption() !== undefined && { available: personalOption() }, ...joined && { joined: true } }
+    if (source.kind === 'personal') return { mode: 'personal', problems: [], joinable: true }
     const cached = readCache()
     const organization = source.kind === 'server' ? source.enrollment.organization.name
       : source.kind === 'file' ? source.state.organization.name : undefined
@@ -443,6 +503,7 @@ export function createEnterpriseController(options: EnterpriseOptions) {
       ...lastCheckedAt !== undefined && { lastCheckedAt },
       ...source.kind === 'file' && { managedFile: join(source.dir, 'managed.json') },
       ...personalAllowed && { personalAllowed: true },
+      ...joined && { joined: true },
       ...cached?.state.updates !== undefined && { updates: {
         feedManaged: cached.state.updates.feedUrl !== undefined,
         ...cached.state.updates.autoCheck !== undefined && { autoCheck: cached.state.updates.autoCheck },
@@ -491,10 +552,79 @@ export function createEnterpriseController(options: EnterpriseOptions) {
     return skills
   }
 
+  /**
+   * Sign out. For an organisation the person joined themselves this is also
+   * leaving: the enrollment goes, and the next start is personal use again.
+   * The organisation's sessions stay in its data home.
+   */
   async function signOut(): Promise<void> {
     if (source.kind !== 'server') return
-    await wipe('the person signed out')
+    await wipe(joined ? 'the person left the organisation' : 'the person signed out')
     session = undefined
+    if (joined) {
+      rmSync(joinedPath, { force: true })
+      rmSync(personalChoicePath, { force: true })
+    }
+  }
+
+  /**
+   * Join an organisation from the client's settings, on a machine IT does not
+   * manage. The person signs in first, in their own browser; only then does
+   * the server hand over the organisation's keys, and only then is anything
+   * written. `confirm` is asked between finding the server and opening the
+   * browser, with the organisation's name. The caller restarts on success.
+   */
+  async function joinOrganisation(input: string, confirm: (organization: string, server: string, check: JoinCheck) => Promise<boolean>): Promise<JoinResult> {
+    if (source.kind !== 'personal') return { ok: false, error: zh('这台电脑已经由组织管理', 'This computer is already managed by an organisation') }
+    const address = parseJoinAddress(input)
+    if ('problem' in address) {
+      const messages: Record<JoinAddressProblem, string> = {
+        'empty': zh('请先填写加入地址', 'Enter the join address first'),
+        'invalid': zh('加入地址格式不对，例如 https://dsh.example.com', 'That is not a valid join address, such as https://dsh.example.com'),
+        'bad-code': zh('加入地址末尾的校验码不完整，请从控制台「注册与分发」重新复制', 'The check code at the end of the address is incomplete; copy it again from Enrollment in the console'),
+        'needs-code': zh('这是 HTTP 地址：请粘贴控制台「注册与分发」里的完整加入地址（末尾带 #key= 校验码）', 'This is an HTTP address: paste the full join address from Enrollment in the console (it ends with #key= and a check code)'),
+      }
+      return { ok: false, error: messages[address.problem] }
+    }
+    const { server, fingerprint } = address
+    let organization: { id: string; name: string }
+    try {
+      organization = (await discoverServer(server)).organization
+    } catch (error) {
+      return { ok: false, error: zh('连不上这个企业服务端：', 'Cannot use this organisation server: ') + (error instanceof Error ? error.message : String(error)) }
+    }
+    if (!await confirm(organization.name, server, { checked: fingerprint !== undefined, plainHttp: server.startsWith('http:') })) return { ok: false, cancelled: true }
+    const trial = new ServerSession({
+      // Keys are not known yet; nothing signed is verified before fetchEnrollment.
+      enrollment: { schema: ENROLLMENT_SCHEMA, version: 1, server, organization, keys: [] },
+      home: root,
+      secrets: options.secrets(),
+      openBrowser: options.openBrowser,
+      clientVersion: options.clientVersion,
+      callbackPage: callbackPage(),
+    })
+    try {
+      await trial.signIn()
+      options.focusApp?.()
+      const enrollment = await trial.fetchEnrollment()
+      if (fingerprint !== undefined && keyFingerprint(enrollment.keys) !== fingerprint) {
+        throw new Error(zh('组织公钥和加入地址里的校验码对不上。可能是地址抄错了、组织换过公钥，也可能有人冒充这个服务端；请向 IT 确认后重新复制加入地址。',
+          'The organisation\'s keys do not match the check code in the join address. The address may be mistyped or out of date after a key change, or someone may be posing as this server; confirm with IT and copy the join address again.'))
+      }
+      mkdirSync(root, { recursive: true, mode: 0o700 })
+      const temporary = joinedPath + '.' + String(process.pid) + '.tmp'
+      writeFileSync(temporary, JSON.stringify(enrollment, undefined, 2) + '\n', { mode: 0o600 })
+      renameSync(temporary, joinedPath)
+      rmSync(personalChoicePath, { force: true })
+      options.log('[enterprise] joined ' + enrollment.organization.id + ' at ' + server)
+      return { ok: true, organization: enrollment.organization.name }
+    } catch (error) {
+      // Leave nothing half-joined: no session, no device identity for this server.
+      await trial.signOut().catch(() => undefined)
+      trial.forgetDevice()
+      if (error instanceof SessionError && error.kind === 'cancelled') return { ok: false, cancelled: true, error: zh('登录没有完成', 'Sign-in did not complete') }
+      return { ok: false, error: zh('没有加入：', 'Not joined: ') + (error instanceof Error ? error.message : String(error)) }
+    }
   }
 
   function managedUpdates(): DesiredState['updates'] | undefined {
@@ -533,7 +663,7 @@ export function createEnterpriseController(options: EnterpriseOptions) {
 
   return {
     source, active, dshHome, prepare, launchRequest, afterRuntimeReady, startPolling, checkNow,
-    overlaySettings, status, diagnostics, signOut, companySkills, setCompanySkill, managedUpdates, personalOption, choosePersonal, beforeLaunch,
+    overlaySettings, status, diagnostics, signOut, joinOrganisation, companySkills, setCompanySkill, managedUpdates, personalOption, choosePersonal, beforeLaunch,
     stop: () => { stopped = true; if (pollTimer !== undefined) clearInterval(pollTimer) },
   }
 }

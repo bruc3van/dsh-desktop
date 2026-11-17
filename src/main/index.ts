@@ -318,6 +318,7 @@ let settingsWindow: BrowserWindow | null = null
 const settingsServer = createSettingsServer({
   requestRestart,
   enterpriseAction,
+  joinOrganisation,
   enterpriseSkills,
   setEnterpriseSkill,
   updater: () => desktopUpdater,
@@ -1058,7 +1059,7 @@ const nativeMenuActions = {
   restart: restartApp,
   quit: () => { app.quit() },
   ...enterprise.active() && { exportDiagnostics: () => { void exportDiagnostics() } },
-  ...enterprise.source.kind === 'server' && enterprise.active() && { signOut: () => { void signOutOfOrganisation() } },
+  ...enterprise.source.kind === 'server' && (enterprise.active() || enterprise.status().joined === true) && { signOut: () => { void signOutOfOrganisation() }, leaves: enterprise.status().joined === true },
   ...enterprise.personalOption() !== undefined && { switchMode: enterprise.active()
     ? { zh: '改用个人模式…', en: 'Use Personal Mode…', click: () => { void switchPersonalMode(true) } }
     : { zh: '使用 ' + (enterprise.personalOption() ?? '') + ' 账号登录…', en: 'Sign In to ' + (enterprise.personalOption() ?? '') + '…', click: () => { void switchPersonalMode(false) } } },
@@ -1800,6 +1801,8 @@ async function exportDiagnostics(): Promise<void> {
 /** Actions the settings surfaces offer in enterprise mode. */
 async function enterpriseAction(action: unknown): Promise<{ ok: boolean; error?: string }> {
   if (action === 'use-organisation' && !enterprise.active()) { await switchPersonalMode(false); return { ok: true } }
+  // Someone who joined can leave from personal mode too; IT-managed machines cannot.
+  if (action === 'sign-out' && !enterprise.active() && enterprise.status().joined === true) { await signOutOfOrganisation(); return { ok: true } }
   if (!enterprise.active()) return { ok: false, error: 'not managed' }
   if (action === 'sync') {
     if (enterprise.source.kind !== 'server') return { ok: false, error: localeChinese() ? '文件模式的配置由 IT 放在本机，修改后重启客户端生效' : 'File-mode configuration is read at start-up; restart the client after IT updates it' }
@@ -1810,6 +1813,41 @@ async function enterpriseAction(action: unknown): Promise<{ ok: boolean; error?:
   if (action === 'sign-out') { await signOutOfOrganisation(); return { ok: true } }
   if (action === 'use-personal') { await switchPersonalMode(true); return { ok: true } }
   return { ok: false, error: 'unknown action' }
+}
+
+/**
+ * Settings → Organisation → Join: find the server, ask the person (naming the
+ * organisation and its address), sign in in their browser, then restart into
+ * the organisation. The native confirmation is the guard: whatever asked for
+ * this, nothing happens until the person agrees in the client's own dialog.
+ */
+async function joinOrganisation(value: unknown): Promise<{ saved: boolean; error?: string }> {
+  if (typeof value !== 'string') return { saved: false, error: 'invalid request' }
+  const chinese = localeChinese()
+  const result = await enterprise.joinOrganisation(value, async (organization, server, check) => {
+    const host = new URL(server).host
+    const extra = check.plainHttp
+      ? (chinese
+        ? '\n\n这是内网 HTTP 地址：登录后会用加入地址里的校验码核对组织公钥，对不上就不会加入。登录信息在内网里不加密传输。'
+        : '\n\nThis is an HTTP address on your internal network: after sign-in the organisation\'s keys are checked against the code in the join address, and nothing is joined on a mismatch. Sign-in traffic is not encrypted on that network.')
+      : check.checked
+        ? (chinese ? '\n\n登录后会用加入地址里的校验码核对组织公钥。' : '\n\nAfter sign-in the organisation\'s keys are checked against the code in the join address.')
+        : ''
+    const answer = await dialog.showMessageBox({
+      type: 'question',
+      buttons: [chinese ? '登录并加入' : 'Sign In and Join', chinese ? '取消' : 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      message: chinese ? '加入 ' + organization + '？' : 'Join ' + organization + '?',
+      detail: (chinese
+        ? '会在浏览器里打开 ' + host + ' 的登录页，用你的公司账号登录。登录成功后客户端重启，改用组织配置的模型、插件和工具权限；组织的数据和你个人的 ~/.dsh 分开存放。之后可以随时在桌面设置里离开。'
+        : 'Your browser opens the sign-in page at ' + host + ' for your organisation account. After you sign in, the client restarts with the models, plugins and tool permissions your organisation set up; its data is kept apart from your personal ~/.dsh. You can leave any time from Desktop settings.') + extra,
+    })
+    return answer.response === 0
+  })
+  if (!result.ok) return { saved: false, ...result.error !== undefined && { error: result.error } }
+  restartApp()
+  return { saved: true }
 }
 
 async function enterpriseSkills(): Promise<{ ok: boolean; skills?: unknown; error?: string }> {
@@ -1859,7 +1897,19 @@ async function switchPersonalMode(personal: boolean, confirm = true): Promise<vo
 
 async function signOutOfOrganisation(): Promise<void> {
   const chinese = localeChinese()
-  const answer = await dialog.showMessageBox({
+  const status = enterprise.status()
+  const leaving = status.joined === true
+  const organization = status.organization ?? status.available ?? ''
+  const answer = await dialog.showMessageBox(leaving ? {
+    type: 'warning',
+    buttons: [chinese ? '离开' : 'Leave', chinese ? '取消' : 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    message: chinese ? '离开 ' + organization + '？' : 'Leave ' + organization + '?',
+    detail: chinese
+      ? '会退出企业账号，移除组织下发的模型凭据、插件配置和 Skill，并重启客户端回到个人使用。组织的会话记录保留在这台电脑上；以后可以在桌面设置里重新加入。'
+      : 'This signs you out, removes the organisation\'s model credentials, plugin settings and skills, and restarts the client for personal use. The organisation\'s sessions stay on this computer; you can join again from Desktop settings.',
+  } : {
     type: 'warning',
     buttons: [chinese ? '退出登录' : 'Sign Out', chinese ? '取消' : 'Cancel'],
     defaultId: 1,

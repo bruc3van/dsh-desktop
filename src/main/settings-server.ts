@@ -8,6 +8,8 @@ type SaveResult = { saved: boolean; error?: string }
 export interface SettingsServerOptions {
   requestRestart: () => { started: boolean; error?: string }
   enterpriseAction: (action: unknown) => Promise<{ ok: boolean; error?: string }>
+  /** Join an organisation from settings: `{ server }`, the address the person typed. */
+  joinOrganisation: (value: unknown) => Promise<SaveResult>
   /** The organisation's skill library for the signed-in person. */
   enterpriseSkills: () => Promise<{ ok: boolean; skills?: unknown; error?: string }>
   /** Install or remove one optional company skill: `{ id, installed }`. */
@@ -140,6 +142,10 @@ export function createSettingsServer(options: SettingsServerOptions) {
           result => { writeJson(res, result.ok ? 200 : 409, result) },
           (error: unknown) => { writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) }) },
         )
+        return
+      }
+      if (pathname === '/desktop/enterprise/join' && req.method === 'POST') {
+        readSettingsBody(req, res, 'server', options.joinOrganisation, 409)
         return
       }
       if (pathname === '/desktop/enterprise/skills') {

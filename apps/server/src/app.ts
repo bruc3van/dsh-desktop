@@ -8,7 +8,7 @@ import { createServer, type Server } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { createPublicKey } from 'node:crypto'
 import {
-  API, checkDeviceProof, DEVICE_ID_HEADER, DEVICE_PROOF_HEADER, DEVICE_PROOF_WINDOW_MS, ENROLLMENT_SCHEMA, PROTOCOL_VERSION,
+  API, checkDeviceProof, DEVICE_ID_HEADER, DEVICE_PROOF_HEADER, DEVICE_PROOF_WINDOW_MS, ENROLLMENT_SCHEMA, keyFingerprint, PROTOCOL_VERSION,
   validateProfileSpec, type AuditBatch, type DiscoveryResponse, type SkillListResponse, type Enrollment, type EnrollRequest, type StatusReport, type WatchResponse,
 } from '@dsh-desktop-pro/protocol'
 import { queryAudit, verifyAudit } from './audit.ts'
@@ -213,6 +213,21 @@ export async function createApp(options: AppOptions): Promise<App> {
     }
     return { person, deviceId, body }
   }
+
+  /**
+   * The enrollment for a person who joined from the client instead of being
+   * enrolled by IT. Only a signed-in device gets it: the organisation's keys
+   * and the fact that this machine belongs to it come after the person's own
+   * sign-in. Never `allowPersonal` — that is IT's call for machines it manages,
+   * and someone who joined can always leave again.
+   */
+  router.get(API.enrollment, async (ctx) => {
+    const { person, deviceId } = await device(ctx)
+    const tenant = await store.tenant()
+    const enrollment: Enrollment = { schema: ENROLLMENT_SCHEMA, version: 1, server: new URL(config.publicUrl).origin, organization: { id: tenant.id, name: tenant.name }, keys: await store.publicKeys() }
+    await store.audit({ actorType: 'device', actorId: person.id, action: 'device.joined', target: deviceId })
+    sendJson(ctx.res, 200, enrollment)
+  })
 
   router.post(API.devices, async (ctx) => {
     const { person } = await signedIn(ctx)
@@ -585,6 +600,19 @@ export async function createApp(options: AppOptions): Promise<App> {
     if (ctx.url.searchParams.get('personal') === '1') enrollment.allowPersonal = true
     ctx.res.setHeader('content-disposition', 'attachment; filename="enrollment.json"')
     sendJson(ctx.res, 200, enrollment)
+  })
+
+  /**
+   * The address people paste into the client to join by themselves. The
+   * fragment carries the check code of the organisation's keys: browsers and
+   * clients never send it to the server, and over plain HTTP it is what tells
+   * the client the keys it received are this organisation's.
+   */
+  router.get('/admin/api/join-address', async (ctx) => {
+    await admin(ctx, false)
+    const fingerprint = keyFingerprint(await store.publicKeys())
+    const server = new URL(config.publicUrl).origin
+    sendJson(ctx.res, 200, { server, fingerprint, address: server + '/#key=' + fingerprint, secure: server.startsWith('https:') })
   })
 
   /** Built-in gateway: requests per person over the last days. */

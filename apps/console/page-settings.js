@@ -34,7 +34,10 @@ const PLATFORMS = {
 
 export async function renderDistribution(ctx) {
   const personal = ctx.query.get('personal') === '1'
-  const enrollment = await api('GET', '/admin/api/enrollment' + (personal ? '?personal=1' : ''))
+  const [enrollment, joining] = await Promise.all([
+    api('GET', '/admin/api/enrollment' + (personal ? '?personal=1' : '')),
+    api('GET', '/admin/api/join-address'),
+  ])
   const platform = ctx.query.get('os') ?? 'macos'
   const here = (changes) => {
     const query = new URLSearchParams({ os: platform, ...personal && { personal: '1' }, ...changes })
@@ -46,11 +49,20 @@ export async function renderDistribution(ctx) {
   ctx.render([{ label: t('注册与分发') }], [
     pageHead({
       title: t('注册与分发'),
-      description: t('让员工电脑认识这个组织：把注册文件放进系统目录，员工打开 DSH Desktop Pro 时就只看到「使用企业账号登录」。'),
+      description: t('让员工电脑认识这个组织：把加入地址发给员工自己加入；或者把注册文件放进系统目录统一安装，员工打开 DSH Desktop Pro 时就只看到「使用企业账号登录」。'),
       actions: [h('a', { class: 'btn primary', href: '/admin/api/enrollment' + (personal ? '?personal=1' : ''), download: 'enrollment.json' }, icon('download'), t('下载 enrollment.json'))],
     }),
     h('div', { class: 'grid-2' },
       h('div', {},
+        panel({
+          title: t('员工自己加入'),
+          description: t('没有 MDM 时，把下面的加入地址发给员工。员工在 DSH Desktop Pro 的「桌面设置 → 组织」里粘贴这个地址，用公司账号登录后就加入了组织。'),
+          body: [
+            h('div', { class: 'field' }, h('div', { class: 'label' }, t('加入地址')), h('div', { class: 'title-line' }, h('code', { class: 'mono' }, joining.address), copyButton(joining.address))),
+            h('p', { class: 'muted' }, t('地址末尾的校验码对应组织的签名公钥。客户端登录后会核对它，对不上就拒绝加入，所以内网用 HTTP 也不会被同网段的人冒充。请用企业微信、邮件等其他渠道发送，不要只靠这个服务端本身告诉员工。')),
+            ...joining.secure ? [] : [callout('warn', t('服务地址是 HTTP：员工必须用带校验码的加入地址才能加入。登录令牌和组织下发的网关 Key 在内网里仍是明文传输，条件允许时请改用 HTTPS（内网 CA 也可以）。'))],
+          ],
+        }),
         panel({
           title: t('安装到员工电脑'),
           body: [

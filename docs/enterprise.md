@@ -45,6 +45,18 @@ IT places files in a system directory (not writable by standard users), via MDM,
 
 `enrollment.json` selects server mode; `managed.json` alone selects file mode. A file that is present but invalid stops the client with a message to contact IT — it never silently falls back to personal mode.
 
+### Without MDM: people join themselves
+
+Server mode also works without distributing any file. Enrollment in the console shows a **join address** such as `https://dsh.example.com/#key=7F3A-92C1-…`, ending in the check code of the organisation's signing keys. Send it to people through chat or email. After installing the client, a person opens Desktop settings → Organisation, pastes the join address and clicks "Sign in and join":
+
+1. The client asks for confirmation, naming the organisation and its server.
+2. The browser opens the company sign-in page, and the person signs in with their company account.
+3. Only after that sign-in does the client receive the organisation's signing keys, and it checks them against the code in the join address. Only on a match does it restart in enterprise mode, without a second sign-in.
+
+**No HTTPS on the internal network**: the server can use HTTP, but people must use the join address with its check code; a typed `http://` address is refused. The code guarantees the keys are the organisation's own, so nobody on the same network can pose as it. Sign-in tokens and gateway keys still cross that network unencrypted; switch to HTTPS when you can — a certificate from an internal CA, trusted by the employees' operating systems, works too.
+
+Only members in the console can sign in, so only members can join. Someone who joined can "Leave organisation" from settings or the tray at any time and return to personal use; the organisation's conversations stay on the computer. When IT has placed configuration in the system directory, that wins and settings no longer offer joining. See [ADR-0009](adr/0009-join-from-settings.md) for the reasoning.
+
 ## File mode
 
 `managed.json` is a desired-state document; see the Chinese guide for a full example and the field table below.

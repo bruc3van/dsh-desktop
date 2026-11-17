@@ -13,6 +13,13 @@
  * With neither file the client is in personal mode and behaves exactly as it
  * always has. A file that is present but invalid fails closed: the client
  * does not quietly fall back to personal mode on a managed machine.
+ *
+ * A person can also join an organisation themselves from the client's
+ * settings: after they sign in, the client writes the enrollment into its own
+ * directory (`<client home>/enterprise/enrollment.json`). That file counts
+ * only when IT has put nothing in the system directory — what IT installs
+ * always wins — and it is the person's to remove: an unreadable one is
+ * ignored rather than locking them out of their own machine.
  * @module dsh-desktop-pro/enterprise/managed-source
  */
 
@@ -30,7 +37,8 @@ export const KEYS_FILE = 'organization-keys.json'
 export type ManagedSource =
   | { kind: 'personal'; dir: string }
   | { kind: 'file'; dir: string; state: DesiredState; signed: boolean }
-  | { kind: 'server'; dir: string; enrollment: Enrollment }
+  /** `joined`: the person joined from the client's settings; the enrollment sits in `dir`, their own directory. */
+  | { kind: 'server'; dir: string; enrollment: Enrollment; joined?: true }
   | { kind: 'invalid'; dir: string; file: string; reason: string }
 
 /** The system-wide directory IT writes to. Not writable by a standard user on a managed machine. */
@@ -62,7 +70,28 @@ function readKeys(file: string): PublicKeyRecord[] | string {
   return keys
 }
 
-export function loadManagedSource(dir: string): ManagedSource {
+/**
+ * The organisation configuration for this machine: what IT installed in
+ * `dir`, else an enrollment the person joined from the client (`joinedDir`).
+ */
+export function loadManagedSource(dir: string, joinedDir?: string): ManagedSource {
+  const managed = loadSystemSource(dir)
+  if (managed.kind !== 'personal' || joinedDir === undefined) return managed
+  const joined = loadJoinedEnrollment(joinedDir)
+  return joined === undefined ? managed : { kind: 'server', dir: joinedDir, enrollment: joined, joined: true }
+}
+
+/** The enrollment the person joined, when it is still readable and valid. */
+export function loadJoinedEnrollment(dir: string): Enrollment | undefined {
+  const file = join(dir, ENROLLMENT_FILE)
+  if (!existsSync(file)) return undefined
+  const parsed = readJson(file)
+  if (!parsed.ok) return undefined
+  const enrollment = validateEnrollment(parsed.value)
+  return enrollment.ok ? enrollment.value : undefined
+}
+
+function loadSystemSource(dir: string): ManagedSource {
   const enrollmentFile = join(dir, ENROLLMENT_FILE)
   if (existsSync(enrollmentFile)) {
     const parsed = readJson(enrollmentFile)

@@ -162,9 +162,19 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + nav('updates', h('应用更新', 'App updates'))
     + '</nav></aside>'
     + '<main class="panes">'
-    // Organisation pane: shown only when this computer is enrolled.
+    // Organisation pane: the enrolled organisation, or — on a computer nobody
+    // manages — the way to join one.
     + '<section class="pane" data-pane="org" id="ent-section" hidden>'
     + '<div class="pane-head"><h1 class="pane-title">' + h('组织', 'Organisation') + '</h1></div>'
+    + '<div id="ent-join" hidden>'
+    + '<p class="lead">' + h('公司部署了 DSH Desktop Pro 管理服务端时，粘贴 IT 发给你的加入地址，在浏览器里用公司账号登录后即可加入。加入后使用组织配置的模型、插件和工具权限，组织的数据和你个人的 ~/.dsh 分开存放；随时可以离开。', 'If your company runs a DSH Desktop Pro management server, paste the join address IT sent you and sign in with your company account in the browser. You then use the models, plugins and tool permissions your organisation set up, with its data kept apart from your personal ~/.dsh. You can leave any time.') + '</p>'
+    + '<div class="group"><div class="row"><div class="field-row">'
+    + '<input id="join-url" placeholder="' + h('例如 https://dsh.example.com 或 http://10.0.0.8:8080/#key=…', 'e.g. https://dsh.example.com or http://10.0.0.8:8080/#key=…') + '" spellcheck="false" autocomplete="url" aria-label="' + h('加入地址', 'Join address') + '">'
+    + '<button type="button" id="join-go" class="primary">' + h('登录并加入', 'Sign in and join') + '</button>'
+    + '</div></div></div>'
+    + '<p class="caption status-text" id="join-status" role="status" aria-live="polite"></p>'
+    + '</div>'
+    + '<div id="ent-body">'
     + '<div class="group"><div class="row org-row"><div class="monogram" id="ent-monogram" aria-hidden="true"></div>'
     + '<div class="row-text"><div class="org-name" id="ent-org"></div><div class="org-kind" id="ent-kind"></div></div>'
     + '<span class="state" id="ent-state" hidden></span></div></div>'
@@ -184,6 +194,7 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
       '<button type="button" id="ent-sign-out" class="danger" hidden>' + h('退出企业账号', 'Sign out') + '</button>')
     + '</div>'
     + '<p class="caption" id="ent-locked"></p>'
+    + '</div>'
     + '</section>'
     // Company skills: the organisation's skill library (server mode, signed in).
     + '<section class="pane" data-pane="skills" hidden>'

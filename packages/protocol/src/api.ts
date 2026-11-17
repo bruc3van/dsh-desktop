@@ -25,6 +25,12 @@ export const API = {
   status: '/v1/status',
   audit: '/v1/audit',
   discovery: '/v1/discovery',
+  /**
+   * The organisation's enrollment (server origin, organisation, signing keys)
+   * for a signed-in device. A person who joins from the client's settings
+   * receives the keys here, after their own sign-in, never before it.
+   */
+  enrollment: '/v1/enrollment',
   /** The organisation's skill library; `/v1/skills/<id>/subscription` installs or removes an optional one. */
   skills: '/v1/skills',
 } as const
