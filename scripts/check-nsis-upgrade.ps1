@@ -331,10 +331,16 @@ function Invoke-UpgradeScenario(
       throw "Upgrade left swap directories behind: $(($swapLeft | Select-Object -ExpandProperty FullName) -join ', ')"
     }
     if ($UseExplicitTarget -and (Test-Path -LiteralPath $baselineDir)) {
-      # A different directory still goes through the baseline's own uninstaller.
+      # A different directory still goes through the baseline's own uninstaller,
+      # which this installer cannot change: v0.6.1's leaves files it cannot
+      # reach (154 on the runner). Report them rather than fail on them.
       $baselineLeft = @(Get-ChildItem -LiteralPath $baselineDir -Recurse -File -Force)
       if ($baselineLeft.Count -gt 0) {
-        throw "The baseline uninstaller left $($baselineLeft.Count) files in $baselineDir"
+        $longest = ($baselineLeft | ForEach-Object { $_.FullName.Length } | Measure-Object -Maximum).Maximum
+        Write-Step "note: the $baselineTag uninstaller left $($baselineLeft.Count) files in the old directory (longest path $longest chars)"
+        if ($env:GITHUB_STEP_SUMMARY) {
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "[upgrade] explicit-target: $baselineTag 自带的卸载程序在旧目录留下 $($baselineLeft.Count) 个文件（最长路径 $longest 字符）"
+        }
       }
     }
 
