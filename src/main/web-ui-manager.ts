@@ -174,12 +174,24 @@ export class WebUiManager {
       writeRuntimeLock(this.options.home(), {
         childPid: child.pid, desktopPid: process.pid, startedAt: Date.now(), source: dsh.source,
       })
+    })()
+    // Readiness waits for the PID record above and not for this. On Windows the
+    // identity costs a spawned PowerShell, whose own cold start can outlast the
+    // runtime's boot on a freshly installed machine — and nothing readiness
+    // does reads the identity. It only decides whether a later start may stop a
+    // survivor of this client; until it lands, such a survivor is 'unknown'
+    // (adopted when it answers, never killed), exactly as it already was for
+    // the whole of startup.
+    const identityRecorded = lockReady.then(async () => {
+      if (child.pid === undefined) return
       const identity = await readProcessIdentity(child.pid)
       if (identity !== undefined && this.generation === gen && !gen.stopped) {
+        // Synchronous read-modify-write: it cannot interleave with the origin
+        // recorded at readiness, whichever of the two runs first.
         const lock = readRuntimeLock(this.options.home())
         if (lock?.childPid === child.pid) writeRuntimeLock(this.options.home(), { ...lock, processIdentity: identity })
       }
-    })()
+    })
     let failureReported = false
     const failClosed = (error: unknown, fatal = true): void => {
       if (failureReported || exitReported) return
@@ -202,6 +214,9 @@ export class WebUiManager {
     }, this.options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS)
     gen.startupTimer.unref()
     void lockReady.catch(failClosed)
+    // A record that cannot be rewritten still fails closed, as it did when this
+    // was part of lockReady; failClosed reports once.
+    void identityRecorded.catch(failClosed)
 
     const reportExit = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (exitReported) return
