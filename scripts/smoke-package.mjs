@@ -130,9 +130,12 @@ function assertPackagedPnpm(packagedExecutable) {
 async function assertPackagedRuntimeArchive(packagedExecutable) {
   const { archive } = packagedRuntimePaths(packagedResourcesDir(packagedExecutable))
   if (!existsSync(archive)) throw new Error('packaged resources missing ' + archive)
-  const result = await verifyRuntimeArchive(archive, join(APP_DIR, '.runtime', 'node_modules'))
+  // macOS signing rewrites the unpacked Mach-O files; see verifyRuntimeArchive.
+  const result = await verifyRuntimeArchive(archive, join(APP_DIR, '.runtime', 'node_modules'),
+    { signedNative: process.platform === 'darwin' })
   console.log('✓ packaged runtime archive matches the prepared closure (' + result.files + ' files, '
-    + result.unpacked + ' unpacked, every native binary among them)')
+    + result.unpacked + ' unpacked, every native binary among them'
+    + (result.signed > 0 ? '; ' + result.signed + ' changed only by code signing' : '') + ')')
 }
 
 /**

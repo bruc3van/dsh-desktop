@@ -161,11 +161,19 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
  * Runs at prepare time against the fresh archive and again by smoke:package
  * against the one a packaged or installed app actually carries — which is what
  * catches an archive left over from an older prepare.
+ *
+ * A packaged macOS app is the one place an unpacked file may legitimately
+ * differ: code signing embeds a signature into every Mach-O binary of the
+ * bundle, the unpacked half included. With `signedNative`, an unpacked file
+ * that is a native binary both before and after need only be present; every
+ * other file, and everything inside the archive, is still compared byte for
+ * byte. The signature itself is checked by codesign and by smoke:dmg.
  * @param {string} archive Path to the runtime's `app.asar`.
  * @param {string} sourceModules The prepared `.runtime/node_modules`.
- * @returns {Promise<{ files: number, unpacked: number, bytes: number }>}
+ * @param {{ signedNative?: boolean }} [options]
+ * @returns {Promise<{ files: number, unpacked: number, signed: number, bytes: number }>}
  */
-export async function verifyRuntimeArchive(archive, sourceModules) {
+export async function verifyRuntimeArchive(archive, sourceModules, { signedNative = false } = {}) {
   const asar = loadAsar()
   // An installed archive is read by path, so an earlier read in this process
   // (the prepare-time check) must not answer for a different file.
@@ -173,6 +181,7 @@ export async function verifyRuntimeArchive(archive, sourceModules) {
   const entries = flattenHeader(asar.getRawHeader(archive).header, '', new Map())
   const failures = []
   let unpacked = 0
+  let signed = 0
   let bytes = 0
   const seen = new Set()
   for (const file of await walk(sourceModules)) {
@@ -204,7 +213,12 @@ export async function verifyRuntimeArchive(archive, sourceModules) {
         failures.push('marked unpacked but absent beside the archive: ' + key)
         continue
       }
-      if (sha256(copy) !== hash) failures.push('unpacked copy differs from the prepared closure: ' + key)
+      if (sha256(copy) === hash) continue
+      if (signedNative && isNativeBinary(key, content.subarray(0, 4)) && isNativeBinary(key, copy.subarray(0, 4))) {
+        signed += 1
+        continue
+      }
+      failures.push('unpacked copy differs from the prepared closure: ' + key)
     } else if (isNativeBinary(key, content.subarray(0, 4))) {
       failures.push('native binary packed inside the archive, where nothing can load or run it: ' + key
         + ' — extend UNPACKED_FILES or UNPACKED_PACKAGES in scripts/runtime-archive.mjs')
@@ -219,7 +233,7 @@ export async function verifyRuntimeArchive(archive, sourceModules) {
       + failures.length + ' problem' + (failures.length === 1 ? '' : 's') + '):\n' + shown
       + (failures.length > 20 ? '\n  …' : ''))
   }
-  return { files: seen.size, unpacked, bytes }
+  return { files: seen.size, unpacked, signed, bytes }
 }
 
 /** Directory holding the packaged `resources`, for scripts given an executable. */
