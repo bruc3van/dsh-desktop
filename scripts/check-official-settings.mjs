@@ -30,10 +30,10 @@ try {
     console.error('Official UI did not load:', (await page.locator('body').innerText()).slice(0, 1500))
     throw error
   })
-  // #root can render a loading screen before onboarding arrives. Let the
-  // first-run surface settle, then finish onboarding before handling the
-  // separate notice/model modal. Treating both as one loop can observe the
-  // Settings button between the two overlays and click through a blocking mask.
+  // #root can render a loading screen before onboarding arrives. Finish
+  // onboarding here; the modal dialogs that follow it (preview notice, then the
+  // signed-out Get started dialog) are cleared by openOfficialSettings, which
+  // waits for them to stop arriving instead of for a fixed time.
   await page.waitForTimeout(3_000)
   for (let step = 0; step < 8; step += 1) {
     const onboarding = page.locator('[class*="onboardingOverlay"]').last()
@@ -45,16 +45,6 @@ try {
     await page.waitForTimeout(500)
   }
   await page.waitForFunction(() => document.querySelector('[class*="onboardingOverlay"]') === null, null, { timeout: 60_000 })
-  for (let step = 0; step < 8; step += 1) {
-    const mask = page.locator('div[aria-hidden="true"][class*="_mask_"]').last()
-    if (!await mask.isVisible().catch(() => false)) break
-    const modal = page.locator('[role="presentation"]').filter({ visible: true }).last()
-    const buttons = modal.locator('button:not([disabled])').filter({ visible: true })
-    const count = await buttons.count()
-    if (count > 0) await buttons.nth(count - 1).click()
-    else await page.keyboard.press('Escape')
-    await page.waitForTimeout(500)
-  }
   const open = async () => {
     try {
       await openOfficialSettings(page)

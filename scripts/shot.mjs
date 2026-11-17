@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
-import { openOfficialSettings } from './lib/open-official-settings.mjs'
+import { openOfficialSettings, settleFirstRunDialogs } from './lib/open-official-settings.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const readmeMode = process.argv[2] === '--readme'
@@ -69,17 +69,10 @@ for (let step = 0; step < 8; step += 1) {
   await window.waitForTimeout(500)
 }
 await window.waitForFunction(() => document.querySelector('[class*="onboardingOverlay"]') === null, null, { timeout: 30000 })
-// Complete any subsequent notice/model flow before capturing the main UI.
-for (let step = 0; step < 8; step += 1) {
-  const mask = window.locator('div[aria-hidden="true"][class*="_mask_"]').last()
-  if (!await mask.isVisible().catch(() => false)) break
-  const modal = window.locator('[role="presentation"]').filter({ visible: true }).last()
-  const buttons = modal.locator('button:not([disabled])').filter({ visible: true })
-  const count = await buttons.count()
-  if (count > 0) await buttons.nth(count - 1).click()
-  else await window.keyboard.press('Escape')
-  await window.waitForTimeout(500)
-}
+// Close the preview notice and the Get started dialog that follows it before
+// capturing the main UI; see settleFirstRunDialogs for why this waits on the
+// page rather than for a fixed time.
+await settleFirstRunDialogs(window)
 await window.waitForTimeout(800)
 await shot(window, readmeMode ? 'dsh-desktop-home' : '01-empty-state')
 
