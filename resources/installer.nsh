@@ -1,10 +1,16 @@
+; Project hooks for electron-builder's assisted NSIS installer.
+;
+; scripts/windows-directory-installer.mjs adapts electron-builder's templates so
+; the app is extracted beside $INSTDIR and swapped in by rename; the macros that
+; do it live in scripts/installer-directories.nsh, included below. This file
+; keeps what is specific to this product: finding an existing installation
+; again (including across the DSH Desktop -> DSH Desktop Pro rename), shortcut
+; repair after that rename, and a silent-safe uninstall result check.
+;
 ; Assisted NSIS shows an InstFiles list under the progress bar. electron-builder
-; leaves that list empty (`SetDetailsPrint none`). ShowInstDetails keeps it open;
-; `scripts/patch-nsis-install-details.mjs` turns printing back on and asks 7-Zip
-; to report extraction percent. That same beforePack hook adds a direct-extract
-; fast path ahead of the $PLUGINSDIR\7z-out staging copy, taken only when
-; $INSTDIR is empty; see customRemoveFiles at the bottom of this file for why
-; that guard is the load-bearing part. Silent installs (`/S`) are unchanged.
+; silences it (`SetDetailsPrint none`); the adapter turns printing back on and
+; customHeader keeps the list open. Silent installs (`/S`) never show a dialog:
+; every MessageBox here carries an /SD default.
 !include LogicLib.nsh
 
 ; A nonempty recovered path identifies an existing installation in the selected
@@ -22,13 +28,13 @@ Var /GLOBAL dshPerMachineRecoveredInstallDir
 Var /GLOBAL dshPerUserOriginalInstallDir
 Var /GLOBAL dshPerMachineOriginalInstallDir
 ; One-shot product-name migration. Unlike an ordinary reinstall, this must
-; leave the user with a shortcut carrying the new name even if the legacy
-; uninstaller removed (or had already lost) the old .lnk.
+; leave the user with a shortcut carrying the new name, and with no shortcut
+; under the old name: a same-directory upgrade no longer runs the previous
+; uninstaller, which is what used to delete it.
 Var /GLOBAL dshRenamedUpgrade
-; Set when this installer had to remove the previous installation itself
-; because that version's uninstaller refused to. See dshRemovePreviousInstall.
-Var /GLOBAL dshPreviousInstallRemoved
 !endif
+
+!include "${__FILEDIR__}\..\scripts\installer-directories.nsh"
 
 ; Refresh the selected old/original pair after the install-mode page may have
 ; called setInstallModePerUser or setInstallModePerAllUsers again.
@@ -193,156 +199,59 @@ FunctionEnd
   Pop $R0
 !macroend
 
-; multiUserUi reloads InstallLocation when its mode page is left. Correct an
-; unchanged broken value before the following directory page becomes visible.
 ; electron-builder reports a failed legacy uninstall through a MessageBox that
-; carries no /SD default (handleUninstallResult in include/installUtil.nsh). A
-; silent install therefore puts up a dialog nobody can answer and waits forever
-; — as a 45-minute job timeout on CI, and as a hung installer for anyone
-; scripting an unattended upgrade. This is the hook electron-builder offers for
-; exactly that spot: keep its interactive behaviour as it was, and let a silent
-; run fail fast with the same error level instead of blocking.
+; carries no /SD default (handleUninstallResult in include/installUtil.nsh), so a
+; silent install shows a dialog nobody can answer and waits forever — a
+; 45-minute job timeout on CI, a hung installer for any scripted upgrade. Keep
+; the interactive wording, never block when silent, and report the exit code in
+; the details list.
+;
+; Only an upgrade into a different directory or install scope still runs the
+; previous uninstaller; a same-directory upgrade is a directory swap. The new
+; tree is already staged by then, so failing here removes it and leaves the
+; previous installation exactly as it was.
 ;
 ; Both variants are defined because handleUninstallResult is called once per
 ; registry root: SHELL_CONTEXT always, plus HKEY_CURRENT_USER when an all-users
 ; install cleans up a per-user one.
-; Finish the removal the previous version's uninstaller could not.
-;
-; Every in-place upgrade runs the already-installed uninstaller with
-; `--updated`, which selects electron-builder's un.atomicRMDir: it renames the
-; install directory's contents into $PLUGINSDIR before deleting them and aborts
-; the whole uninstall if any entry will not move. Running that same uninstaller
-; on that same directory with only `--updated` dropped removes all 13814 files
-; and exits 0, so nothing there is locked or unmovable — the atomic-rename step
-; is simply what does not survive. Reported from a real upgrade in
-; https://github.com/bruc3van/dsh-desktop-pro/issues/11, and reproduced by
-; `pnpm run check:nsis-upgrade`.
-;
-; The uninstaller that fails already sits on the user's machine, so nothing
-; shipped from here can repair it. What this installer can do is remove that
-; directory itself and carry on, instead of leaving the upgrade dead in the
-; water with files that were always removable.
-;
-; The bar for deleting a directory is deliberately high: the registry must name
-; it as this product's install location AND the uninstaller that registry points
-; at must still live directly inside it. Anything short of that leaves the
-; directory alone and keeps the old abort, so an unexpected shape fails closed.
-!macro dshRemovePreviousInstall ROOT_KEY
-  Push $R5
-  Push $R6
-  Push $R7
-  StrCpy $dshPreviousInstallRemoved "false"
-
-  ReadRegStr $R5 ${ROOT_KEY} "${INSTALL_REGISTRY_KEY}" InstallLocation
-  ; Tolerate a trailing separator so the parent comparison below can be exact.
-  StrCpy $R6 $R5 "" -1
-  ${If} $R6 == "\"
-    StrCpy $R5 $R5 -1
-  ${EndIf}
-
-  ; Never a bare drive root, whatever the registry says.
-  StrLen $R6 $R5
-  ${If} $R6 > 3
-    Push $R5
-    Call dshIsUsableInstallDir
-    Pop $R6
-    ${If} $R6 == "true"
-      ReadRegStr $R7 ${ROOT_KEY} "${UNINSTALL_REGISTRY_KEY}" UninstallString
-      ${If} $R7 != ""
-        Push $R7
-        Call GetInQuotes
-        Pop $R7
-        ${If} ${FileExists} "$R7"
-          Push $R7
-          Call GetFileParent
-          Pop $R6
-          ${If} $R6 == $R5
-            DetailPrint "Previous uninstaller failed; removing $R5 directly."
-            ; User data lives outside the install directory, so this is the same
-            ; scope /KEEP_APP_DATA gave the uninstaller.
-            SetOutPath $TEMP
-            RMDir /r "$R5"
-            ; Believe it only when the registered uninstaller is actually gone.
-            ${IfNot} ${FileExists} "$R7"
-              StrCpy $dshPreviousInstallRemoved "true"
-            ${EndIf}
-          ${EndIf}
-        ${EndIf}
-      ${EndIf}
-    ${EndIf}
-  ${EndIf}
-
-  Pop $R7
-  Pop $R6
-  Pop $R5
-!macroend
-
-; electron-builder reports a failed legacy uninstall through a MessageBox that
-; carries no /SD default, so a silent install shows a dialog nobody can answer
-; and waits forever — a 45-minute job timeout on CI, a hung installer for any
-; scripted upgrade. Keep its interactive wording, but only after trying to
-; finish the removal ourselves, and never block when silent.
-!macro dshUninstallResultCheck ROOT_KEY
+!macro dshUninstallResultCheck
   ${If} ${Errors}
     DetailPrint "Uninstall was not successful. Not able to launch uninstaller!"
   ${ElseIf} $R0 != 0
-    DetailPrint "Uninstall was not successful. Uninstaller error code: $R0."
-    !insertmacro dshRemovePreviousInstall ${ROOT_KEY}
-    ${If} $dshPreviousInstallRemoved == "true"
-      DetailPrint "Previous installation removed by this installer; continuing."
-    ${Else}
-      ${IfNot} ${Silent}
-        MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
-      ${EndIf}
-      SetErrorLevel 2
-      Quit
-    ${EndIf}
+    DetailPrint "旧版本卸载失败（退出码 $R0）/ Previous version's uninstaller failed (exit code $R0)"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0" /SD IDOK
+    Call dshCleanupDirectories
+    SetErrorLevel 2
+    Quit
   ${EndIf}
 !macroend
 
 !macro customUnInstallCheck
-  !insertmacro dshUninstallResultCheck SHELL_CONTEXT
+  !insertmacro dshUninstallResultCheck
 !macroend
 
 !macro customUnInstallCheckCurrentUser
-  !insertmacro dshUninstallResultCheck HKCU
+  !insertmacro dshUninstallResultCheck
 !macroend
 
 ; Remove this version's own files without the atomic-rename detour.
 ;
-; electron-builder's default removal takes two shapes: a plain uninstall moves
-; out of the directory and deletes it, while an update (`--updated`, which every
-; in-place upgrade passes) first renames every entry into $PLUGINSDIR\old-install
-; so a locked file can be rolled back, and aborts the whole uninstall when any
-; entry will not move. That rename step is what fails — see
-; https://github.com/bruc3van/dsh-desktop-pro/issues/11 and the single-variable
-; control in `pnpm run check:nsis-upgrade`: the same uninstaller on the same
-; directory exits 2 and removes nothing with `--updated`, and exits 0 removing
-; all 13814 files without it. Nothing there is locked; the detour is.
-;
-; So take the shape that works, for both cases. dshRemovePreviousInstall already
-; rescues upgrades from versions that shipped with the broken path — this is what
-; keeps every version from 0.2.6 on from needing that rescue at all.
-;
-; The trade-off is deliberate: rollback-on-locked-file goes away, so a genuinely
-; busy file now leaves its remains behind instead of restoring the old install
-; and stopping. That case is already handled upstream — CHECK_APP_RUNNING closes
-; the app before the uninstall section runs — and leftovers the installer writes
-; over beat an upgrade that cannot proceed at all.
-; This is what the beforePack direct-extract fast path checks for, and note what
-; it deliberately does NOT promise: `RMDir /r` skips any file that will not go
-; and reports nothing, so a genuinely busy file leaves the directory non-empty.
-; That is why the fast path tests $INSTDIR for emptiness instead of assuming it,
-; and hands the non-empty case back to electron-builder's staged copy with its
-; retries. Extracting straight into a directory this left leftovers in is what
-; would turn a failed upgrade into an unbootable half install.
+; This uninstaller runs on its own (Add/Remove Programs) and, with `--updated`,
+; when a later version is installed into a different directory. electron-builder's
+; `--updated` removal renames every entry into $PLUGINSDIR\old-install first and
+; aborts the whole uninstall when any entry will not move; that rename step is
+; what fails in https://github.com/bruc3van/dsh-desktop-pro/issues/11 although
+; nothing in the directory is locked. Remove the directory directly in both
+; cases. The `\\?\` prefix reaches runtime files deeper than MAX_PATH.
 !macro customRemoveFiles
   DetailPrint "Removing $INSTDIR"
   ; Move out of $INSTDIR so it can be removed.
   SetOutPath $TEMP
-  RMDir /r $INSTDIR
+  RMDir /r "\\?\$INSTDIR"
 !macroend
 
+; multiUserUi reloads InstallLocation when its mode page is left. Correct an
+; unchanged broken value before the following directory page becomes visible.
 !macro customInstallModeLeave
   !ifndef BUILD_UNINSTALLER
     !insertmacro dshRestoreUnchangedInstallTarget
@@ -358,9 +267,9 @@ FunctionEnd
   ; capture $INSTDIR, while preserving an explicit /D= target.
   !insertmacro dshRestoreUnchangedInstallTarget
   ${If} $dshRecoveredInstallDir != ""
-    ; The legacy uninstaller initializes itself from this key before removing
-    ; files. Repair it so `_?=$installationDir` and the uninstaller agree on the
-    ; same absolute directory.
+    ; Both the same-directory check and, for a different directory, the legacy
+    ; uninstaller read this key. Repair it so they agree on the same absolute
+    ; directory as `_?=$installationDir`.
     WriteRegStr SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation "$dshRecoveredInstallDir"
   ${EndIf}
   ${If} $installMode == "all"
@@ -369,16 +278,31 @@ FunctionEnd
   ${EndIf}
 !macroend
 
-; Runs after electron-builder's normal shortcut handling. Only a product-name
-; migration gets this repair; ordinary reinstall/update shortcut preferences
-; remain untouched.
+; Runs after registration and electron-builder's shortcut handling.
 !macro customInstall
+  ; The new tree is in place and registered; the backup can go.
+  !insertmacro dshFinishDirectories
+  ; Only a product-name migration gets this repair; ordinary reinstall/update
+  ; shortcut preferences remain untouched.
   ${If} $dshRenamedUpgrade == "true"
-  ${AndIfNot} ${isNoDesktopShortcut}
-  ${AndIfNot} ${FileExists} "$newDesktopLink"
-    CreateShortCut "$newDesktopLink" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+    ; The old-name shortcuts point into the replaced directory at an executable
+    ; that no longer exists. The previous uninstaller used to delete them.
+    ${If} $oldDesktopLink != $newDesktopLink
+    ${AndIf} ${FileExists} "$oldDesktopLink"
+      WinShell::UninstShortcut "$oldDesktopLink"
+      Delete "$oldDesktopLink"
+    ${EndIf}
+    ${If} $oldStartMenuLink != $newStartMenuLink
+    ${AndIf} ${FileExists} "$oldStartMenuLink"
+      WinShell::UninstShortcut "$oldStartMenuLink"
+      Delete "$oldStartMenuLink"
+    ${EndIf}
+    ${IfNot} ${isNoDesktopShortcut}
+    ${AndIfNot} ${FileExists} "$newDesktopLink"
+      CreateShortCut "$newDesktopLink" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+      WinShell::SetLnkAUMI "$newDesktopLink" "${APP_ID}"
+    ${EndIf}
     ClearErrors
-    WinShell::SetLnkAUMI "$newDesktopLink" "${APP_ID}"
     System::Call 'Shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
   ${EndIf}
 !macroend

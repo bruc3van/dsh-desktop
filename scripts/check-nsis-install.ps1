@@ -1,32 +1,28 @@
 <#
 .SYNOPSIS
-  Install the freshly built NSIS package once and prove which extraction path
-  ran and that nothing was lost on the way.
+  Install the freshly built NSIS package and prove it went through the
+  directory swap and left exactly the packaged tree behind.
 
 .DESCRIPTION
-  scripts/patch-nsis-install-details.mjs splices a direct-extract fast path in
-  front of electron-builder's staged copy. The fast path is roughly three times
-  quicker, and it is only correct under two conditions: $INSTDIR must be empty,
-  and $INSTDIR must be short enough that the deepest packed file still lands
-  inside MAX_PATH. Both failure modes are silent — 7-Zip drops what it cannot
-  write and sets no error flag, so a broken guard still produces exit code 0
-  and an executable that starts.
+  The installer extracts into "<target>.new-<GUID>" beside the install
+  directory and renames it into place (scripts/installer-directories.nsh).
+  An exit code of 0 proves little on its own, so this script asserts what
+  distinguishes that path from electron-builder's own:
 
-  So neither "the installer exited 0" nor "a stray file survived" is evidence.
-  This script asserts the two things that actually distinguish the paths:
-
-    * which branch ran, observed directly — the staged copy materialises
-      $PLUGINSDIR\7z-out under %TEMP%\ns*.tmp while it works, and the fast path
-      never creates it;
-    * that the installed tree has every file release/win-unpacked has, so a
-      guard that wrongly allowed the fast path is caught by the files it drops
-      rather than by nobody noticing.
+    * the staging directory "<target>.new-*" appears while the installer runs,
+      and electron-builder's "$PLUGINSDIR\7z-out" (TEMP\ns*.tmp) never does;
+    * afterwards no "<target>.new-*" or "<target>.old-*" sibling is left;
+    * the installed tree is exactly release/win-unpacked plus the uninstaller
+      and the two 7-Zip licence files: nothing missing, nothing extra.
 
   Scenarios:
-    fast   empty target, short path            -> direct extract
-    dirty  target seeded with a leftover file  -> staged copy
-    deep   empty target, 48 characters past the installer's MAX_PATH budget
-                                               -> staged copy
+    fast     empty target, short path                 -> installed
+    dirty    target holds a file that is not ours      -> refused (exit 2),
+                                                          folder untouched
+    deep     empty target deep enough that the longest packed path passes
+             300 characters                           -> installed, nothing lost
+    replace  install, plant stale files in the install, install again into
+             the same directory                       -> stale files gone
 
   The product's HKCU registration and desktop shortcut are backed up, removed
   for the duration and restored afterwards, so an installation already on the
@@ -37,7 +33,7 @@
   ./scripts/check-nsis-install.ps1 -Scenario fast -Smoke
 #>
 param(
-  [ValidateSet('fast', 'dirty', 'deep')]
+  [ValidateSet('fast', 'dirty', 'deep', 'replace')]
   [string]$Scenario = 'fast',
   [string]$Installer = '',
   [switch]$Smoke
@@ -53,13 +49,15 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 $appDir = Split-Path -Parent $PSScriptRoot
 $releaseDir = Join-Path $appDir 'release'
 $unpacked = Join-Path $releaseDir 'win-unpacked'
-$budgetFile = Join-Path $appDir '.build\nsis-path-budget.json'
 $productKey = 'HKCU:\Software\986c9051-a721-5678-bb71-26cd03957e6c'
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\986c9051-a721-5678-bb71-26cd03957e6c'
 $productKeyReg = 'HKCU\Software\986c9051-a721-5678-bb71-26cd03957e6c'
 $uninstallKeyReg = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\986c9051-a721-5678-bb71-26cd03957e6c'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcut = Join-Path $desktop 'DSH Desktop Pro.lnk'
+$uninstallerName = 'Uninstall DSH Desktop Pro.exe'
+# Written by the installer itself, not part of win-unpacked.
+$installerWritten = @($uninstallerName, '7zip-installer-LICENSE.txt', '7zip-installer-COPYING.txt')
 
 function Write-Step([string]$Message) {
   Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $Message)
@@ -84,6 +82,74 @@ function Import-RegistryKey([string]$Key, [string]$Source) {
   }
 }
 
+function Get-RelativeFiles([string]$Root) {
+  @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force |
+    ForEach-Object { $_.FullName.Substring($Root.Length + 1) })
+}
+
+function Get-SwapSiblings([string]$Target) {
+  $parent = Split-Path -Parent $Target
+  $leaf = Split-Path -Leaf $Target
+  @(Get-ChildItem -LiteralPath $parent -Directory -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "$leaf.new-*" -or $_.Name -like "$leaf.old-*" } |
+    Select-Object -ExpandProperty FullName)
+}
+
+# Run the installer silently and watch which directories it creates.
+function Invoke-WatchedInstall([string]$Target) {
+  $parent = Split-Path -Parent $Target
+  $leaf = Split-Path -Leaf $Target
+  $result = [ordered]@{ ExitCode = $null; Seconds = 0.0; SawStaging = $false; SawTempCopy = $false }
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $process = Start-Process -FilePath $installerFile.FullName -ArgumentList @('/S', "/D=$Target") -PassThru
+  $deadline = (Get-Date).AddSeconds(900)
+  while (-not $process.HasExited) {
+    if (@(Get-ChildItem -LiteralPath $parent -Directory -Filter "$leaf.new-*" -ErrorAction SilentlyContinue).Count -gt 0) {
+      $result.SawStaging = $true
+    }
+    foreach ($plugins in @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue)) {
+      if (Test-Path -LiteralPath (Join-Path $plugins.FullName '7z-out')) { $result.SawTempCopy = $true }
+    }
+    if ((Get-Date) -gt $deadline) { throw 'installer did not finish within 900 seconds' }
+    Start-Sleep -Milliseconds 100
+  }
+  $process.WaitForExit()
+  $clock.Stop()
+  $result.ExitCode = $process.ExitCode
+  $result.Seconds = $clock.Elapsed.TotalSeconds
+  [PSCustomObject]$result
+}
+
+function Assert-NoSwapLeftovers([string]$Target) {
+  $left = Get-SwapSiblings $Target
+  if ($left.Count -gt 0) { throw "scenario '$Scenario' left swap directories behind: $($left -join ', ')" }
+}
+
+function Assert-SwappedInstall($Run, [string]$Target, [string]$What) {
+  if ($Run.ExitCode -ne 0) { throw "$What exited with code $($Run.ExitCode) (scenario $Scenario)" }
+  Write-Step ("{0} took {1:N1}s" -f $What, $Run.Seconds)
+  if ($Run.SawTempCopy) { throw "$What extracted into `$PLUGINSDIR\7z-out: electron-builder's copy path ran" }
+  if (-not $Run.SawStaging) { throw "$What never created $Target.new-*: the directory swap did not run" }
+  Assert-NoSwapLeftovers $Target
+
+  $installed = Get-RelativeFiles $Target
+  $installedSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$installed, [StringComparer]::OrdinalIgnoreCase)
+  $missing = @($expectedFiles | Where-Object { -not $installedSet.Contains($_) })
+  if ($missing.Count -gt 0) {
+    Write-Host "The installed tree is missing $($missing.Count) file(s):"
+    foreach ($path in ($missing | Select-Object -First 20)) {
+      Write-Host ("  [{0} chars] {1}" -f ($Target.Length + 1 + $path.Length), $path)
+    }
+    throw "$What lost $($missing.Count) file(s) between release/win-unpacked and $Target"
+  }
+  $extra = @($installed | Where-Object { -not $expectedSet.Contains($_) })
+  if ($extra.Count -gt 0) {
+    throw "$What left $($extra.Count) file(s) that are not part of this version: $(($extra | Select-Object -First 20) -join ', ')"
+  }
+  Write-Step "$What installed exactly $($installed.Count) files (packed $($packed.Count) + $($installerWritten.Count) written by the installer)"
+  $installed.Count
+}
+
 if ($Installer -eq '') {
   $candidates = @(Get-ChildItem -Path $releaseDir -File -Filter 'dsh-desktop-*-win-x64.exe' -ErrorAction SilentlyContinue)
   if ($candidates.Count -ne 1) {
@@ -95,50 +161,33 @@ $installerFile = Get-Item -LiteralPath $Installer
 if (-not (Test-Path -LiteralPath $unpacked)) {
   throw "release/win-unpacked not found: $unpacked — the packed tree is what the installed tree is compared against"
 }
-if (-not (Test-Path -LiteralPath $budgetFile)) {
-  throw "missing $budgetFile — the electron-builder beforePack hook did not run"
-}
-$budget = (Get-Content -LiteralPath $budgetFile -Raw | ConvertFrom-Json).budget
 
-# What the installer should produce: everything in win-unpacked, plus the
-# uninstaller it writes itself, plus anything this scenario seeded.
-$packed = @(Get-ChildItem -LiteralPath $unpacked -Recurse -File |
-  ForEach-Object { $_.FullName.Substring($unpacked.Length + 1) })
+$packed = Get-RelativeFiles $unpacked
+$expectedFiles = @($packed) + $installerWritten
+$expectedSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$expectedFiles, [StringComparer]::OrdinalIgnoreCase)
+$longestPacked = ($packed | Measure-Object -Property Length -Maximum).Maximum
 
 $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
-$seeded = @()
 switch ($Scenario) {
   'deep' {
-    # Well beyond MAX_PATH: a one-character overflow can pass with the shell
-    # copy while longer upgrade paths silently lose runtime modules.
-    $target = $budget + 48
+    # Deep enough that the longest packed file lands past 300 characters, well
+    # beyond MAX_PATH, and its staging path deeper still.
+    $target = 300 - 1 - $longestPacked
     $prefix = Join-Path $base 'dsh-deep-'
     if ($prefix.Length -ge $target) {
       throw "cannot build a $target-character install path under $base (already $($prefix.Length))"
     }
     $installDir = $prefix + ('d' * ($target - $prefix.Length))
-    $expectStaged = $true
   }
-  'dirty' {
-    # Short suffixes on purpose: these two scenarios must fit inside the budget,
-    # and a developer's %TEMP% is far longer than the runner's D:\a\_temp.
-    $installDir = Join-Path $base ('dsh-d' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    $seeded = @('leftover.dat')
-    $expectStaged = $true
-  }
-  default {
-    $installDir = Join-Path $base ('dsh-f' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    $expectStaged = $false
-  }
+  'dirty' { $installDir = Join-Path $base ('dsh-d' + [guid]::NewGuid().ToString('N').Substring(0, 8)) }
+  'replace' { $installDir = Join-Path $base ('dsh-r' + [guid]::NewGuid().ToString('N').Substring(0, 8)) }
+  default { $installDir = Join-Path $base ('dsh-f' + [guid]::NewGuid().ToString('N').Substring(0, 8)) }
 }
 # NSIS /D= must be the final, unquoted argument.
 if ($installDir.Contains(' ')) { throw "install path must not contain spaces: $installDir" }
-if ($Scenario -ne 'deep' -and $installDir.Length -gt $budget) {
-  throw "scenario '$Scenario' needs an install path within the $budget-character budget, got $($installDir.Length)"
-}
 
 Write-Step "scenario=$Scenario  installer=$($installerFile.Name)"
-Write-Step "target=$installDir ($($installDir.Length) chars, budget $budget)"
+Write-Step "target=$installDir ($($installDir.Length) chars; longest packed path $longestPacked)"
 
 $backup = Join-Path ([System.IO.Path]::GetTempPath()) ('dsh-nsis-install-backup-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $backup | Out-Null
@@ -146,7 +195,8 @@ $hadProductKey = Test-Path -Path $productKey
 $hadUninstallKey = Test-Path -Path $uninstallKey
 $hadShortcut = Test-Path -LiteralPath $shortcut
 $installerStateIsolated = $false
-$uninstaller = Join-Path $installDir 'Uninstall DSH Desktop Pro.exe'
+$uninstaller = Join-Path $installDir $uninstallerName
+$summary = ''
 
 try {
   # --- shield an installation that may already be on this machine ----------
@@ -160,72 +210,53 @@ try {
   Remove-Item -Path $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
 
-  if ($seeded.Count -gt 0) {
-    New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-    foreach ($name in $seeded) {
-      Set-Content -LiteralPath (Join-Path $installDir $name) -Value 'left behind by an uninstall that could not delete it'
+  switch ($Scenario) {
+    'dirty' {
+      # Not ours: no registration, no product executable. Replacing it would
+      # move the folder away and delete it, so the installer must refuse.
+      New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+      $foreign = Join-Path $installDir 'leftover.dat'
+      Set-Content -LiteralPath $foreign -Value 'a file this installer does not own'
+      $before = (Get-FileHash -LiteralPath $foreign).Hash
+      $run = Invoke-WatchedInstall $installDir
+      Write-Step ("installer exited {0} after {1:N1}s" -f $run.ExitCode, $run.Seconds)
+      if ($run.ExitCode -ne 2) { throw "a non-empty foreign folder was not refused (exit $($run.ExitCode), expected 2)" }
+      Assert-NoSwapLeftovers $installDir
+      $now = @(Get-RelativeFiles $installDir)
+      if ($now.Count -ne 1 -or $now[0] -ne 'leftover.dat' -or (Get-FileHash -LiteralPath $foreign).Hash -ne $before) {
+        throw "the refused folder was changed: $($now -join ', ')"
+      }
+      if (Test-Path -Path $productKey) { throw 'a refused install still wrote the product registration' }
+      Write-Step 'non-empty foreign folder refused and left untouched'
+      $summary = '[install] dirty: 拒绝非空的非本产品目录（退出码 2），目录原样保留'
     }
-    Write-Step "seeded $($seeded -join ', ') into the target"
-  }
-
-  # --- install, watching which extraction path runs ------------------------
-  $sawStaging = $false
-  $clock = [Diagnostics.Stopwatch]::StartNew()
-  $process = Start-Process -FilePath $installerFile.FullName -ArgumentList @('/S', "/D=$installDir") -PassThru
-  $deadline = (Get-Date).AddSeconds(900)
-  while (-not $process.HasExited) {
-    # The staged copy extracts into $PLUGINSDIR\7z-out; the fast path never
-    # creates that directory. This is the only externally visible difference
-    # between the two paths, and it is what makes this test more than a
-    # restatement of "the installer exited 0".
-    foreach ($plugins in @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue)) {
-      if (Test-Path -LiteralPath (Join-Path $plugins.FullName '7z-out')) { $sawStaging = $true }
+    'replace' {
+      $first = Invoke-WatchedInstall $installDir
+      [void](Assert-SwappedInstall $first $installDir 'first install')
+      # What an older version would have left: a file at the root and one deep
+      # in the runtime tree, neither shipped by this build.
+      $stale = @('stale-from-old-version.dll', 'resources\dsh-runtime\app.asar.unpacked\stale-module.js')
+      foreach ($name in $stale) {
+        Set-Content -LiteralPath (Join-Path $installDir $name) -Value 'stale'
+      }
+      $second = Invoke-WatchedInstall $installDir
+      $count = Assert-SwappedInstall $second $installDir 'reinstall into the same directory'
+      $registered = (Get-ItemProperty -Path $productKey -Name InstallLocation).InstallLocation
+      if ($registered -ne $installDir) { throw "InstallLocation mismatch: expected $installDir, got $registered" }
+      Write-Step 'stale files of the replaced installation are gone'
+      $summary = ('[install] replace: 首装 {0:N1}s，同目录覆盖 {1:N1}s / {2} 个文件（无残留）' -f $first.Seconds, $second.Seconds, $count)
     }
-    if ((Get-Date) -gt $deadline) { throw 'installer did not finish within 900 seconds' }
-    Start-Sleep -Milliseconds 200
-  }
-  $process.WaitForExit()
-  $clock.Stop()
-  if ($process.ExitCode -ne 0) {
-    throw "installer exited with code $($process.ExitCode) (scenario $Scenario)"
-  }
-
-  $branch = if ($sawStaging) { 'staged copy' } else { 'direct extract' }
-  $wanted = if ($expectStaged) { 'staged copy' } else { 'direct extract' }
-  Write-Step ("took {0:N1}s via the {1}" -f $clock.Elapsed.TotalSeconds, $branch)
-  if ($sawStaging -ne $expectStaged) {
-    throw "scenario '$Scenario' ran the $branch, expected the $wanted"
-  }
-
-  # --- and prove the tree is whole ----------------------------------------
-  $installed = @(Get-ChildItem -LiteralPath $installDir -Recurse -File |
-    ForEach-Object { $_.FullName.Substring($installDir.Length + 1) })
-  $installedSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$installed)
-  $missing = @($packed | Where-Object { -not $installedSet.Contains($_) })
-  if ($missing.Count -gt 0) {
-    Write-Host "The installed tree is missing $($missing.Count) packed file(s):"
-    foreach ($path in ($missing | Select-Object -First 20)) {
-      Write-Host ("  [{0} chars] {1}" -f ($installDir.Length + 1 + $path.Length), $path)
+    default {
+      $run = Invoke-WatchedInstall $installDir
+      $count = Assert-SwappedInstall $run $installDir 'install'
+      $summary = ('[install] {0}: {1:N1}s / {2} 个文件（安装目录 {3} 字符）' -f $Scenario, $run.Seconds, $count, $installDir.Length)
     }
-    throw "scenario '$Scenario' lost $($missing.Count) file(s) between release/win-unpacked and $installDir"
-  }
-  $executable = Join-Path $installDir 'DSH Desktop Pro.exe'
-  if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "installed executable not found: $executable"
-  }
-  if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
-    throw "installed uninstaller not found: $uninstaller"
-  }
-  $expected = $packed.Count + 1 + $seeded.Count   # + the uninstaller it writes
-  Write-Step "installed $($installed.Count) files (packed $($packed.Count) + uninstaller + $($seeded.Count) seeded = $expected), none missing"
-
-  if ($env:GITHUB_STEP_SUMMARY) {
-    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (
-      '[install] {0}: {1:N1}s / {2} 个文件 / {3}（安装目录 {4} 字符，预算 {5}）' -f
-        $Scenario, $clock.Elapsed.TotalSeconds, $installed.Count, $branch, $installDir.Length, $budget)
   }
 
-  if ($Smoke) {
+  if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary }
+
+  if ($Smoke -and $Scenario -ne 'dirty') {
+    $executable = Join-Path $installDir 'DSH Desktop Pro.exe'
     Push-Location $appDir
     try {
       node scripts/smoke-package.mjs "$executable"
@@ -252,6 +283,9 @@ finally {
       Write-Step 'test install uninstalled'
     }
     Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($sibling in (Get-SwapSiblings $installDir)) {
+      Remove-Item -LiteralPath $sibling -Recurse -Force -ErrorAction SilentlyContinue
+    }
   }
 
   $restoreFailures = [System.Collections.Generic.List[string]]::new()
