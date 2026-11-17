@@ -14,11 +14,16 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
   throw 'check-nsis-upgrade.ps1 is Windows-only'
 }
 
-# v0.3.0 remains tagged, but its GitHub Release (and Windows installer) was
-# removed. Use the oldest still-published DSH Desktop NSIS installer.
-$baselineTag = 'v0.4.0'
-$baselineAsset = 'dsh-desktop-0.4.0-win-x64.exe'
-$baselineSha256 = '4b071a86e2c201eb8cc5b504a967b3530ba98a2105b226e288ddc8949dcf81be'
+# The latest stable release: the in-app updater moves users from whatever they
+# run straight to the newest build, so this is the upgrade nearly every user
+# takes. 0.6.1 also predates the rename to DSH Desktop Pro and ships the runtime
+# as loose files, so one run covers the rename migration and the move to the
+# runtime archive, with the uninstaller users actually have.
+# The SHA-256 is the digest GitHub records for the release asset.
+$baselineTag = 'v0.6.1'
+$baselineAsset = 'dsh-desktop-0.6.1-win-x64.exe'
+$baselineSha256 = 'b0843d168949a765f4383e042afda79abf82d554b978468e58bbe2d1c5bba02b'
+$baselineRepo = 'bruc3van/dsh-desktop-pro'
 $productKey = 'HKCU:\Software\986c9051-a721-5678-bb71-26cd03957e6c'
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\986c9051-a721-5678-bb71-26cd03957e6c'
 $desktop = [Environment]::GetFolderPath('Desktop')
@@ -282,8 +287,7 @@ function Invoke-UpgradeScenario(
       throw "Baseline executable was not installed at the custom directory: $baselineExe"
     }
 
-    # Upgrade an intact v0.4.0 installation; pre-0.3 rename/path repair
-    # scenarios are no longer part of the release validation baseline.
+    # Upgrade an intact baseline installation.
 
     $arguments = @('/S')
     if ($UseExplicitTarget) {
@@ -394,7 +398,7 @@ try {
     if ($token) {
       $env:GH_TOKEN = $token
       Write-Step "download $baselineTag Windows installer with gh"
-      & gh release download $baselineTag --repo bruc3van/dsh-desktop --pattern $baselineAsset --dir $fixtureRoot --clobber
+      & gh release download $baselineTag --repo $baselineRepo --pattern $baselineAsset --dir $fixtureRoot --clobber
       if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $baselineInstaller -PathType Leaf)) {
         $downloaded = $true
       } else {
@@ -403,7 +407,7 @@ try {
       }
     }
     if (-not $downloaded) {
-      $baselineUrl = "https://github.com/bruc3van/dsh-desktop/releases/download/$baselineTag/$baselineAsset"
+      $baselineUrl = "https://github.com/$baselineRepo/releases/download/$baselineTag/$baselineAsset"
       for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
           Write-Step "download attempt $attempt : $baselineUrl"
