@@ -30,6 +30,7 @@ $desktop = [Environment]::GetFolderPath('Desktop')
 $currentShortcut = Join-Path $desktop 'DSH Desktop Pro.lnk'
 # The baseline predates the rename to DSH Desktop Pro: its shortcut must not survive pointing at nothing.
 $baselineShortcut = Join-Path $desktop 'DSH Desktop.lnk'
+$baselineStartMenuShortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'DSH Desktop.lnk'
 $fixtureRoot = Join-Path $env:RUNNER_TEMP 'dsh-desktop-upgrade-fixtures'
 $testRoot = Join-Path $env:RUNNER_TEMP ('dsh-desktop-upgrade-' + [guid]::NewGuid().ToString('N'))
 $baselineInstaller = Join-Path $fixtureRoot $baselineAsset
@@ -194,11 +195,15 @@ function Invoke-Installer([string]$Path, [string[]]$Arguments, [int]$TimeoutSeco
     # How much of the install landed separates "never left .onInit" from "stuck
     # mid-extract", and the two point at completely different code.
     Write-Host 'What landed on disk:'
-    # NSIS unpacks into $PLUGINSDIR ($env:TEMP\ns*.tmp) and extracts the app 7z
-    # into a 7z-out folder under it, so these two answer "how far did it get"
-    # from opposite ends. Recursing all of TEMP would be neither.
+    # NSIS unpacks into $PLUGINSDIR ($env:TEMP\ns*.tmp) and stages the app in a
+    # "<target>.new-*" folder beside the target, so these answer "how far did it
+    # get" from opposite ends. Recursing all of TEMP would be neither.
     $dirs = @()
-    if ($TargetDir -ne '') { $dirs += $TargetDir }
+    if ($TargetDir -ne '') {
+      $dirs += $TargetDir
+      $dirs += @(Get-ChildItem -LiteralPath (Split-Path -Parent $TargetDir) -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "$(Split-Path -Leaf $TargetDir).*-*" } | Select-Object -ExpandProperty FullName)
+    }
     if ($BaselineDir -ne '') { $dirs += $BaselineDir }
     $dirs += @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue |
       Select-Object -ExpandProperty FullName)
@@ -305,7 +310,33 @@ function Invoke-UpgradeScenario(
     if ($missing.Count -gt 0) {
       throw "Upgrade lost $($missing.Count) packed files: $($missing -join ', ')"
     }
-    Write-Step "all $($packed.Count) packed files survived the upgrade"
+    # Only this version's files: the directory swap replaces the baseline tree
+    # instead of extracting over whatever its uninstaller left. Before the swap,
+    # an in-place upgrade from v0.6.1 kept 88 baseline files the new build does
+    # not ship. The installer itself adds the uninstaller and the licence of the
+    # 7za.exe it carries.
+    $expected = [System.Collections.Generic.HashSet[string]]::new([string[]](@($packed) + @(
+      'Uninstall DSH Desktop Pro.exe', '7zip-installer-LICENSE.txt', '7zip-installer-COPYING.txt')),
+      [StringComparer]::OrdinalIgnoreCase)
+    $extra = @($installed | Where-Object { -not $expected.Contains($_) })
+    if ($extra.Count -gt 0) {
+      throw "Upgrade left $($extra.Count) files that are not part of this version: $(($extra | Select-Object -First 20) -join ', ')"
+    }
+    Write-Step "the upgraded directory holds exactly this version's $($installed.Count) files ($($packed.Count) packed)"
+    $parent = Split-Path -Parent $targetDir
+    $leaf = Split-Path -Leaf $targetDir
+    $swapLeft = @(Get-ChildItem -LiteralPath $parent -Directory -Force |
+      Where-Object { $_.Name -like "$leaf.new-*" -or $_.Name -like "$leaf.old-*" })
+    if ($swapLeft.Count -gt 0) {
+      throw "Upgrade left swap directories behind: $(($swapLeft | Select-Object -ExpandProperty FullName) -join ', ')"
+    }
+    if ($UseExplicitTarget -and (Test-Path -LiteralPath $baselineDir)) {
+      # A different directory still goes through the baseline's own uninstaller.
+      $baselineLeft = @(Get-ChildItem -LiteralPath $baselineDir -Recurse -File -Force)
+      if ($baselineLeft.Count -gt 0) {
+        throw "The baseline uninstaller left $($baselineLeft.Count) files in $baselineDir"
+      }
+    }
 
     $currentExe = Join-Path $targetDir 'DSH Desktop Pro.exe'
     if (-not (Test-Path -LiteralPath $currentExe -PathType Leaf)) {
@@ -327,10 +358,11 @@ function Invoke-UpgradeScenario(
     if (-not (Test-Path -LiteralPath $currentShortcut -PathType Leaf)) {
       throw "Desktop shortcut is missing: $currentShortcut"
     }
-    if (Test-Path -LiteralPath $baselineShortcut -PathType Leaf) {
-      $staleTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($baselineShortcut).TargetPath
-      if (-not (Test-Path -LiteralPath $staleTarget -PathType Leaf)) {
-        throw "The pre-rename shortcut was left pointing at a missing file: $baselineShortcut -> $staleTarget"
+    # The same-directory upgrade no longer runs the baseline uninstaller that
+    # used to delete these; the installer removes them itself.
+    foreach ($stale in @($baselineShortcut, $baselineStartMenuShortcut)) {
+      if (Test-Path -LiteralPath $stale -PathType Leaf) {
+        throw "The pre-rename shortcut survived the upgrade: $stale"
       }
     }
 

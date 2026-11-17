@@ -85,8 +85,8 @@ jobs:
       - name: 校验发布产物命名约定 / Verify release artifact naming
         run: pnpm run check:release-artifacts
 
-      - name: 校验 NSIS 安装详情接线 / Verify NSIS install-details wiring
-        run: pnpm run check:nsis-details
+      - name: 校验 NSIS 目录替换安装器接线 / Verify NSIS directory-installer wiring
+        run: pnpm run check:nsis-installer
 
       - name: 类型检查 / Typecheck
         run: pnpm run typecheck
@@ -485,28 +485,34 @@ jobs:
 
       # 与 release.yml 的同名步骤逐字一致：装出来的应用能不能起来，是这里唯一
       # 回答得了、而未打包目录回答不了的问题。
-      # 三个场景合起来才说明问题。安装器退出码 0 不能证明任何事：直接解压把写不
-      # 进去的文件直接丢掉且不置错误标志，所以守卫失效的表现是「装完了、能启动、
-      # 少了几个文件」。脚本因此断言两件真正有区别的事——实际走的是哪条分支（暂
-      # 存复制会在 %TEMP%\ns*.tmp 下建出 7z-out，快速路径不会），以及装出来的树
-      # 是否包含 win-unpacked 的每一个文件。
-      - name: 验证 NSIS 安装（空目录，直接解压）/ Smoke install, direct extract
+      # 安装器把新版本解压到目标旁边的 <目标>.new-<GUID>，再改名换入（见
+      # scripts/installer-directories.nsh）。退出码 0 证明不了什么，脚本因此断言：
+      # 安装过程中出现过 .new-* 暂存目录、从未出现 electron-builder 的
+      # %TEMP%\ns*.tmp\7z-out；装完不留 .new-*/.old-*；装出来的树恰好是
+      # win-unpacked 加卸载程序和两个 7-Zip 许可证文件，不缺也不多。
+      - name: 验证 NSIS 安装（空目录）/ Smoke install, empty folder
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/check-nsis-install.ps1 -Scenario fast -Smoke
 
-      # 卸载没能删干净时必须回退，否则旧版已卸载、新版只解压一半。
-      - name: 验证 NSIS 安装（有残留，暂存复制）/ Smoke install, staged fallback
+      # 目标目录非空且不是本产品的安装时必须拒绝（退出码 2）且原样不动：改名替换
+      # 会把整个目录挪走删除。
+      - name: 验证 NSIS 安装（非本产品的非空目录，拒绝）/ Smoke install, foreign folder refused
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/check-nsis-install.ps1 -Scenario dirty -Smoke
 
-      # 安装路径深到最长打包路径会越过 MAX_PATH 时也必须回退。这一条是唯一只有
-      # 暂存复制才可能通过的场景：直接解压在这里会静默丢文件。
-      - name: 验证 NSIS 安装（超长路径，暂存复制）/ Smoke install, over-budget path
+      # 最长打包路径越过 300 字符（暂存路径更深）时也不能丢文件。
+      - name: 验证 NSIS 安装（超长路径）/ Smoke install, deep path
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/check-nsis-install.ps1 -Scenario deep
+
+      # 同目录再装一次：旧安装里新版不带的文件必须消失。
+      - name: 验证 NSIS 同目录覆盖安装 / Smoke reinstall into the same folder
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: ./scripts/check-nsis-install.ps1 -Scenario replace
 
       # Upgrade from the latest stable release (v0.6.1), the path nearly every
       # user takes; see scripts/check-nsis-upgrade.ps1 for why.
