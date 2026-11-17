@@ -154,8 +154,8 @@ No. The client only adds the index address. Whether and what to install is your 
 
 ## Related projects
 
-- [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin): source of the preset index. It collects plugin repositories daily and maintains exclusion records.
-- [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market): a standalone review-before-install market plugin you can install yourself.
+- [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro): source of the preset index. It collects plugin repositories daily and maintains exclusion records.
+- [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro): a standalone marketplace for curated plugins, browsing, installation, updates, and optional post-install AI security review.
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness): the upstream project for the official dsh and Web UI.
 
 ## License

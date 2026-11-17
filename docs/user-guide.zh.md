@@ -117,7 +117,7 @@ Linux 更新会按当前安装格式下载并校验 DEB 或 AppImage，然后打
 
 ![首次启动后，插件页的「发现」已列出精选插件](images/dsh-desktop-discover.png)
 
-这份列表来自 [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin)：每日采集带 `dsh-plugin` 标签的仓库，排除已归档、停用和不符合收录条件的项目，按 Star 取前 1000 个。**收录不代表安全背书，安装前请自行查看源码和权限。**
+这份列表来自 [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)：每日采集带 `dsh-plugin` 标签的仓库，由维护者核实收录条件，排除已归档、停用和不符合条件的项目，按 Star 排序发布精选订阅；数量随数据源更新。**收录不代表安全背书，安装前请自行查看源码和权限。**
 
 规则：
 
@@ -126,4 +126,4 @@ Linux 更新会按当前安装格式下载并校验 DEB 或 AppImage，然后打
 - **只在客户端自己启动运行时时生效。** 复用已在运行的本机实例或连接自定义地址时，不改动对方的配置。
 - 改动的是 `~/.dsh/profiles/web/package.json` 中的组合包列表，以及 `cordis.patch.yml` 中追加的一段带注释的配置；原有内容和注释原样保留。
 
-**从旧版本升级：** 0.6.0 起安装包不再内置 safer-dsh-market。已经装上的那份会继续留在 profile 里，客户端不再更新它；不需要的话可以在插件页卸载。需要「安装后 AI 审查」等功能，可以从 npm 自行安装 [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market)。
+**从旧版本升级：** 0.6.0 起安装包不再内置旧版市场 `safer-dsh-market`。已经装上的那份会继续留在 profile 里，客户端不再更新它；不需要的话可以在插件页卸载。需要「安装后 AI 审查」等功能，请先停用旧市场，再通过官方插件管理器安装并启用 [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro)（`dsh-market-pro@1.0.0`），按需重新设置配置。

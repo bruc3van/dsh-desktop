@@ -26,7 +26,7 @@ import { join } from 'node:path'
 import { DEFAULT_SCHEMA, load, Type } from 'js-yaml'
 import { WEB_PROFILE } from './web-profile.ts'
 
-/** The curated index this client offers (built from awesome-dsh-plugin). */
+/** The curated index this client offers (built from awesome-dsh-plugin-pro). */
 export const PRESET_INDEX_URL = 'https://bruc3van.com/dsh-plugins/index.json'
 
 /** The official optional bundle that mounts the Discover tab. */

@@ -154,8 +154,8 @@ IT 放好配置后，打开客户端会显示「登录 公司名」。点击后�
 
 ## 相关项目
 
-- [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin)：预置订阅列表的数据来源。每日采集插件仓库并维护排除记录。
-- [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market)：先审查再安装的独立市场插件，可自行安装。
+- [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)：预置订阅列表的数据来源。每日采集插件仓库并维护排除记录。
+- [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro)：DSH 插件市场专业版，提供精选、浏览、安装、更新及安装后 AI 安全审查，可自行安装。
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)：官方 dsh 和 Web UI 的上游项目。
 
 ## 许可证

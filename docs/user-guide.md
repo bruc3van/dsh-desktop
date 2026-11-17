@@ -119,7 +119,7 @@ You can then browse, filter, and install plugins under **Plugins** → **Discove
 
 ![After the first launch, the Plugins page's Discover tab already lists the curated plugins](images/dsh-desktop-discover.png)
 
-The index comes from [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin): repositories tagged `dsh-plugin` are collected daily, archived, disabled, and ineligible projects are excluded, and the top 1000 by stars are listed. **Being listed is not a security endorsement; review the source and permissions before installing.**
+The index comes from [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro): repositories tagged `dsh-plugin` are collected daily, maintainers verify eligibility, exclude archived, disabled, and ineligible projects, and publish curated subscription entries ranked by stars. Counts follow source updates. **Being listed is not a security endorsement; review the source and permissions before installing.**
 
 Rules:
 
@@ -128,4 +128,4 @@ Rules:
 - **Only for runtimes the client starts.** Reusing a running local instance or connecting to a Custom address leaves that service's configuration alone.
 - The edits are the bundle list in `~/.dsh/profiles/web/package.json` and one commented block appended to `cordis.patch.yml`; existing content and comments are kept as they are.
 
-**Upgrading from an earlier version:** from 0.6.0 the installer no longer bundles safer-dsh-market. A copy that is already installed stays in your profile, but the client no longer updates it; uninstall it from the Plugins page if you do not need it. For features such as AI review after installation, install [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market) from npm yourself.
+**Upgrading from an earlier version:** from 0.6.0 the installer no longer bundles the old `safer-dsh-market` plugin. A copy that is already installed stays in your profile, but the client no longer updates it; uninstall it from the Plugins page if you do not need it. For features such as AI review after installation, disable the old market, then install and enable [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro) (`dsh-market-pro@1.0.0`) through the official plugin manager and reapply your settings as needed.
