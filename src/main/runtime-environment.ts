@@ -74,7 +74,7 @@ export function createRuntimeEnvironment(options: { appDir: string; clientHome()
    */
   function bundledPnpmEntry(): string | undefined {
     const entry = app.isPackaged
-      ? join(process.resourcesPath, 'dsh-runtime.asar.unpacked', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
+      ? join(process.resourcesPath, 'dsh-runtime', 'app.asar.unpacked', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
       : join(APP_DIR, 'dsh-runtime', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
     return existsSync(entry) ? entry : undefined
   }
@@ -290,8 +290,8 @@ export function createRuntimeEnvironment(options: { appDir: string; clientHome()
 
   /**
    * The bundled dsh CLI. Release builds use pnpm deploy to materialize the
-   * complete production closure, and ship it as its own `dsh-runtime.asar`
-   * beside app.asar (scripts/runtime-archive.mjs). Only Electron's Node can
+   * complete production closure, and ship it as its own archive,
+   * `dsh-runtime/app.asar` (scripts/runtime-archive.mjs). Only Electron's Node can
    * read inside that archive — which is the Node the child runs on, and the
    * main process checking for it here. After prepare:runtime,
    * development uses that same deployed closure; otherwise it falls back to the
@@ -304,7 +304,7 @@ export function createRuntimeEnvironment(options: { appDir: string; clientHome()
     try {
       const deployed = join(APP_DIR, '.runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
       const bin = app.isPackaged
-        ? join(process.resourcesPath, 'dsh-runtime.asar', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+        ? join(process.resourcesPath, 'dsh-runtime', 'app.asar', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
         : existsSync(deployed)
           ? deployed
           : createRequire(join(APP_DIR, 'dsh-runtime', 'package.json')).resolve('@deepseek-ai/dsh/lib/bin.js')

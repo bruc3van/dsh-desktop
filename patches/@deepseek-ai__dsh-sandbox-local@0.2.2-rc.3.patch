@@ -1,7 +1,8 @@
 diff --git a/lib/index.js b/lib/index.js
+index 8820a6ddd83ea35c7df298b4a7e514a18aa9b121..785851f50005fad39e81b2badab12bcb7aecc921 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -145,7 +145,7 @@
+@@ -157,7 +157,7 @@ function defaultProbeSeatbelt(seatbeltExec, timeoutMs) {
  function defaultProbeWindowsAcl(runnerInvocation, timeoutMs) {
  	const program = runnerInvocation[0];
  	if (program === void 0) return false;
@@ -10,7 +11,7 @@ diff --git a/lib/index.js b/lib/index.js
  		...runnerInvocation.slice(1),
  		"--workspace",
  		tmpdir(),
-@@ -156,12 +156,15 @@
+@@ -168,12 +168,15 @@ function defaultProbeWindowsAcl(runnerInvocation, timeoutMs) {
  		"--",
  		"cmd",
  		"/c",
@@ -30,3 +31,20 @@ diff --git a/lib/index.js b/lib/index.js
  }
  /**
  * The runner chain per platform — selection is BY PLATFORM first, probes
+@@ -554,9 +557,14 @@ var LocalSandboxProvider = class extends SandboxProvider {
+ 			default: return assertNever(runner);
+ 		}
+ 	}
+-	/** The Landlock launcher to probe and exec (test hook over the resolved one). */
++	/**
++	 * The Landlock launcher to probe and exec (test hook over the resolved one).
++	 * dsh-desktop ships this closure inside an Electron `app.asar`, where module
++	 * resolution answers with the in-archive path; the kernel can only exec the
++	 * unpacked copy beside it, as the Computer Use and ripgrep helpers assume.
++	 */
+ 	landlockLauncher() {
+-		return this.internals.landlockLauncher ?? launcherPath();
++		return this.internals.landlockLauncher ?? launcherPath().replace(/([\\/])app\.asar(?=[\\/])/u, "$1app.asar.unpacked");
+ 	}
+ 	/** The `sandbox-exec` executable to probe and exec (test hook over the system one). */
+ 	seatbeltExec() {

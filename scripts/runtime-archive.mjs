@@ -26,9 +26,13 @@
  *   read-only already, as the official desktop app runs these same packages
  *   from `app.asar`.
  *
- * Upstream helpers already understand the layout: `dsh-util-ripgrep` and
- * `dsh-office-kit` rewrite `.asar/` to `.asar.unpacked/` before handing a path
- * to the operating system.
+ * Upstream helpers already understand the layout and rewrite an in-archive
+ * path to its unpacked copy before handing it to the operating system:
+ * `dsh-util-ripgrep` and `dsh-office-kit` for any `*.asar/`, the macOS Computer
+ * Use helper only for a segment named exactly `app.asar/`. That last one is
+ * why the archive is `resources/dsh-runtime/app.asar` and not a name of our
+ * own. Landlock's launcher had no such rewrite; this repository's patch of
+ * `@deepseek-ai/dsh-sandbox-local` adds the same `app.asar` one.
  *
  * The rules below are by name and pattern, and they can miss something.
  * `verifyRuntimeArchive` is what makes a miss impossible to ship: it reads the
@@ -48,7 +52,10 @@ const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 
 /** Where prepare:runtime writes the archive; electron-builder copies it from here. */
 export const RUNTIME_ARCHIVE_DIR = join(APP_DIR, '.runtime-archive')
-export const RUNTIME_ARCHIVE_NAME = 'dsh-runtime.asar'
+/** The archive's file name: see above for why it must be exactly this. */
+export const RUNTIME_ARCHIVE_NAME = 'app.asar'
+/** The directory under `resources` that holds the archive and its unpacked half. */
+export const RUNTIME_RESOURCES_DIR = 'dsh-runtime'
 
 /**
  * Basenames unpacked wherever they sit: native modules and libraries, Windows
@@ -58,12 +65,18 @@ export const RUNTIME_ARCHIVE_NAME = 'dsh-runtime.asar'
 export const UNPACKED_FILES = '{*.node,*.dll,*.exe,*.so,*.so.*,*.dylib,spawn-helper,rg}'
 
 /**
- * Packages unpacked whole, relative to the archive root. The LibreOffice kit's
- * platform package is an application directory its engine opens by path;
- * pnpm is unpacked so that package installs — the one runtime path that runs
- * other programs against its own files — behave exactly as before.
+ * Directories unpacked whole, relative to the archive root:
+ * - the LibreOffice kit's platform package, an application directory its
+ *   engine opens by path;
+ * - pnpm, so that package installs — the one runtime path that runs other
+ *   programs against its own files — behave exactly as before;
+ * - the system addon's platform packages, whose `bin/landlock-run` is the
+ *   Linux file-sandbox launcher (extensionless, so no file rule catches it);
+ * - the macOS Computer Use helper, which LaunchServices opens as an
+ *   application bundle, as upstream also unpacks it.
  */
-export const UNPACKED_PACKAGES = 'node_modules/{pnpm,@deepseek-ai/libreoffice-kit-*-*}'
+export const UNPACKED_PACKAGES = 'node_modules/{pnpm,@deepseek-ai/libreoffice-kit-*-*,'
+  + '@deepseek-ai/node-addon-system-*-*,@deepseek-ai/dsh-experimental-cua-macos/native/bin}'
 
 /**
  * Locations inside a packaged app's resources directory. Keep in step with
@@ -71,7 +84,7 @@ export const UNPACKED_PACKAGES = 'node_modules/{pnpm,@deepseek-ai/libreoffice-ki
  * @param {string} resources
  */
 export function packagedRuntimePaths(resources) {
-  const archive = join(resources, RUNTIME_ARCHIVE_NAME)
+  const archive = join(resources, RUNTIME_RESOURCES_DIR, RUNTIME_ARCHIVE_NAME)
   const unpacked = archive + '.unpacked'
   return {
     archive,
@@ -148,7 +161,7 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
  * Runs at prepare time against the fresh archive and again by smoke:package
  * against the one a packaged or installed app actually carries — which is what
  * catches an archive left over from an older prepare.
- * @param {string} archive Path to `dsh-runtime.asar`.
+ * @param {string} archive Path to the runtime's `app.asar`.
  * @param {string} sourceModules The prepared `.runtime/node_modules`.
  * @returns {Promise<{ files: number, unpacked: number, bytes: number }>}
  */
