@@ -16,6 +16,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { packagedRuntimePaths } from './runtime-archive.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 const RELEASE_DIR = join(APP_DIR, 'release')
@@ -67,12 +68,15 @@ if (!existsSync(executable)) throw new Error('packaged executable does not exist
 const resources = packagedResourcesDir(executable)
 const launcher = join(sourceMode ? join(APP_DIR, '.build') : resources, 'runtime-launcher.mjs')
 const gateway = join(sourceMode ? join(APP_DIR, '.build') : resources, 'dsh-cli.mjs')
-const modules = sourceMode ? join(APP_DIR, '.runtime', 'node_modules') : join(resources, 'dsh-runtime', 'node_modules')
-const pnpmEntry = join(modules, 'pnpm', 'bin', 'pnpm.mjs')
-const dshEntry = join(modules, '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+// Packaged, dsh lives inside the runtime archive (only the Electron Node this
+// script spawns can read it) and pnpm in its unpacked half, as real files.
+const sourceModules = join(APP_DIR, '.runtime', 'node_modules')
+const packaged = packagedRuntimePaths(resources)
+const pnpmEntry = sourceMode ? join(sourceModules, 'pnpm', 'bin', 'pnpm.mjs') : packaged.pnpmEntry
+const dshEntry = sourceMode ? join(sourceModules, '@deepseek-ai', 'dsh', 'lib', 'bin.js') : packaged.dshEntry
 if (!existsSync(launcher)) throw new Error('packaged runtime-launcher.mjs missing: ' + launcher)
 if (!existsSync(pnpmEntry)) throw new Error('packaged pnpm.mjs missing: ' + pnpmEntry)
-const artifacts = join(modules, 'pnpm', 'artifacts')
+const artifacts = join(dirname(dirname(pnpmEntry)), 'artifacts')
 if (existsSync(artifacts)) throw new Error('packaged pnpm artifacts/ was not pruned: ' + artifacts)
 
 // Canonicalize before computing local-tarball approval keys (macOS /tmp and

@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs'
 import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { packRuntimeArchive, verifyRuntimeArchive } from './runtime-archive.mjs'
 import { assertNoTsEntryPoints } from './ts-entry-guard.mjs'
 
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
@@ -64,7 +65,11 @@ if (code !== 0) throw new Error('dsh runtime deployment failed (code=' + String(
  * redistributed inside the installer, so those files must survive — the ~6 MB
  * they cost is the price of keeping the redistribution lawful.
  */
-const PRUNED_EXTENSIONS = ['.map', '.d.ts', '.d.cts', '.d.mts', '.pdb', '.ts']
+// `.gitkeep` is an empty directory placeholder. It goes because electron-builder
+// drops it when copying the archive's unpacked half (pnpm carries one), and the
+// archive must record exactly what ships beside it — verifyRuntimeArchive
+// refuses the mismatch.
+const PRUNED_EXTENSIONS = ['.map', '.d.ts', '.d.cts', '.d.mts', '.pdb', '.ts', '.gitkeep']
 const isPrunedFile = name => PRUNED_EXTENSIONS.some(extension => name.endsWith(extension))
 
 let prunedFiles = 0
@@ -136,10 +141,39 @@ async function collectFiles(directory, into = []) {
  *   dead files left in it.
  * - `pnpm/artifacts`: a standalone Node executable (~18 MB) this client never
  *   launches — the Agent runs `pnpm.mjs` on Electron's own Node.
+ *
+ * The rest share one bar: the package's `exports` map (or, without one, its
+ * `main`) cannot reach the directory, and nothing in the package's own runtime
+ * code refers to it.
+ *
+ * - `fontkit/src`: the unbundled sources of what `exports` serves from `dist/`.
+ * - `sharp/src`: the C++ sources of the prebuilt binary in `@img/sharp-*`.
+ * - `undici/docs`: API documentation.
+ * - `object-inspect/test`, `restructure/test`, `fast-uri/test`: test suites.
+ *
+ * What is NOT here, each checked and rejected — a `src` or `docs` directory
+ * is not dead by its name:
+ * - `koffi/src`, `restructure/src`, `protobufjs/src`, `node-fetch/src`: the
+ *   package entry points re-export from them.
+ * - `@swc/helpers/src` and the `examples` directories of
+ *   `@modelcontextprotocol/sdk`: unused by this closure, but published through
+ *   wildcard `exports`.
+ * - `@deepseek-ai/dsh/docs`, and the `README.md` and `src` of every official
+ *   package: the Agent's bundled `dsh-doc` skill answers questions about the
+ *   running installation by reading exactly those (see its
+ *   `references/locate-docs.md`).
+ * - the `sources` directory of the LibreOffice kit: the patch and build recipe
+ *   that accompany the redistributed LibreOffice binaries.
  */
 const PRUNED_DIRECTORIES = [
   ['@mixmark-io', 'domino', 'test'],
   ['pnpm', 'artifacts'],
+  ['fontkit', 'src'],
+  ['sharp', 'src'],
+  ['undici', 'docs'],
+  ['object-inspect', 'test'],
+  ['restructure', 'test'],
+  ['fast-uri', 'test'],
 ]
 
 for (const segments of PRUNED_DIRECTORIES) {
@@ -290,3 +324,11 @@ if (RUNTIME_TARGET !== undefined) {
     }
   }
 }
+
+// Last, once nothing above will change the closure again: what ships is the
+// archive of exactly this tree (see scripts/runtime-archive.mjs). The loose
+// tree stays for the checks and for development runs.
+const archive = await packRuntimeArchive(destination)
+const packed = await verifyRuntimeArchive(archive, runtimeModules)
+console.log('[runtime] packed ' + packed.files + ' files (' + (packed.bytes / 1e6).toFixed(0) + ' MB) into '
+  + relative(APP_DIR, archive) + ', ' + packed.unpacked + ' of them unpacked beside it')
