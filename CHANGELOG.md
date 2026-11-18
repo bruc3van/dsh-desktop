@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-18
+
+- 重新内置插件市场：随安装包带上 [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro) `1.0.4`（精选、浏览、安装、更新及安装后 AI 安全审查），由客户端启动本地服务时自动装进 web profile 并启用，客户端升级时一并更新。以前客户端装的 `safer-dsh-market` 会被移除；用户自己装的保留，在卸载前 DSH Market Pro 不会加载。桌面设置里可以关掉内置市场。插件加载失败导致本地服务起不来时，客户端会撤回市场并重试一次。
+- 换上新的鲸鱼图标；托盘图标铺满图标位并加粗轮廓，小尺寸下不再显得偏小发虚；macOS 菜单栏图标按鲸鱼比例横向显示。
+- 窗口标题显示「DSH Desktop」，不再是官方 Web UI 的「DeepSeek Harness」；会话名照常显示在前面。
+
 ## [0.6.1] - 2026-11-16
 
 - 修复 PTC 预设（如 OPS (PTC)）下 `run_code` 每次都以 `worker-exit` 失败的问题（[#31](https://github.com/bruc3van/dsh-desktop-pro/issues/31)）。PTC 工作进程就是客户端自身的可执行文件，需要以 Node 模式启动；此前文件沙箱会把这个设置清掉，工作进程于是作为第二个客户端实例启动并立即退出。现在只在沙箱包住的目标是客户端自身时保留 Node 模式，Agent 执行的普通命令仍然拿不到它。macOS 和 Linux 开启文件沙箱时同样适用。
