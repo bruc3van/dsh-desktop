@@ -199,8 +199,13 @@ for (const [key, value] of Object.entries(process.env)) {
 // Start with no profile: the managed launcher must initialize the profile and
 // offer the preset index before DSH composes its first plugin tree.
 const resources = packagedResourcesDir(executable)
-if (existsSync(join(resources, 'bundled-plugins'))) {
-  throw new Error('packaged app must not ship a bundled plugin payload')
+const packagedMarket = join(resources, 'bundled-plugins', 'dsh-market-pro')
+if (!existsSync(join(packagedMarket, 'package.json'))) throw new Error('packaged market payload missing')
+const packagedMarketVersion = JSON.parse(await readFile(join(packagedMarket, 'package.json'), 'utf8')).version
+for (const dependency of Object.keys(JSON.parse(await readFile(join(packagedMarket, 'package.json'), 'utf8')).dependencies ?? {})) {
+  if (!existsSync(join(packagedMarket, 'node_modules', dependency, 'package.json'))) {
+    throw new Error('packaged market payload is missing its dependency ' + dependency)
+  }
 }
 // This is the one caller that runs a PACKAGED build, where every DSH_* override
 // is ignored by design — the whole point of that gate is that a stray variable
@@ -377,6 +382,32 @@ try {
     throw new Error('packaged runtime does not serve the preset index: HTTP ' + marketResponse.status + ' ' + marketText)
   }
   console.log('✓ official Discover market serves the preset index on a first launch')
+  // A healthy settings endpoint does not prove the bundled market loaded: its
+  // guarded entry deliberately lets the Web UI survive an incompatible API.
+  for (const method of ['describe', 'getSettings', 'listInstalled']) {
+    const route = 'dshMarketPro/' + method
+    const request = () => fetch(url + '/api/' + route, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cookie.header },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'market-smoke-' + method, method: route, payload: { args: {} } }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    // The market's guarded body imports asynchronously during profile startup.
+    let response = await request()
+    const deadline = Date.now() + 30_000
+    while (response.status === 404 && Date.now() < deadline) {
+      await response.text()
+      await new Promise(resolveWait => setTimeout(resolveWait, 500))
+      response = await request()
+    }
+    const text = await response.text()
+    const body = response.ok ? JSON.parse(text) : undefined
+    if (body?.result?.ok !== true) throw new Error('packaged dsh-market-pro ' + method + ' failed: HTTP ' + response.status + ' ' + text)
+    if (method === 'describe' && body.result.value?.version !== packagedMarketVersion) {
+      throw new Error('packaged market version differs from the running service: ' + JSON.stringify(body.result.value))
+    }
+  }
+  console.log('✓ bundled dsh-market-pro describe / settings / installed APIs loaded on a first launch')
   console.log('✓ packaged app selected its bundled @deepseek-ai/dsh runtime')
   if (process.platform === 'darwin') console.log('✓ packaged app restored the macOS login-shell PATH')
   console.log('✓ packaged resources include dsh-cli.mjs')

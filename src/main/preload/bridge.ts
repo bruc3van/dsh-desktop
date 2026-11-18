@@ -4,6 +4,7 @@ import { installWindowsNotificationActivation } from '../windows-notification-ac
 
 /** Connection facts mirrored from the main process. */
 export interface ConnectionStatus {
+  marketRestartAvailable?: boolean
   mode: 'local' | 'probe' | 'connect'
   targetUrl: string
   desktopVersion: string
@@ -45,6 +46,12 @@ export const connection = {
     }>,
   switchMode: (): Promise<{ switched: boolean; mode?: 'smart' | 'connect'; error?: string }> =>
     ipcRenderer.invoke('desktop:connection:switch') as Promise<{ switched: boolean; mode?: 'smart' | 'connect'; error?: string }>,
+  /** Whether this client seats the bundled marketplace into the runtime it starts. */
+  getMarket: (): Promise<{ enabled: boolean }> =>
+    ipcRenderer.invoke('desktop:market:status') as Promise<{ enabled: boolean }>,
+  /** Turn the seat on or off; turning it off also removes the copied plugin. */
+  setMarket: (enabled: boolean): Promise<{ enabled: boolean }> =>
+    ipcRenderer.invoke('desktop:market:set', enabled) as Promise<{ enabled: boolean }>,
   /** An official Web UI answering on the default port right now, if any. */
   probeLocal: (): Promise<{ url: string | null }> =>
     ipcRenderer.invoke('desktop:connection:probe') as Promise<{ url: string | null }>,

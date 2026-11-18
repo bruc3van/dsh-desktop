@@ -133,6 +133,8 @@ jobs:
 
       - name: 验证预置插件订阅 / Verify preset plugin subscription
         run: pnpm run check:preset-subscription
+      - name: 验证内置市场接入 / Verify bundled market seat
+        run: pnpm run check:bundled-plugin
 
       # The pure-Node contract checks are offline, fast, and assert exactly the
       # invariants a release must not break (single-writer lock, platform
@@ -292,7 +294,7 @@ jobs:
         run: pnpm run check:window-state-native
 
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
-        run: pnpm run prepare:runtime && pnpm run check:preset-runtime
+        run: pnpm run prepare:runtime && pnpm run check:preset-runtime && pnpm run check:market-boot
         env:
           # node-pty ships every platform's prebuilds in one tarball; keep only
           # the matrix entry's own target (see scripts/prepare-runtime.mjs).
