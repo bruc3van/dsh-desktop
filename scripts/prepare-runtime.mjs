@@ -7,7 +7,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readFile, readdir, rm, stat } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { packRuntimeArchive, verifyRuntimeArchive } from './runtime-archive.mjs'
@@ -205,6 +205,37 @@ if (!existsSync(pnpmBin)) {
 // name if a future dependency starts shipping one. See ts-entry-guard.mjs.
 await assertNoTsEntryPoints(runtimeModules)
 console.log('[runtime] no manifest resolves to a pruned .ts entry point')
+
+/**
+ * The bundled market must resolve only from the profile, for both its bundle
+ * patch and its Loader module. Left beside DSH, installation-first bundle
+ * resolution would disagree with a user's profile-local upgrade — so the
+ * package moves out of the runtime closure into its own payload.
+ *
+ * The closure is hoisted, so the market's own dependencies sit at the top of
+ * runtimeModules rather than under the package. Each one it declares is copied
+ * (not moved: DSH may use the same package) into the payload's node_modules,
+ * unless pnpm already nested a private copy there.
+ */
+const MARKET = 'dsh-market-pro'
+const bundledPlugins = join(destination, 'bundled-plugins')
+const marketPayload = join(bundledPlugins, MARKET)
+await mkdir(bundledPlugins, { recursive: true })
+await rename(join(runtimeModules, MARKET), marketPayload)
+const marketManifest = JSON.parse(await readFile(join(marketPayload, 'package.json'), 'utf8'))
+const copyMarketDependency = async (name, from) => {
+  const nested = join(marketPayload, 'node_modules', name)
+  if (existsSync(join(nested, 'package.json'))) return
+  const hoisted = join(from, name)
+  if (!existsSync(join(hoisted, 'package.json'))) throw new Error(MARKET + ' dependency ' + name + ' is missing from the runtime closure')
+  await cp(hoisted, nested, { recursive: true, dereference: true })
+  const manifest = JSON.parse(await readFile(join(hoisted, 'package.json'), 'utf8'))
+  for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+    if (!existsSync(join(nested, 'node_modules', dependency, 'package.json'))) await copyMarketDependency(dependency, from)
+  }
+}
+for (const name of Object.keys(marketManifest.dependencies ?? {})) await copyMarketDependency(name, runtimeModules)
+console.log('[runtime] ' + MARKET + '@' + marketManifest.version + ' isolated from DSH installation module lookup')
 
 /**
  * node-pty is the one package whose npm tarball ships prebuilds for every

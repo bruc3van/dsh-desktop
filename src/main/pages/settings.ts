@@ -143,6 +143,13 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + 'body{--choice-text:#1d1d1f;--choice-muted:#6e6e73;--choice-border:rgba(0,0,0,.12);--choice-surface:rgba(0,0,0,.05);--choice-inverse:#fff}'
     + '@media(prefers-color-scheme:dark){body{--choice-text:#f5f5f7;--choice-muted:#a1a1a6;--choice-border:rgba(255,255,255,.1);--choice-surface:rgba(255,255,255,.06);--choice-inverse:#636366}}'
     + choiceControlsCss('body', 'primary')
+    // An on/off switch, like the macOS one.
+    + '#market-toggle,#market-toggle:hover{position:relative;flex-shrink:0;width:38px;height:22px;min-height:22px;padding:0;border:0;border-radius:999px;background:var(--sep)}'
+    + '#market-toggle[aria-checked="true"]{background:var(--accent)}'
+    + '#market-toggle::before{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s ease;pointer-events:none}'
+    + '#market-toggle[aria-checked="true"]::before{transform:translateX(16px)}'
+    + '#market-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}'
+    + '@media(prefers-reduced-motion:reduce){#market-toggle::before{transition:none}}'
     // Segmented controls sit at the end of a row, sized like the macOS ones.
     + 'body [role="radiogroup"]{border-radius:7px;padding:2px;border:0}'
     + 'body [role="radiogroup"]>button,body [role="radiogroup"]>button:hover{min-height:22px;padding:2px 14px;border-radius:5px;font-size:12.5px}'
@@ -264,6 +271,15 @@ export function renderSettingsPageHtml(chinese: boolean, icon: string): string {
     + '<div class="row stack"><div class="row-label">' + h('位置', 'Location') + '</div><div class="row-value path-text" id="data-path"></div></div>'
     + '</div>'
     + '<p class="caption" id="data-note" aria-live="polite">' + h('正在读取数据环境…', 'Reading data environment…') + '</p>'
+    // The bundled marketplace lives in the profile of this data environment.
+    + '<h2 class="group-title">' + h('插件市场', 'Plugin marketplace') + '</h2>'
+    + '<div class="group">'
+    + '<div class="row"><div class="row-text"><div class="row-label" id="market-label">' + h('启动时接入内置 DSH Market Pro', 'Load the bundled DSH Market Pro on startup') + '</div>'
+    + '<div class="row-help status-text" id="market-status" aria-live="polite"></div></div>'
+    + '<div class="row-end"><button id="market-restart" class="primary" type="button" hidden>' + h('立即重启', 'Restart now') + '</button>'
+    + '<button id="market-toggle" type="button" role="switch" aria-checked="false" aria-labelledby="market-label" disabled></button></div></div>'
+    + '</div>'
+    + '<p class="caption" id="market-note" aria-live="polite"></p>'
     + '</section>'
     // App updates pane
     + '<section class="pane" data-pane="updates" hidden>'

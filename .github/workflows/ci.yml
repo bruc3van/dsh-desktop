@@ -120,6 +120,8 @@ jobs:
 
       - name: 验证预置插件订阅 / Verify preset plugin subscription
         run: pnpm run check:preset-subscription
+      - name: 验证内置市场接入 / Verify bundled market seat
+        run: pnpm run check:bundled-plugin
 
       - name: 验证企业协议、对账与服务端 / Verify enterprise protocol, reconciler and server
         run: |
@@ -143,7 +145,7 @@ jobs:
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
         id: runtime
         if: ${{ !cancelled() && runner.os != 'Linux' && steps.build.outcome == 'success' }}
-        run: pnpm run prepare:runtime && pnpm run check:preset-runtime
+        run: pnpm run prepare:runtime && pnpm run check:preset-runtime && pnpm run check:market-boot
         env:
           DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
@@ -314,7 +316,7 @@ jobs:
       - name: 构建应用 / Build application
         run: pnpm run build
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
-        run: pnpm run prepare:runtime && pnpm run check:preset-runtime
+        run: pnpm run prepare:runtime && pnpm run check:preset-runtime && pnpm run check:market-boot
         env:
           DSH_RUNTIME_TARGET: linux-x64
       - name: 验证 Linux 应用与运行时 / Verify Linux application and runtime
@@ -382,7 +384,7 @@ jobs:
         run: pnpm run build
 
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
-        run: pnpm run prepare:runtime && pnpm run check:preset-runtime
+        run: pnpm run prepare:runtime && pnpm run check:preset-runtime && pnpm run check:market-boot
         env:
           DSH_RUNTIME_TARGET: ${{ matrix.runtime_target }}
 
@@ -462,7 +464,7 @@ jobs:
         run: pnpm run build
 
       - name: 准备内置 dsh 运行时 / Prepare bundled dsh runtime
-        run: pnpm run prepare:runtime && pnpm run check:preset-runtime
+        run: pnpm run prepare:runtime && pnpm run check:preset-runtime && pnpm run check:market-boot
         env:
           DSH_RUNTIME_TARGET: win32-x64
 

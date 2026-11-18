@@ -38,6 +38,11 @@ extraResources:
     to: runtime-launcher.mjs
   - from: .build/dsh-cli.mjs
     to: dsh-cli.mjs
+  # DSH Market Pro, seated into the web profile by the runtime launcher. Kept
+  # outside the runtime archive and its module lookup: the market must resolve
+  # from the profile, where a user's own upgrade can take its place.
+  - from: .runtime/bundled-plugins
+    to: bundled-plugins
   # Loaded by DSH from a managed profile's patch layer (organisation tool policy).
   - from: .build/policy-plugin.mjs
     to: policy-plugin.mjs

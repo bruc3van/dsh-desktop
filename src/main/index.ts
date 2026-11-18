@@ -63,6 +63,8 @@ import { homedir } from 'node:os'
 import {join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PRESET_SUBSCRIPTION_VARIABLE, type PresetSubscriptionRequest } from './preset-subscription-boot.ts'
+import { abandonBundledPlugin,BUNDLED_PLUGIN_NAME,inspectBundledPlugin,inspectMarketInstallation,withdrawBundledPlugin } from './bundled-plugin.ts'
+import { MARKET_BOOT_VARIABLE, type MarketBootRequest } from './bundled-market-boot.ts'
 import { createEnterpriseController, MANAGED_STATE_VARIABLE, type Readiness } from './enterprise/controller.ts'
 import { systemManagedDir } from './enterprise/managed-source.ts'
 import { PLAIN_CODEC, type SecretCodec } from './enterprise/server-session.ts'
@@ -191,7 +193,7 @@ const connection = createConnectionController({
   runtime: () => webUi, catalog: runtimeCatalog, probe: webProbe, survivor: runtimeSurvivor,
   childHome, loadSettings, sharedDshDiscoveryEnabled, localeChinese,
   isQuitting, isInstallerHandoff,
-  plugins: { onManagedReady, schedulePluginCompatibilityFallback },
+  plugins: { releaseBundledPluginSeat, reseatForAdoptedRuntime, onManagedReady, withdrawFailedSeat, schedulePluginCompatibilityFallback },
   presentation: {
     windowRequested: () => mainWindowRequested, isLoading: () => mainSurface === 'loading',
     launchWindow, loadMainWindow, showLoadingDocument, updateLoadingStatus, showConnectionError,
@@ -267,7 +269,97 @@ function presetSubscriptionRequest(dsh: DshCommand): string | undefined {
   return JSON.stringify(request)
 }
 
+/**
+ * Whether the client-owned market seat is on the profile this boot (added now,
+ * or already present). A runtime that then never reaches readiness has the
+ * entry taken back before the retry — a plugin that throws while loading
+ * fails the whole plugin tree, not just itself, including after upgrades
+ * where the name is no longer a first write.
+ */
+let bundledPluginSeatInUse = false
+/**
+ * Session-scoped: this process already withdrew a seat after a failed boot.
+ * Retries must not put the name back, or a deterministic bad plugin burns
+ * the whole launch budget without ever trying the one config that can work
+ * (the bundled runtime with no plugin).
+ */
+let bundledPluginSuppressed = false
+
+/** Offline payload outside the deployed DSH dependency tree; dev prepares it too. */
+function bundledPluginDir(): string | undefined {
+  try {
+    const dir = app.isPackaged
+      ? join(process.resourcesPath, 'bundled-plugins', BUNDLED_PLUGIN_NAME)
+      : join(APP_DIR, '.runtime', 'bundled-plugins', BUNDLED_PLUGIN_NAME)
+    return existsSync(join(dir, 'package.json')) ? dir : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The market seat for a managed launch. An organisation's profile is the
+ * organisation's to configure, so an enrolled launch gets no market; a raw
+ * executable has no verifiable package anchor, so the entry is taken back
+ * before it can boot an unknown ABI.
+ */
+function marketBootRequest(dsh: DshCommand): string | undefined {
+  bundledPluginSeatInUse = false
+  if (enterprise.active()) return undefined
+  const mode = loadSettings().bundledMarketDisabled === true ? 'disabled'
+    : bundledPluginSuppressed ? 'suppressed' : 'offer'
+  if (dsh.entry === undefined) {
+    if (mode === 'disabled') abandonBundledPlugin(childHome(), bundledPluginDir())
+    else withdrawBundledPlugin(childHome())
+    return undefined
+  }
+  const request: MarketBootRequest = { home: childHome(), pluginDir: bundledPluginDir(), mode }
+  // A startup failure can withdraw only an actually listed, client-owned seat.
+  bundledPluginSeatInUse = mode === 'offer'
+  return JSON.stringify(request)
+}
+
+/** Resolving or connecting to another server must not mutate a local profile. */
+function releaseBundledPluginSeat(_reason: string): void {
+  bundledPluginSeatInUse = false
+}
+
+function reseatForAdoptedRuntime(): void {
+  bundledPluginSeatInUse = false
+}
+
+function withdrawFailedSeat(): boolean {
+  if (!bundledPluginSeatInUse) return false
+  bundledPluginSeatInUse = false
+  if (!withdrawBundledPlugin(childHome())) return false
+  bundledPluginSuppressed = true
+  console.warn('[desktop] dsh web did not start with ' + BUNDLED_PLUGIN_NAME
+    + ' seated; the seat was withdrawn and will not be offered again this session')
+  return true
+}
+
+/** Shared by the settings window's switch; a remote caller gets a native confirmation. */
+async function setBundledMarketEnabled(enabled: unknown, remoteCaller: boolean): Promise<{ enabled: boolean }> {
+  if (typeof enabled !== 'boolean') return { enabled: loadSettings().bundledMarketDisabled !== true }
+  if (remoteCaller) {
+    const confirmed = await confirmSensitiveAction(
+      enabled ? '接入内置 DSH Market Pro？' : '移除内置 DSH Market Pro？',
+      enabled
+        ? '当前页面来自远端来源，它请求让本客户端在下次启动时接入内置的 DSH Market Pro。'
+        : '当前页面来自远端来源，它请求停用客户端内置市场；下次由客户端启动运行时时会移除客户端拥有的副本，用户自行安装的市场不受影响。',
+    )
+    if (!confirmed) return { enabled: loadSettings().bundledMarketDisabled !== true }
+  }
+  patchSettings({ bundledMarketDisabled: !enabled })
+  // Never swap or delete files underneath a live or adopted runtime.
+  if (!enabled) bundledPluginSeatInUse = false
+  return { enabled }
+}
+
 function onManagedReady(_command: DshCommand | undefined): void {
+  // A first-ever DSH_HOME had no web profile when this child was spawned, so
+  // the launcher could not seat the market yet; it is on the profile now.
+  if (!enterprise.active()) bundledPluginSeatInUse = inspectBundledPlugin(childHome()).owned === true
   pluginRecovery.promptPluginCompatibilityFallback()
   // Plugin packages need the serving runtime's package manager; the launcher
   // already applied the profile files before this runtime read them.
@@ -323,6 +415,7 @@ const settingsServer = createSettingsServer({
   setEnterpriseSkill,
   updater: () => desktopUpdater,
   getStatusJson,
+  setBundledMarketEnabled,
   probeDefaultWebUi,
   desktopClientVersion,
   updateStateForPage,
@@ -1189,6 +1282,9 @@ function getStatusJson(includeLocalDetail = true): Record<string, unknown> {
     dshDataFallbackPlugin: normalizePluginPackageName(settings.dshDataFallbackPlugin),
     dshDataFallbackPlugins: pluginRecovery.compatibilityFallbackPlugins(settings),
     ...includeLocalDetail && { dshDataHome: childHome() },
+    bundledMarketEnabled: settings.bundledMarketDisabled !== true,
+    marketRestartAvailable: !usesConfiguredServer(settings) && runtimeSurvivor.canAttemptRuntimeRestart(),
+    bundledMarketInstallation: includeLocalDetail ? inspectMarketInstallation(childHome()) : undefined,
     ...includeLocalDetail && webUi?.pid() !== undefined && { childPid: webUi.pid() },
     ...includeLocalDetail && webUi?.lastError !== null && webUi?.lastError !== undefined && { lastError: webUi.lastError },
     // Which dsh the local child came from. Names a path on this machine, so it
@@ -1663,6 +1759,7 @@ function boot(): void {
     resolveCommand: resolveDshCommand,
     prepareCommand(dsh) {
       const presetSubscription = presetSubscriptionRequest(dsh)
+      const marketBoot = marketBootRequest(dsh)
       const pnpm = bundledPnpmEntry()
       const version = dsh.version ?? (dsh.source === 'bundled' ? bundledDshVersion() ?? undefined : undefined)
       return {
@@ -1671,6 +1768,7 @@ function boot(): void {
           ...process.env,
           DSH_HOME: childHome(),
           [PRESET_SUBSCRIPTION_VARIABLE]: presetSubscription,
+          [MARKET_BOOT_VARIABLE]: marketBoot,
           ...dsh.entry !== undefined && { [MANAGED_STATE_VARIABLE]: enterprise.launchRequest() },
           PATH: childPath(),
           ...dsh.entry !== undefined && { DSH_DESKTOP_RUNTIME_ENTRY: dsh.entry },
