@@ -29,6 +29,7 @@
 
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { MARKET_BOOT_VARIABLE, prepareBundledMarket, type MarketBootRequest } from './bundled-market-boot.ts'
 import { PRESET_SUBSCRIPTION_VARIABLE, preparePresetSubscription, type PresetSubscriptionRequest } from './preset-subscription-boot.ts'
 import {
   PNPM_ENTRY_VARIABLE,
@@ -54,6 +55,8 @@ if (entry === undefined || entry === '') {
 const pnpmEntry = resolvePnpmEntry(entry)
 const presetSubscription = process.env[PRESET_SUBSCRIPTION_VARIABLE]
 Reflect.deleteProperty(process.env, PRESET_SUBSCRIPTION_VARIABLE)
+const marketBoot = process.env[MARKET_BOOT_VARIABLE]
+Reflect.deleteProperty(process.env, MARKET_BOOT_VARIABLE)
 // pnpm derives npm_execpath from argv[1]. Keep it pointing at the CLI rather
 // than this launcher, which cannot run without its private entry variable.
 if (entry === pnpmEntry) process.argv[1] = entry
@@ -84,8 +87,10 @@ if (nodeMode !== undefined && nodeMode !== '') {
 
 // Only the desktop's managed web spawn supplies this request. Ordinary dsh /
 // plugin / pnpm shim calls cannot inherit it and never edit the profile.
-if (presetSubscription !== undefined && process.argv[2] === 'web') {
-  await preparePresetSubscription(entry, JSON.parse(presetSubscription) as PresetSubscriptionRequest)
+if (process.argv[2] === 'web') {
+  if (presetSubscription !== undefined) await preparePresetSubscription(entry, JSON.parse(presetSubscription) as PresetSubscriptionRequest)
+  // After the preset: that call is what creates a first-ever web profile.
+  if (marketBoot !== undefined) await prepareBundledMarket(entry, JSON.parse(marketBoot) as MarketBootRequest)
 }
 const runtime = await import(pathToFileURL(entry).href)
 // DSH 0.1.5 only auto-runs when import.meta.main is true. Our launcher imports

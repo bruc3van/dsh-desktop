@@ -25,6 +25,7 @@ try {
     requestRestart: () => { restarts++; return { started: true } },
     updater: () => updater,
     getStatusJson: () => ({ mode: 'smart' }),
+    setBundledMarketEnabled: async (enabled, remote) => { calls.push({ enabled, remote }); return { enabled } },
     probeDefaultWebUi: async () => ({ reachable: true }),
     desktopClientVersion: () => '1.0.0',
     updateStateForPage: state => state,
@@ -112,7 +113,8 @@ try {
   assert.equal(calls.at(-1).value, '中文', 'UTF-8 survives a chunk boundary inside a character')
   assert.equal((await request('desktop/dsh-data-mode', { dshDataMode: 'isolated' })).status, 200)
   assert.deepEqual(await (await request('desktop/settings')).json(), { connectionMode: 'smart', localWebPort: 3080 })
-  assert.equal((await request('desktop/market/enable', {})).status, 404, 'the bundled-market route is gone')
+  assert.equal((await request('desktop/market/enable', {})).status, 200)
+  assert.deepEqual(calls.at(-1), { enabled: true, remote: false })
   assert.equal((await request('desktop/update/check', {})).status, 503)
   assert.equal((await (await request('desktop/update')).json()).error, 'updater not ready')
   let reset = false

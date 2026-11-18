@@ -9,6 +9,7 @@ export interface SettingsServerOptions {
   requestRestart: () => { started: boolean; error?: string }
   updater: () => Pick<DesktopUpdater, 'getState' | 'check' | 'resetDismiss' | 'dismiss'> | undefined
   getStatusJson: () => unknown
+  setBundledMarketEnabled: (enabled: unknown, remoteCaller: boolean) => Promise<{ enabled: boolean }>
   probeDefaultWebUi: () => Promise<unknown>
   desktopClientVersion: () => string
   updateStateForPage: (state: UpdateState) => unknown
@@ -81,6 +82,7 @@ function readSettingsBody(
 export function createSettingsServer(options: SettingsServerOptions) {
   const {
     getStatusJson,
+    setBundledMarketEnabled,
     probeDefaultWebUi,
     desktopClientVersion,
     updateStateForPage,
@@ -131,6 +133,13 @@ export function createSettingsServer(options: SettingsServerOptions) {
       }
       if (pathname === '/desktop/status') {
         writeJson(res, 200, getStatusJson())
+        return
+      }
+      if ((pathname === '/desktop/market/enable' || pathname === '/desktop/market/disable') && req.method === 'POST') {
+        void setBundledMarketEnabled(pathname.endsWith('/enable'), false).then(
+          result => { writeJson(res, 200, result) },
+          (error: unknown) => { writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) }) },
+        )
         return
       }
       if (pathname === '/desktop/probe') {

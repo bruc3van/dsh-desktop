@@ -189,7 +189,7 @@ Rules:
 - **Only for runtimes the client starts.** Reusing a running local instance or connecting to a Custom address leaves that service's configuration alone.
 - The edits are the bundle list in `~/.dsh/profiles/web/package.json` and one commented block appended to `cordis.patch.yml`; existing content and comments are kept as they are.
 
-**Upgrading from an earlier version:** from 0.6.0 the installer no longer bundles safer-dsh-market. A copy that is already installed stays in your profile, but the client no longer updates it; uninstall it from the Plugins page if you do not need it. For features such as AI review after installation, install [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market) from npm yourself.
+**Upgrading from an earlier version:** from 0.6.2 the installer bundles a plugin market again: [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro) (`dsh-market-pro@1.0.4`). When the client starts the local service it installs the market into the web profile and enables it, and a client upgrade updates it. A `safer-dsh-market` copy the client installed earlier is removed; a copy you installed yourself stays, but DSH Market Pro does not load while it is there, so uninstall it from the Plugins page first. To opt out, turn off "Load the bundled DSH Market Pro on startup" in Desktop settings; the next client-managed launch removes the client-installed copy.
 
 ## FAQ
 
@@ -212,7 +212,7 @@ No. The client only adds the index address. Whether and what to install is your 
 ## Related projects
 
 - [awesome-dsh-plugin](https://github.com/bruc3van/awesome-dsh-plugin): source of the preset index. It collects plugin repositories daily and maintains exclusion records.
-- [safer-dsh-market](https://github.com/bruc3van/safer-dsh-market): a standalone review-before-install market plugin you can install yourself.
+- [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro): a marketplace for curated plugins, browsing, installation, updates, and optional post-install AI security review, bundled with the installer.
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness): the upstream project for the official dsh and Web UI.
 
 ## License
