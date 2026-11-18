@@ -188,10 +188,9 @@ check('a pre-spawn resolution failure bypasses the pinned-port occupancy message
     : undefined)
 const retryPortSelections = connectionSource.match(/respawnLocalRuntime\(generation\)/g)?.length ?? 0
 check('every retry and source fallback re-resolves automatic mode',
-  // Source fallback and generic retry. (The bundled-market withdrawal retry
-  // left with the bundled market in 0.6.0.)
-  retryPortSelections === 2,
-  String(retryPortSelections) + ' retry path(s) use respawnLocalRuntime; expected 2')
+  // Bundled-market withdrawal, source fallback and generic retry.
+  retryPortSelections === 3,
+  String(retryPortSelections) + ' retry path(s) use respawnLocalRuntime; expected 3')
 
 console.log('\n# src/main/runtime-catalog.ts: override version')
 const officialBinOutfile = join(outDir, 'official-dsh-bin.mjs')
