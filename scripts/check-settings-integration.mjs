@@ -166,7 +166,11 @@ try {
   await settings.waitForFunction(() => document.getElementById('versions').textContent.includes('v'))
   assert.equal(await settings.locator('#update-check').count(), 1)
   assert.equal(await settings.evaluate(async () => (await (await fetch('desktop/status')).json()).settingsIntegration.reason), 'missing-content')
-  assert.equal(await settings.locator('#market-toggle').count(), 0, 'the bundled-market switch is gone')
+  // The market switch lives in the native settings window only; it reads the
+  // saved preference, which is independent of what is installed right now.
+  await settings.waitForFunction(() => !document.getElementById('market-toggle').disabled)
+  assert.equal(await settings.locator('#market-toggle').getAttribute('aria-checked'), 'true')
+  assert.match(await settings.locator('#market-label').textContent(), /DSH Market Pro/)
   assert.equal(await page.evaluate(() => 'getMarket' in window.desktop.connection), false)
   await settings.screenshot({ path: join(tmpdir(), 'dsh-desktop-settings-integration.png'), fullPage: true })
   await closeSettings(settings)

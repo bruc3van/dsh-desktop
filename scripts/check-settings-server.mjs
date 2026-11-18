@@ -21,10 +21,12 @@ try {
     if (value === 'throw') throw new Error('fixture rejected')
     return { saved: value !== 'invalid' }
   }
+  const marketToggles = []
   server = createSettingsServer({
     requestRestart: () => { restarts++; return { started: true } },
     updater: () => updater,
     getStatusJson: () => ({ mode: 'smart' }),
+    setBundledMarketEnabled: async enabled => { marketToggles.push(enabled); return { enabled } },
     probeDefaultWebUi: async () => ({ reachable: true }),
     desktopClientVersion: () => '1.0.0',
     updateStateForPage: state => state,
@@ -70,6 +72,11 @@ try {
   assert.equal(restarts, 0)
   assert.deepEqual(await (await request('desktop/restart', {})).json(), { started: true })
   assert.equal(restarts, 1)
+  // The market switch is reachable only under the server's token path.
+  assert.equal((await fetch(new URL('/desktop/market/disable', server.url), { method: 'POST' })).status, 404)
+  assert.deepEqual(await (await request('desktop/market/disable', {})).json(), { enabled: false })
+  assert.deepEqual(await (await request('desktop/market/enable', {})).json(), { enabled: true })
+  assert.deepEqual(marketToggles, [false, true])
   assert.equal((await request('desktop/settings', 'x'.repeat(16385))).status, 413)
   assert.equal((await request('desktop/settings', '{')).status, 400)
   assert.equal(calls.length, 0)
@@ -114,7 +121,6 @@ try {
   assert.equal(calls.at(-1).value, '中文', 'UTF-8 survives a chunk boundary inside a character')
   assert.equal((await request('desktop/dsh-data-mode', { dshDataMode: 'isolated' })).status, 200)
   assert.deepEqual(await (await request('desktop/settings')).json(), { connectionMode: 'smart', localWebPort: 3080 })
-  assert.equal((await request('desktop/market/enable', {})).status, 404, 'the bundled-market route is gone')
   assert.deepEqual((await (await request('desktop/enterprise/skills')).json()).skills, [{ id: 'weekly', installed: true }])
   assert.equal((await request('desktop/enterprise/skills', { skill: { id: 'weekly', installed: false } })).status, 200)
   assert.deepEqual(calls.at(-1), { name: 'skill', value: { id: 'weekly', installed: false } })

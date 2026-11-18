@@ -126,4 +126,4 @@ Linux 更新会按当前安装格式下载并校验 DEB 或 AppImage，然后打
 - **只在客户端自己启动运行时时生效。** 复用已在运行的本机实例或连接自定义地址时，不改动对方的配置。
 - 改动的是 `~/.dsh/profiles/web/package.json` 中的组合包列表，以及 `cordis.patch.yml` 中追加的一段带注释的配置；原有内容和注释原样保留。
 
-**从旧版本升级：** 0.6.0 起安装包不再内置旧版市场 `safer-dsh-market`。已经装上的那份会继续留在 profile 里，客户端不再更新它；不需要的话可以在插件页卸载。需要「安装后 AI 审查」等功能，请先停用旧市场，再通过官方插件管理器安装并启用 [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro)（`dsh-market-pro@1.0.0`），按需重新设置配置。
+**从旧版本升级：** 安装包从 0.6.2 / 0.7.0-beta.5 起重新内置插件市场，换成 [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro)（`dsh-market-pro@1.0.4`），由客户端启动本地服务时自动装进 web profile 并启用，客户端升级时一并更新。以前客户端装上的旧版市场 `safer-dsh-market` 会被自动移除；自己装的那份会保留，但它在的时候 DSH Market Pro 不会加载，请先在插件页卸载它。不想要内置市场，可以在「桌面设置 → 数据环境 → 插件市场」里关掉，下次由客户端启动本地服务时移除客户端装的那份。
