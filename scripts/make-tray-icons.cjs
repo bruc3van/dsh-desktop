@@ -1,7 +1,8 @@
 /**
- * Render the notification-area icons from resources/icon.svg, one PNG per
+ * Render every tray icon from resources/icon.svg (see JOBS): one PNG per
  * Windows tray slot size (SM_CXSMICON: 16 at 100% scaling, 20 at 125%, 24 at
- * 150%, 32 at 200%, and the larger slots above them).
+ * 150%, 32 at 200%, and the larger slots above them), the Windows fallback, and
+ * the macOS menu-bar Template image.
  *
  * A single 16px source is what made the shipped tray icon look soft: Windows
  * takes the 1x representation of the image and stretches it to whatever slot the
@@ -37,8 +38,18 @@ const LOG_FILE = join(APP_DIR, '.build', 'make-tray-icons.log')
 
 /** Kept in sync with TRAY_ICON_SIZES in src/main/index.ts. */
 const SIZES = [16, 20, 24, 32, 40, 48]
-/** Clear margin around the glyph, as a fraction of the icon box. */
-const PADDING_RATIO = 0.06
+/**
+ * Clear margin around the glyph, as a fraction of the icon box. None: the whale
+ * is about 1.6 times wider than tall, so even edge to edge it stands shorter
+ * than the square glyphs beside it in the notification area.
+ */
+const PADDING_RATIO = 0
+/**
+ * Outline added around the glyph, in output pixels at every size. The striped
+ * belly breaks into grey noise at 16-24px; a half-pixel outline in the glyph's
+ * own colour closes those gaps and gives it the weight of the shell's icons.
+ */
+const STROKE_PX = 0.5
 /**
  * One rendered set per taskbar brightness, keyed by the resource prefix
  * src/main/index.ts asks for. Windows draws the notification area from the
@@ -50,6 +61,28 @@ const PADDING_RATIO = 0.06
 const FILLS = [
   { prefix: 'iconTray-', fill: '#ffffff' },
   { prefix: 'iconTrayDark-', fill: '#181818' },
+]
+
+/**
+ * Every file this script writes. `square` files fit the glyph inside a size x
+ * size box (the Windows notification-area slots); `wide` files keep the glyph's
+ * own aspect at a fixed height. `scale` is the pixel density the file is drawn
+ * for, so the outline stays STROKE_PX points wide on a @2x file too.
+ *
+ * - iconTray-* / iconTrayDark-*: Windows, one per slot size and taskbar mode.
+ * - iconTrayWhite: Windows fallback when an exact slot file is missing.
+ * - iconMenuTemplate: the macOS menu-bar Template image (and the Linux
+ *   indicator). The menu bar takes items wider than tall, and a square box
+ *   would leave the whale about 10pt high beside 16pt neighbours — so it keeps
+ *   the glyph's aspect at 16pt tall. Black: macOS reads only the alpha of a
+ *   Template image and paints it to suit the menu bar.
+ */
+const JOBS = [
+  ...FILLS.flatMap(({ prefix, fill }) => SIZES.map(size => ({ file: prefix + String(size) + '.png', fill, shape: 'square', size, scale: 1 }))),
+  { file: 'iconTrayWhite.png', fill: '#ffffff', shape: 'square', size: 16, scale: 1 },
+  { file: 'iconTrayWhite@2x.png', fill: '#ffffff', shape: 'square', size: 32, scale: 2 },
+  { file: 'iconMenuTemplate.png', fill: '#000000', shape: 'wide', size: 16, scale: 1 },
+  { file: 'iconMenuTemplate@2x.png', fill: '#000000', shape: 'wide', size: 32, scale: 2 },
 ]
 
 function log(message) {
@@ -97,9 +130,9 @@ async function renderSizes(glyph) {
     log('rasteriser ready')
     return await window.webContents.executeJavaScript(`(async () => {
       const glyph = ${JSON.stringify(glyph)}
-      const sizes = ${JSON.stringify(SIZES)}
-      const fills = ${JSON.stringify(FILLS)}
+      const jobs = ${JSON.stringify(JOBS)}
       const padding = ${String(PADDING_RATIO)}
+      const strokePx = ${String(STROKE_PX)}
       const NS = 'http://www.w3.org/2000/svg'
 
       // Measure the drawn extent of the path, not the artboard it sits in.
@@ -113,37 +146,46 @@ async function renderSizes(glyph) {
       probe.remove()
       if (!(box.width > 0 && box.height > 0)) throw new Error('empty glyph bounding box')
 
-      // A square viewBox centred on that extent: a non-square one lets the
-      // renderer letterbox the glyph and undoes the fit.
-      const side = Math.max(box.width, box.height) / (1 - 2 * padding)
-      const viewBox = [
-        box.x + box.width / 2 - side / 2,
-        box.y + box.height / 2 - side / 2,
-        side,
-        side,
-      ].join(' ')
+      // A viewBox centred on that extent with the canvas's own aspect: any
+      // other lets the renderer letterbox the glyph and undoes the fit. The
+      // outline is a fixed width in points, so its width in viewBox units — and
+      // the room the box keeps for it — depends on the output size.
+      const fit = ({ shape, size, scale }) => {
+        const long = shape === 'square' ? Math.max(box.width, box.height) : box.height
+        const base = long / (1 - 2 * padding)
+        const strokeWidth = base / size * strokePx * scale
+        const height = base + strokeWidth
+        const width = shape === 'square' ? height : box.width + (height - box.height)
+        const viewBox = [
+          box.x + box.width / 2 - width / 2,
+          box.y + box.height / 2 - height / 2,
+          width,
+          height,
+        ].join(' ')
+        return { strokeWidth, viewBox, width: Math.round(size * width / height), height: size }
+      }
 
-      const draw = (size, prefix, fill) => new Promise((resolve, reject) => {
-        const markup = '<svg xmlns="' + NS + '" width="' + size + '" height="' + size + '"'
-          + ' viewBox="' + viewBox + '"><path d="' + glyph.d + '" fill="' + fill + '" fill-rule="nonzero"/></svg>'
-        const image = new Image(size, size)
+      const draw = (job) => new Promise((resolve, reject) => {
+        const { strokeWidth, viewBox, width, height } = fit(job)
+        const markup = '<svg xmlns="' + NS + '" width="' + width + '" height="' + height + '"'
+          + ' viewBox="' + viewBox + '" preserveAspectRatio="xMidYMid meet"><path d="' + glyph.d + '" fill="' + job.fill + '" fill-rule="nonzero"'
+          + ' stroke="' + job.fill + '" stroke-width="' + strokeWidth + '" stroke-linejoin="round"/></svg>'
+        const image = new Image(width, height)
         image.onload = () => {
           const canvas = document.createElement('canvas')
-          canvas.width = size
-          canvas.height = size
+          canvas.width = width
+          canvas.height = height
           const context = canvas.getContext('2d')
-          context.clearRect(0, 0, size, size)
-          context.drawImage(image, 0, 0, size, size)
-          resolve({ size, prefix, data: canvas.toDataURL('image/png'), viewBox })
+          context.clearRect(0, 0, width, height)
+          context.drawImage(image, 0, 0, width, height)
+          resolve({ file: job.file, width, height, data: canvas.toDataURL('image/png'), viewBox })
         }
-        image.onerror = () => { reject(new Error('could not rasterise ' + prefix + size + ' at ' + size + 'px')) }
+        image.onerror = () => { reject(new Error('could not rasterise ' + job.file)) }
         image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(markup)
       })
 
       const rendered = []
-      for (const { prefix, fill } of fills) {
-        for (const size of sizes) rendered.push(await draw(size, prefix, fill))
-      }
+      for (const job of jobs) rendered.push(await draw(job))
       return rendered
     })()`, true)
   } finally {
@@ -163,11 +205,10 @@ const guard = setTimeout(() => {
 app.whenReady().then(async () => {
   try {
     const rendered = await renderSizes(readGlyphPath())
-    log('fitted viewBox ' + String(rendered[0].viewBox))
-    for (const { size, prefix, data } of rendered) {
-      const file = join(RESOURCES, prefix + String(size) + '.png')
+    for (const { file: name, width, height, data, viewBox } of rendered) {
+      const file = join(RESOURCES, name)
       writeFileSync(file, Buffer.from(data.slice(data.indexOf(',') + 1), 'base64'))
-      log('wrote ' + file)
+      log('wrote ' + file + ' (' + String(width) + 'x' + String(height) + ', viewBox ' + viewBox + ')')
     }
     clearTimeout(guard)
     app.exit(0)

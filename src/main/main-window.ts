@@ -44,6 +44,23 @@ interface Options {
   scheduleLoadingHints: () => void
 }
 
+/** The product name the window, taskbar and Alt+Tab show. */
+const WINDOW_PRODUCT_NAME = 'DSH Desktop Pro'
+/** How the official Web UI names itself in its document titles. */
+const UPSTREAM_PRODUCT_NAME = /DeepSeek Harness/g
+
+/**
+ * The window title for a document title. The official Web UI titles its pages
+ * "DeepSeek Harness" or "<session> — DeepSeek Harness", and Electron mirrors
+ * that into the native title bar by default, so the client's own name never
+ * appeared there. Only the product name is replaced: the session part is the
+ * user's own and stays as it is. An empty title falls back to the product name.
+ */
+export function brandWindowTitle(documentTitle: string): string {
+  const title = documentTitle.replace(UPSTREAM_PRODUCT_NAME, WINDOW_PRODUCT_NAME).trim()
+  return title === '' ? WINDOW_PRODUCT_NAME : title
+}
+
 export function createMainWindowFactory(options: Options) {
   const { localeChinese, openExternal, windowBackgroundColor, watchTaskbarTheme, scheduleWindowHealthCheck, clearMacNotificationAttention, isInstallerHandoff, onMainWindowClosed, markMainWindowUnrequested, currentTarget, resetSettingsIntegrationStatus, openSettingsWindow, handleProbedInstanceFailure, showConnectionError, releaseSmartBridgeHandoff, bindErrorPageSeats, markWebUiLoaded, scheduleAutoUpdateCheck, recoverBlankWindow, markLoadingDocument, resetPageAppearance, loadingPageUrl, scheduleLoadingHints, settingsServerReady } = options
 
@@ -103,7 +120,7 @@ export function createMainWindowFactory(options: Options) {
     let targetNavigationSucceeded = false
     let mainWindow: BrowserWindow | null = new BrowserWindow({
       ...bounds,
-      title: 'DSH Desktop Pro',
+      title: WINDOW_PRODUCT_NAME,
       backgroundColor: windowBackgroundColor(),
       // The official Web UI carries its own header; a hiddenInset title bar
       // would overlap it. The standard title bar keeps the traffic lights away
@@ -128,6 +145,10 @@ export function createMainWindowFactory(options: Options) {
       if (maximized) mainWindow?.maximize()
       mainWindow?.show()
       if (maximized && mainWindow && !mainWindow.isMaximized()) mainWindow.maximize()
+    })
+    mainWindow.on('page-title-updated', (event, documentTitle) => {
+      event.preventDefault()
+      mainWindow?.setTitle(brandWindowTitle(documentTitle))
     })
     mainWindow.on('show', () => { scheduleWindowHealthCheck('window shown') })
     mainWindow.on('focus', () => {
