@@ -238,7 +238,7 @@ process.exit(1)
   await probeOnlySettings.locator('#data-isolated').click()
   await probeOnlySettings.waitForFunction(() => {
     const note = document.querySelector('#data-note')?.textContent ?? ''
-    return note.includes('请先启用') || note.includes('enable installed')
+    return note.includes('请先启用') || note.includes('enable bundled, installed')
   })
   const probeOnly = JSON.parse(readFileSync(join(clientHome, 'settings.json'), 'utf8'))
   if (probeOnly.dshDataMode !== 'shared') throw new Error('probe-only settings entered an unbootable isolated mode')
