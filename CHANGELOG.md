@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.7.0-beta.5] - 2026-11-18
+
 - 重新内置插件市场：随安装包带上 [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro) `1.0.4`（精选、浏览、安装、更新及安装后 AI 安全审查），由客户端启动本地服务时自动装进 web profile 并启用，客户端升级时一并更新。以前客户端装的 `safer-dsh-market` 会被移除；用户自己装的保留，在卸载前 DSH Market Pro 不会加载。「桌面设置 → 数据环境」里可以关掉内置市场。插件加载失败导致本地服务起不来时，客户端会撤回市场并重试一次。企业模式下的 profile 由组织管理，不内置市场。
 - 换上新的鲸鱼图标；托盘图标铺满图标位并加粗轮廓，小尺寸下不再显得偏小发虚；macOS 菜单栏图标按鲸鱼比例横向显示。
 - 窗口标题显示「DSH Desktop Pro」，不再是官方 Web UI 的「DeepSeek Harness」；会话名照常显示在前面。
