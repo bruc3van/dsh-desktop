@@ -5,19 +5,43 @@ export function confirmWindowClose(window: BrowserWindow | null): Promise<boolea
   if (window === null || window.isDestroyed()) return Promise.resolve(true)
   const contents = window.webContents
   return new Promise(resolve => {
+    let settled = false
     const finish = (closed: boolean): void => {
+      if (settled) return
+      settled = true
       window.removeListener('closed', onClosed)
+      window.removeListener('close', onClose)
       contents.removeListener('will-prevent-unload', onPrevent)
       resolve(closed)
     }
     const onClosed = (): void => { finish(true) }
+    const onClose = (event: Electron.Event): void => {
+      setTimeout(() => { if (event.defaultPrevented) finish(false) }, 0)
+    }
     const onPrevent = (event: Electron.Event): void => {
       // The window's normal discard dialog decides whether to override unload.
-      // Native window close state is reset after the unload event returns.
-      // Resolve on the next turn so an immediate retry is not swallowed.
-      setTimeout(() => { if (!event.defaultPrevented) finish(false) }, 0)
+      // Wait for both the native close unwind and a renderer IPC round-trip so
+      // Chromium clears its beforeunload state before any retry calls close().
+      setTimeout(() => {
+        if (settled || event.defaultPrevented) return
+        const settle = (): void => { setTimeout(() => { finish(false) }, 0) }
+        if (contents.isDestroyed()) {
+          settle()
+          return
+        }
+        let fallback: ReturnType<typeof setTimeout> | undefined
+        const roundTrip = Promise.race([
+          contents.executeJavaScript('undefined').then(() => undefined, () => undefined),
+          new Promise<void>(done => { fallback = setTimeout(done, 200) }),
+        ])
+        void roundTrip.finally(() => {
+          clearTimeout(fallback)
+          settle()
+        })
+      }, 0)
     }
     window.once('closed', onClosed)
+    window.on('close', onClose)
     contents.on('will-prevent-unload', onPrevent)
     window.close()
   })
