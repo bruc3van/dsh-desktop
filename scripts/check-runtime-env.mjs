@@ -237,6 +237,11 @@ const AUDITED_INDIRECT = new Map([
   // LiveShare passes both commands to TunnelWorker, which uses patched spawn().
   ['@deepseek-ai/dsh-experimental-liveshare/lib/index.js', [
     {
+      label: 'LiveShare workerNodeModeEnv doc comment',
+      context: '* Electron reads its Node mode from the environment, not from the executable, and the worker runs\n* `process.execPath`. Under the Desktop shell that binary is Electron itself:',
+      expected: 1,
+    },
+    {
       label: 'source LiveShare gateway worker',
       context: 'if (fileURLToPath(moduleUrl).endsWith(".ts")) return {\n\t\texecutable: process.execPath,',
       expected: 1,

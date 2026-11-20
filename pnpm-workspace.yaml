@@ -19,7 +19,7 @@ minimumReleaseAgeExclude:
   # The bundled market is this project's own package, published from a tagged
   # GitHub Actions run; its release-day version is exempted one version at a
   # time, never by wildcard.
-  - dsh-market-pro@1.0.4
+  - dsh-market-pro@1.7.0
 
 # electron-builder 26.15.3 uses ElectronDownloadCacheMode, which was added in
 # @electron/get 3.1.0, while its published range still allows incompatible 3.0.0.
@@ -44,12 +44,12 @@ allowBuilds:
   protobufjs: false
 
 # Electron-specific console, native target environment, ACL probe and bundled
-# pnpm fixes. Upstream 0.2.2-rc.3 still hides Windows Job helper windows and
+# pnpm fixes. Upstream 0.2.2-rc.5 still hides Windows Job helper windows and
 # still needs the remaining Electron-only patches below.
 patchedDependencies:
-  '@deepseek-ai/dsh-plugin-manager@0.2.2-rc.3': patches/@deepseek-ai__dsh-plugin-manager@0.2.2-rc.3.patch
-  '@deepseek-ai/dsh-ptc-runtime-node@0.2.2-rc.3': patches/@deepseek-ai__dsh-ptc-runtime-node@0.2.2-rc.3.patch
-  '@deepseek-ai/dsh-sandbox-local@0.2.2-rc.3': patches/@deepseek-ai__dsh-sandbox-local@0.2.2-rc.3.patch
-  '@deepseek-ai/dsh-sandbox-windows-acl@0.2.2-rc.3': patches/@deepseek-ai__dsh-sandbox-windows-acl@0.2.2-rc.3.patch
-  '@deepseek-ai/dsh-subprocess-local@0.2.2-rc.3': patches/@deepseek-ai__dsh-subprocess-local@0.2.2-rc.3.patch
-  '@deepseek-ai/dsh-win32-process@0.2.2-rc.3': patches/@deepseek-ai__dsh-win32-process@0.2.2-rc.3.patch
+  '@deepseek-ai/dsh-plugin-manager@0.2.2-rc.5': patches/@deepseek-ai__dsh-plugin-manager@0.2.2-rc.5.patch
+  '@deepseek-ai/dsh-ptc-runtime-node@0.2.2-rc.5': patches/@deepseek-ai__dsh-ptc-runtime-node@0.2.2-rc.5.patch
+  '@deepseek-ai/dsh-sandbox-local@0.2.2-rc.5': patches/@deepseek-ai__dsh-sandbox-local@0.2.2-rc.5.patch
+  '@deepseek-ai/dsh-sandbox-windows-acl@0.2.2-rc.5': patches/@deepseek-ai__dsh-sandbox-windows-acl@0.2.2-rc.5.patch
+  '@deepseek-ai/dsh-subprocess-local@0.2.2-rc.5': patches/@deepseek-ai__dsh-subprocess-local@0.2.2-rc.5.patch
+  '@deepseek-ai/dsh-win32-process@0.2.2-rc.5': patches/@deepseek-ai__dsh-win32-process@0.2.2-rc.5.patch
