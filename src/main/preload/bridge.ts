@@ -2,6 +2,22 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { installMacNotificationFallback } from '../mac-notification-fallback.ts'
 import { installWindowsNotificationActivation } from '../windows-notification-activation.ts'
 
+export interface CompanySkillItem {
+  id: string
+  title: string
+  description?: string
+  distribution: 'everyone' | 'optional'
+  version: number
+  updatedAt: string
+  installed: boolean
+}
+
+export interface MarketInstallation {
+  state: 'unknown' | 'missing' | 'incomplete' | 'registered' | 'unregistered'
+  version?: string
+  owned: boolean
+}
+
 /** Connection facts mirrored from the main process. */
 export interface ConnectionStatus {
   mode: 'local' | 'probe' | 'connect'
@@ -30,6 +46,9 @@ export interface ConnectionStatus {
   dshDataFallbackReason?: 'plugin-compatibility'
   dshDataFallbackPlugin?: string
   dshDataFallbackPlugins?: string[]
+  bundledMarketEnabled?: boolean
+  marketRestartAvailable?: boolean
+  bundledMarketInstallation?: MarketInstallation
   /** Organisation management; `personal` when the client is not managed. */
   enterprise?: {
     mode: 'personal' | 'file' | 'server' | 'invalid'
@@ -37,6 +56,7 @@ export interface ConnectionStatus {
     user?: string
     revision?: number
     offline?: boolean
+    signed?: boolean
     lastCheckedAt?: number
     managedFile?: string
     updates?: { feedManaged: boolean; autoCheck?: boolean }
@@ -44,6 +64,8 @@ export interface ConnectionStatus {
     available?: string
     /** The organisation lets this person switch to personal mode. */
     personalAllowed?: boolean
+    joinable?: boolean
+    joined?: boolean
     problems: string[]
   }
 }
@@ -64,6 +86,14 @@ export const connection = {
   /** Organisation actions in enterprise mode: sync now, export diagnostics, sign out. */
   enterpriseAction: (action: 'sync' | 'diagnostics' | 'sign-out' | 'use-personal' | 'use-organisation'): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('desktop:enterprise:action', action) as Promise<{ ok: boolean; error?: string }>,
+  joinOrganisation: (server: string): Promise<{ saved: boolean; error?: string }> =>
+    ipcRenderer.invoke('desktop:enterprise:join', server) as Promise<{ saved: boolean; error?: string }>,
+  enterpriseSkills: (): Promise<{ ok: boolean; skills?: CompanySkillItem[]; error?: string }> =>
+    ipcRenderer.invoke('desktop:enterprise:skills') as Promise<{ ok: boolean; skills?: CompanySkillItem[]; error?: string }>,
+  setEnterpriseSkill: (skill: { id: string; installed: boolean }): Promise<{ saved: boolean; skills?: CompanySkillItem[]; error?: string }> =>
+    ipcRenderer.invoke('desktop:enterprise:skill', skill) as Promise<{ saved: boolean; skills?: CompanySkillItem[]; error?: string }>,
+  setBundledMarketEnabled: (enabled: boolean): Promise<{ enabled: boolean }> =>
+    ipcRenderer.invoke('desktop:market:set', enabled) as Promise<{ enabled: boolean }>,
   /** An official Web UI answering on the default port right now, if any. */
   probeLocal: (): Promise<{ url: string | null }> =>
     ipcRenderer.invoke('desktop:connection:probe') as Promise<{ url: string | null }>,
@@ -147,6 +177,9 @@ const local = {
   personal: (): void => { ipcRenderer.send('desktop:local:personal') },
   /** Organisation gate: save a support bundle for IT. */
   diagnostics: (): void => { ipcRenderer.send('desktop:local:diagnostics') },
+  completeOnboardingPersonal: (): void => { ipcRenderer.send('desktop:local:onboarding-personal') },
+  joinFromOnboarding: (server: string): Promise<{ saved: boolean; error?: string }> =>
+    ipcRenderer.invoke('desktop:local:onboarding-join', server) as Promise<{ saved: boolean; error?: string }>,
 }
 
 const notificationFallback = {

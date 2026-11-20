@@ -53,6 +53,8 @@ export interface ClientSettings {
   dshDataFallbackNoticeShown?: boolean
   /** macOS folders whose blocked-access hint the user asked never to see again. */
   macFolderAccessHintDismissed?: ProtectedFolder[]
+  /** The first-run personal / organisation chooser has been completed. */
+  onboardingCompleted?: boolean
 }
 
 export function createClientSettingsStore(home: string) {
@@ -172,8 +174,11 @@ export function createClientSettingsStore(home: string) {
       const folders = PROTECTED_FOLDERS.filter(folder => merged.macFolderAccessHintDismissed?.includes(folder))
       if (folders.length > 0) next.macFolderAccessHintDismissed = folders
     }
+    if (!skip.has('onboardingCompleted') && merged.onboardingCompleted !== undefined) {
+      next.onboardingCompleted = merged.onboardingCompleted
+    }
     saveSettings(next)
   }
 
-  return { loadSettings, patchSettings }
+  return { loadSettings, patchSettings, hasSettingsFile: () => existsSync(SETTINGS_FILE) }
 }

@@ -25,6 +25,7 @@ process.on('exit', () => { rmSync(e2eHome, { recursive: true, force: true }) })
 electronEnv.DSH_HOME = e2eHome
 electronEnv.DSH_DESKTOP_HOME = join(e2eHome, 'desktop')
 electronEnv.DSH_DESKTOP_SKIP_INSTALLED_DSH = '1'
+electronEnv.DSH_DESKTOP_SKIP_ONBOARDING = '1'
 const shot = async (page, name) => {
   const path = join(outDir, name + '.png')
   await page.screenshot({ path })

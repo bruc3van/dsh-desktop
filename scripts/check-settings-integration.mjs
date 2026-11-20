@@ -110,6 +110,9 @@ try {
   await page.locator('#dsh-desktop-tab').click()
   await page.waitForSelector('#dsh-desktop-panel')
   assert.equal(await page.locator('#official-panel').evaluate(el => el.style.display), 'none')
+  await page.waitForSelector('#dsh-enhance-joinUrl')
+  await page.waitForFunction(() => !document.getElementById('dsh-enhance-marketToggle').disabled)
+  assert.equal(await page.locator('#dsh-enhance-marketToggle').getAttribute('aria-checked'), 'true')
 
   // The fixture is a custom connection, so applying sources persists the
   // preference without replacing the test server. Exercise the actual IPC.
@@ -166,12 +169,12 @@ try {
   await settings.waitForFunction(() => document.getElementById('versions').textContent.includes('v'))
   assert.equal(await settings.locator('#update-check').count(), 1)
   assert.equal(await settings.evaluate(async () => (await (await fetch('desktop/status')).json()).settingsIntegration.reason), 'missing-content')
-  // The market switch lives in the native settings window only; it reads the
-  // saved preference, which is independent of what is installed right now.
   await settings.waitForFunction(() => !document.getElementById('market-toggle').disabled)
   assert.equal(await settings.locator('#market-toggle').getAttribute('aria-checked'), 'true')
   assert.match(await settings.locator('#market-label').textContent(), /DSH Market Pro/)
   assert.equal(await page.evaluate(() => 'getMarket' in window.desktop.connection), false)
+  assert.equal(await page.evaluate(() => typeof window.desktop.connection.setBundledMarketEnabled), 'function')
+  assert.equal(await page.evaluate(() => typeof window.desktop.connection.joinOrganisation), 'function')
   await settings.screenshot({ path: join(tmpdir(), 'dsh-desktop-settings-integration.png'), fullPage: true })
   await closeSettings(settings)
   const shortcutOpened = app.waitForEvent('window')
@@ -237,7 +240,7 @@ try {
   console.log('✓ page teardown restores official DOM; cached-document restoration remounts once')
   console.log('✓ absent / mounted / unsupported diagnostics, bounded warnings, Chinese and English remount')
   console.log('✓ structural changes restore official styles and navigation; programmatic tab changes regain control')
-  console.log('✓ native settings opens and loads live status independently of injection; and no longer offers the bundled-market switch')
+  console.log('✓ native settings and embedded desktop settings both load live status, organisation join and bundled-market controls')
 } finally {
   await app?.close().catch(() => {})
   await new Promise(resolve => server.close(resolve))

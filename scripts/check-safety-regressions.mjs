@@ -56,10 +56,12 @@ try {
   console.log('✓ isolated source saves preserve a runnable source, including data-mode changes during occupancy checks')
 
   const handlers = new Map()
+  const listeners = new Map()
   const { createDesktopIpc } = load('desktop-ipc', { electron: {
-    app: {}, ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} },
+    app: {}, ipcMain: { handle: (name, handler) => handlers.set(name, handler), on: (name, handler) => listeners.set(name, handler) },
   } })
-  let trusted = true, consent = false, confirmations = 0, saves = 0, restarts = 0, remote = true
+  let trusted = true, consent = false, confirmations = 0, saves = 0, restarts = 0, remote = true, localDoc = false
+  let marketCalls = [], joinCalls = 0, skillsCalls = 0, skillSetCalls = 0, onboardingPersonalCalls = 0
   const sharedCommands = createSettingsCommands({
     enabledSmartRuntimes: () => ['bundled'], loadSettings: () => ({ serverUrl: 'https://example.com', connectionMode: 'connect' }),
     getActiveDshDataMode: () => 'shared', selectedDshDataMode: () => 'shared',
@@ -68,7 +70,13 @@ try {
     patchSettings: () => { saves++ }, resetRuntimeFailure() {},
   })
   createDesktopIpc({ bridgeCaller: () => ({ trusted, remote }), bridgeDenied: () => new Error('denied'),
+    localDocumentCaller: () => localDoc,
     requestRestart: () => { restarts++; return { started: true } },
+    joinOrganisation: async () => { joinCalls++; return { saved: true } },
+    enterpriseSkills: async () => { skillsCalls++; return { ok: true, skills: [] } },
+    setEnterpriseSkill: async () => { skillSetCalls++; return { saved: true, skills: [] } },
+    setBundledMarketEnabled: async (enabled, remoteCaller) => { marketCalls.push({ enabled, remoteCaller }); return { enabled: Boolean(enabled) } },
+    completeOnboardingPersonal: () => { onboardingPersonalCalls++ },
     localeChinese: () => true, currentTarget: () => 'https://example.com',
     confirmSensitiveAction: async () => consent,
     requestSmartRuntimesSave: sharedCommands.requestSmartRuntimesSave,
@@ -100,6 +108,39 @@ try {
   assert.equal((await restart({})).started, true)
   assert.equal(restarts, 2)
   console.log('✓ restart rejects untrusted callers, confirms remote callers and directly restarts for local callers')
+  const joinOrg = handlers.get('desktop:enterprise:join')
+  const listSkills = handlers.get('desktop:enterprise:skills')
+  const setSkill = handlers.get('desktop:enterprise:skill')
+  const setMarket = handlers.get('desktop:market:set')
+  trusted = false; remote = false
+  await assert.rejects(joinOrg({}, 'https://dsh.example'), /denied/)
+  await assert.rejects(listSkills({}), /denied/)
+  await assert.rejects(setSkill({}, { id: 'a', installed: true }), /denied/)
+  await assert.rejects(setMarket({}, false), /denied/)
+  trusted = true; remote = true
+  await assert.rejects(joinOrg({}, 'https://dsh.example'), /denied/)
+  await assert.rejects(listSkills({}), /denied/)
+  await assert.rejects(setSkill({}, { id: 'a', installed: true }), /denied/)
+  assert.deepEqual(await setMarket({}, false), { enabled: false })
+  assert.deepEqual(marketCalls.at(-1), { enabled: false, remoteCaller: true })
+  remote = false
+  assert.equal((await joinOrg({}, 'https://dsh.example')).saved, true)
+  assert.equal((await listSkills({})).ok, true)
+  assert.equal((await setSkill({}, { id: 'a', installed: true })).saved, true)
+  assert.deepEqual(await setMarket({}, true), { enabled: true })
+  assert.deepEqual(marketCalls.at(-1), { enabled: true, remoteCaller: false })
+  assert.deepEqual([joinCalls, skillsCalls, skillSetCalls], [1, 1, 1])
+  const onboardingJoin = handlers.get('desktop:local:onboarding-join')
+  const onboardingPersonal = listeners.get('desktop:local:onboarding-personal')
+  localDoc = false
+  await assert.rejects(onboardingJoin({}, 'https://dsh.example'), /denied/)
+  onboardingPersonal({})
+  assert.equal(onboardingPersonalCalls, 0)
+  localDoc = true
+  assert.equal((await onboardingJoin({}, 'https://dsh.example')).saved, true)
+  onboardingPersonal({})
+  assert.equal(onboardingPersonalCalls, 1)
+  console.log('✓ enterprise join/skills stay local-only; onboarding seats require local data document; market toggle enforces caller trust')
 
   const { createWebUiProbe } = load('web-ui-probe', { electron: { app: { isReady: () => false, isPackaged: true }, net: {} } })
   let responseMode = 'silent'

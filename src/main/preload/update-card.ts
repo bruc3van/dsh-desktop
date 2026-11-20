@@ -26,7 +26,12 @@ function updateCopy(english: boolean): {
   unavailable: string
   client: string
   bundled: string
+  installed: string
   dshUnavailable: string
+  feedManaged: string
+  autoCheckOff: string
+  period: string
+  separator: string
 } {
   if (english) {
     return {
@@ -51,7 +56,12 @@ function updateCopy(english: boolean): {
       unavailable: 'Update status unavailable',
       client: 'Desktop client v',
       bundled: 'bundled dsh',
+      installed: 'installed dsh',
       dshUnavailable: 'unavailable',
+      feedManaged: 'The update source is set by your organisation',
+      autoCheckOff: 'Automatic checks are off by organisation policy; IT rolls out new versions, and you can still check manually',
+      period: '.',
+      separator: '; ',
     }
   }
   return {
@@ -76,7 +86,12 @@ function updateCopy(english: boolean): {
     unavailable: '更新状态不可用',
     client: '桌面客户端 v',
     bundled: '内置 dsh',
+    installed: '本机 dsh',
     dshUnavailable: '不可用',
+    feedManaged: '更新源由组织指定',
+    autoCheckOff: '自动检查已由组织关闭，新版本由 IT 统一推送；仍可以手动检查',
+    period: '。',
+    separator: '；',
   }
 }
 
@@ -135,7 +150,17 @@ export function paintUpdateCard(state: UpdateState, english: boolean): void {
   installEl.textContent = state.phase === 'downloaded' ? copy.reveal : copy.install
 
   const dsh = block.dataset.dshVersion || copy.dshUnavailable
+  const installed = block.dataset.installedDshVersion || ''
   versionEl.textContent = copy.client + state.currentVersion + ' · ' + copy.bundled + ' ' + dsh
+    + (installed !== '' ? ' · ' + copy.installed + ' ' + installed : '')
+  const managedEl = block.querySelector('#dsh-update-managed') as HTMLElement | null
+  if (managedEl !== null) {
+    const lines: string[] = []
+    if (block.dataset.feedManaged === '1') lines.push(copy.feedManaged)
+    if (block.dataset.autoCheckOff === '1') lines.push(copy.autoCheckOff)
+    managedEl.hidden = lines.length === 0
+    managedEl.textContent = lines.length > 0 ? lines.join(copy.separator) + copy.period : ''
+  }
 
   let line = ''
   if (state.phase === 'checking') line = copy.checking
@@ -236,6 +261,7 @@ export function injectUpdate(panel: Element): void {
     + '<button class="dsh-enhance-button" id="dsh-update-dismiss" type="button" hidden>' + copy.dismiss + '</button>'
     + '</div></div>'
     + '<p class="dsh-update-version" id="dsh-update-version"></p>'
+    + '<p class="dsh-update-managed" id="dsh-update-managed" hidden></p>'
     + '<p class="dsh-update-status" id="dsh-update-status" hidden></p>'
     + '<div class="dsh-update-bar" id="dsh-update-bar" hidden><span></span></div>'
     + '<div class="dsh-update-notes" id="dsh-update-notes" hidden></div>'
@@ -280,7 +306,13 @@ export function injectUpdate(panel: Element): void {
   void Promise.allSettled([update.getStatus(), connection.getStatus()]).then((results) => {
     const state = results[0].status === 'fulfilled' ? results[0].value : null
     const conn = results[1].status === 'fulfilled' ? results[1].value : null
-    if (conn !== null) block.dataset.dshVersion = conn.dshVersion ?? ''
+    if (conn !== null) {
+      block.dataset.dshVersion = conn.dshVersion ?? ''
+      block.dataset.installedDshVersion = conn.installedDshVersion ?? ''
+      const updates = conn.enterprise?.mode !== 'personal' ? conn.enterprise?.updates : undefined
+      block.dataset.feedManaged = updates?.feedManaged === true ? '1' : ''
+      block.dataset.autoCheckOff = updates?.autoCheck === false ? '1' : ''
+    }
     if (state !== null) {
       paintUpdateCard(state, currentEnglish())
       return

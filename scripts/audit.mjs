@@ -40,6 +40,7 @@ electronEnv.DSH_DESKTOP_SKIP_PROBE = '1'
 // Audit the runtime the release ships, not whichever dsh this developer
 // happens to have installed — the client prefers an installed one at runtime.
 electronEnv.DSH_DESKTOP_SKIP_INSTALLED_DSH = '1'
+electronEnv.DSH_DESKTOP_SKIP_ONBOARDING = '1'
 
 const app = await electron.launch({
   args: [join(APP_DIR, '.build', 'main.mjs'), '--user-data-dir=' + join(auditHome, 'chromium')],

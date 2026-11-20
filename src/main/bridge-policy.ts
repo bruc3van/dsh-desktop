@@ -109,7 +109,7 @@ export function createBridgePolicy(options: Options) {
    * page in Connect mode, and that page has no business restarting the client's
    * connection or ending the application.
    */
-  function localDocumentCaller(event: Electron.IpcMainEvent): boolean {
+  function localDocumentCaller(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
     const mainWindow = options.getMainWindow()
     if (mainWindow === null || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return false
     if (options.mainSurface() === 'page') return false

@@ -52,6 +52,7 @@ import { renderErrorPageUrl } from './pages/error.ts'
 import { renderGatePageUrl } from './pages/gate.ts'
 import { renderLoadingPageUrl } from './pages/loading.ts'
 import { renderClientNoticePageUrl } from './pages/notice.ts'
+import { renderOnboardingPageUrl } from './pages/onboarding.ts'
 import { renderSettingsPageScript } from './pages/settings-script.ts'
 import { renderSettingsPageHtml } from './pages/settings.ts'
 import { parseSettingsIntegrationStatus,type SettingsIntegrationStatus } from './settings-integration.ts'
@@ -97,7 +98,7 @@ type UpdateState
 
 /** The built bundle sits at <project>/.build/main.mjs. */
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
-const { loadSettings: loadStoredSettings, patchSettings } = createClientSettingsStore(clientHome())
+const { loadSettings: loadStoredSettings, patchSettings, hasSettingsFile } = createClientSettingsStore(clientHome())
 
 /**
  * Organisation management. Inert in personal mode; with an enrollment or a
@@ -755,14 +756,47 @@ function showConnectionError(failure: ConnectionFailure): void {
  */
 function bindErrorPageSeats(window: BrowserWindow): void {
   if (window.isDestroyed() || window.webContents.isDestroyed()) return
+  const chinese = localeChinese()
+  const copy = JSON.stringify({
+    starting: chinese ? '正在启动…' : 'Starting…',
+    empty: chinese ? '请先粘贴加入地址' : 'Paste the join address first',
+    contacting: chinese ? '正在连接企业服务端…确认后请在浏览器里完成登录。' : 'Contacting the server… after you confirm, finish signing in in your browser.',
+    joined: chinese ? '已加入，客户端正在重启…' : 'Joined. The client is restarting…',
+  })
   void window.webContents.executeJavaScript(
-    '(() => { const bind = (id, run) => { const b = document.getElementById(id); if (b !== null) b.onclick = run };'
+    '(() => { const copy = ' + copy + '; const bind = (id, run) => { const b = document.getElementById(id); if (b !== null) b.onclick = run };'
     + ' bind("error-retry", () => { window.desktop?.local?.retry?.() });'
     + ' bind("error-use-smart", () => { window.desktop?.local?.useSmart?.() });'
     + ' bind("error-settings", () => { window.desktop?.openConnectionSettings?.() });'
     + ' bind("error-quit", () => { window.desktop?.local?.quit?.() });'
     + ' bind("gate-personal", () => { window.desktop?.local?.personal?.() });'
-    + ' bind("gate-diagnostics", () => { window.desktop?.local?.diagnostics?.() }) })();',
+    + ' bind("gate-diagnostics", () => { window.desktop?.local?.diagnostics?.() });'
+    + ' const personalBtn = document.getElementById("onboarding-personal");'
+    + ' if (personalBtn !== null) personalBtn.onclick = () => { personalBtn.disabled = true; personalBtn.textContent = copy.starting; window.desktop?.local?.completeOnboardingPersonal?.() };'
+    + ' const joinBtn = document.getElementById("onboarding-join-go");'
+    + ' const joinInput = document.getElementById("onboarding-join-url");'
+    + ' const joinStatus = document.getElementById("onboarding-join-status");'
+    + ' if (joinBtn !== null && joinInput !== null && joinStatus !== null) {'
+    + '   const submit = async () => {'
+    + '     const value = joinInput.value.trim();'
+    + '     if (!value) { joinStatus.className = "status error"; joinStatus.textContent = copy.empty; return }'
+    + '     joinBtn.disabled = true; joinInput.disabled = true; if (personalBtn !== null) personalBtn.disabled = true;'
+    + '     joinStatus.className = "status"; joinStatus.textContent = copy.contacting;'
+    + '     try {'
+    + '       const result = await window.desktop?.local?.joinFromOnboarding?.(value);'
+    + '       if (result && result.saved) { joinStatus.textContent = copy.joined; return }'
+    + '       joinStatus.className = "status" + (result && result.error ? " error" : "");'
+    + '       joinStatus.textContent = (result && result.error) || "";'
+    + '     } catch (error) {'
+    + '       joinStatus.className = "status error";'
+    + '       joinStatus.textContent = error && error.message ? error.message : String(error);'
+    + '     } finally {'
+    + '       joinBtn.disabled = false; joinInput.disabled = false; if (personalBtn !== null) personalBtn.disabled = false;'
+    + '     }'
+    + '   };'
+    + '   joinBtn.onclick = () => { void submit() };'
+    + '   joinInput.onkeydown = (event) => { if (event.key === "Enter") void submit() };'
+    + ' } })();',
     true,
   ).catch(() => {})
 }
@@ -1324,7 +1358,7 @@ function bridgeDenied(): Error {
   return bridgePolicy.bridgeDenied()
 }
 
-function localDocumentCaller(event: Electron.IpcMainEvent): boolean {
+function localDocumentCaller(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
   return bridgePolicy.localDocumentCaller(event)
 }
 
@@ -1633,12 +1667,18 @@ function requestDshDataModeSave(value: unknown): { saved: boolean; dshDataMode: 
 
 function requestServerUrlSave(serverUrl: unknown, remoteCaller: boolean): Promise<{ saved: boolean; mode?: "smart" | "connect"; error?: string; }> {
   if (enterprise.active()) return Promise.resolve({ saved: false, error: managedRefusal() })
-  return settingsCommands.requestServerUrlSave(serverUrl, remoteCaller)
+  return settingsCommands.requestServerUrlSave(serverUrl, remoteCaller).then(result => {
+    if (result.saved) onboardingPending = false
+    return result
+  })
 }
 
 function switchConnectionMode(): Promise<{ switched: boolean; mode?: "smart" | "connect"; error?: string; }> {
   if (enterprise.active()) return Promise.resolve({ switched: false, error: managedRefusal() })
-  return settingsCommands.switchConnectionMode()
+  return settingsCommands.switchConnectionMode().then(result => {
+    if (result.switched) onboardingPending = false
+    return result
+  })
 }
 
 /** Connection, runtime source and data environment are the organisation's in enterprise mode. */
@@ -1647,12 +1687,36 @@ function managedRefusal(): string {
   return localeChinese() ? '由 ' + organization + ' 统一管理，不能在此修改' : 'Managed by ' + organization + '; it cannot be changed here'
 }
 
+let onboardingPending = false
+
+function showOnboardingSurface(): void {
+  if (isQuitting()) return
+  const window = mainWindow
+  if (window === null || window.isDestroyed() || window.webContents.isDestroyed()) return
+  mainSurface = 'failure'
+  resetPageAppearance()
+  void window.loadURL(renderOnboardingPageUrl(localeChinese(), loadingIconTag())).catch(() => {})
+}
+
+function completeOnboardingPersonal(): void {
+  if (!onboardingPending || isQuitting()) return
+  onboardingPending = false
+  patchSettings({ onboardingCompleted: true })
+  dismissFailureSurface()
+  showLoadingDocument()
+  updateLoadingStatus('正在启动本地 dsh 服务…', 'Starting the local dsh service…')
+  void startConnection(loadSettings(), false, false)
+}
 
 /** Open the window at the CURRENT target, waiting for local readiness if needed. */
 function launchWindow(generation = connection.generation, force = false): void {
   if (generation !== connection.generation || isQuitting()) return
   mainWindowRequested = true
   if (mainWindow === null) createWindow()
+  if (onboardingPending) {
+    showOnboardingSurface()
+    return
+  }
   // The organisation answers first. A window reopened before it has admitted
   // this launch (macOS destroys a closed window; the Dock asks for a new one)
   // shows where that stands and starts nothing.
@@ -1782,6 +1846,14 @@ function boot(): void {
     onExit: connection.onExit,
   })
 
+  onboardingPending = !devFlag('DSH_DESKTOP_SKIP_ONBOARDING')
+    && !hasSettingsFile()
+    && !enterprise.active()
+    && enterprise.status().joinable === true
+  if (onboardingPending) {
+    if (mainWindowRequested) showOnboardingSurface()
+    return
+  }
   void startConnection(settings, false, false)
 }
 
@@ -2083,6 +2155,10 @@ function registerDesktopIpc(): void {
 const desktopIpc = createDesktopIpc({
   requestRestart,
   enterpriseAction,
+  joinOrganisation,
+  enterpriseSkills,
+  setEnterpriseSkill,
+  setBundledMarketEnabled,
   bridgeCaller,
   bridgeDenied,
   getStatusJson,
@@ -2101,6 +2177,7 @@ const desktopIpc = createDesktopIpc({
   localDocumentCaller,
   retryConnection,
   useSmartFromLocalDocument,
+  completeOnboardingPersonal,
   personalFromGate: () => { void switchPersonalMode(true) },
   diagnosticsFromGate: () => { void exportDiagnostics() },
   getDesktopUpdater: () => desktopUpdater,

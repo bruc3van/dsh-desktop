@@ -7,6 +7,10 @@ interface BridgeCaller { trusted: boolean; remote: boolean }
 interface Options {
   requestRestart: () => { started: boolean; error?: string }
   enterpriseAction: (action: unknown) => Promise<{ ok: boolean; error?: string }>
+  joinOrganisation: (value: unknown) => Promise<{ saved: boolean; error?: string }>
+  enterpriseSkills: () => Promise<{ ok: boolean; skills?: unknown; error?: string }>
+  setEnterpriseSkill: (value: unknown) => Promise<{ saved: boolean; skills?: unknown; error?: string }>
+  setBundledMarketEnabled: (enabled: unknown, remoteCaller: boolean) => Promise<{ enabled: boolean }>
   bridgeCaller: (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) => BridgeCaller
   bridgeDenied: () => Error
   getStatusJson: (includeLocalDetail?: boolean) => Record<string, unknown>
@@ -22,9 +26,10 @@ interface Options {
   requestServerUrlSave: (serverUrl: unknown, remoteCaller: boolean) => Promise<{ saved: boolean; mode?: "smart" | "connect"; error?: string }>
   switchConnectionMode: () => Promise<{ switched: boolean; mode?: "smart" | "connect"; error?: string }>
   openSettingsWindow: () => void
-  localDocumentCaller: (event: Electron.IpcMainEvent) => boolean
+  localDocumentCaller: (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) => boolean
   retryConnection: () => void
   useSmartFromLocalDocument: () => void
+  completeOnboardingPersonal: () => void
   /** Organisation gate: opt out to personal mode (when allowed) / save a support bundle. */
   personalFromGate: () => void
   diagnosticsFromGate: () => void
@@ -62,6 +67,26 @@ export function createDesktopIpc(options: Options) {
       const caller = bridgeCaller(event)
       if (!caller.trusted || caller.remote) throw bridgeDenied()
       return options.enterpriseAction(action)
+    })
+    ipcMain.handle('desktop:enterprise:join', async (event, server: unknown) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted || caller.remote) throw bridgeDenied()
+      return options.joinOrganisation(server)
+    })
+    ipcMain.handle('desktop:enterprise:skills', async (event) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted || caller.remote) throw bridgeDenied()
+      return options.enterpriseSkills()
+    })
+    ipcMain.handle('desktop:enterprise:skill', async (event, skill: unknown) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted || caller.remote) throw bridgeDenied()
+      return options.setEnterpriseSkill(skill)
+    })
+    ipcMain.handle('desktop:market:set', async (event, enabled: unknown) => {
+      const caller = bridgeCaller(event)
+      if (!caller.trusted) throw bridgeDenied()
+      return options.setBundledMarketEnabled(enabled, caller.remote)
     })
     ipcMain.handle('desktop:connection:smartRuntimes', async (event, runtimes: unknown) => {
       const caller = bridgeCaller(event)
@@ -150,6 +175,14 @@ export function createDesktopIpc(options: Options) {
     ipcMain.on('desktop:local:diagnostics', (event) => {
       if (!localDocumentCaller(event)) return
       options.diagnosticsFromGate()
+    })
+    ipcMain.on('desktop:local:onboarding-personal', (event) => {
+      if (!localDocumentCaller(event)) return
+      options.completeOnboardingPersonal()
+    })
+    ipcMain.handle('desktop:local:onboarding-join', async (event, server: unknown) => {
+      if (!localDocumentCaller(event)) throw bridgeDenied()
+      return options.joinOrganisation(server)
     })
     ipcMain.handle('desktop:update:status', (event) => {
       const caller = bridgeCaller(event)

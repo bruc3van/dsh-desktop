@@ -193,6 +193,7 @@ const child = spawn(executable, ['--user-data-dir=' + join(smokeHome, 'chromium'
   env: {
     ...childEnv,
     DSH_DESKTOP_ALLOW_UNSAFE: '1',
+    DSH_DESKTOP_SKIP_ONBOARDING: '1',
     DSH_HOME: join(smokeHome, 'dsh'),
     DSH_DESKTOP_HOME: join(smokeHome, 'desktop'),
     DSH_DESKTOP_SKIP_PROBE: '1',
