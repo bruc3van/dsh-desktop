@@ -163,23 +163,25 @@ export interface ReleaseNotesTokens {
 export function releaseNotesCss(selector: string, tokens: ReleaseNotesTokens): string {
   const each = (...children: string[]): string => children.map((child) => selector + ' ' + child).join(',')
   return [
-    selector + '{margin:0 0 10px;font-size:13px;line-height:1.65;color:' + tokens.text + ';max-height:220px;overflow:auto}',
+    selector + '{margin:0 0 10px;font-size:13px;line-height:20px;color:' + tokens.text + ';max-height:220px;overflow:auto}',
     each('>:first-child') + '{margin-top:0}',
     each('>:last-child') + '{margin-bottom:0}',
-    each('h3', 'h4', 'h5', 'h6') + '{margin:12px 0 6px;font-size:13px;font-weight:600;color:' + tokens.strong + '}',
+    each('h3', 'h4', 'h5', 'h6') + '{margin:12px 0 6px;font-size:13px;line-height:20px;font-weight:500;color:' + tokens.strong + '}',
     each('p') + '{margin:0 0 8px}',
     each('ul', 'ol') + '{margin:0 0 8px;padding-left:18px}',
     each('li') + '{margin:2px 0}',
-    each('strong') + '{font-weight:600;color:' + tokens.strong + '}',
-    each('a') + '{color:inherit;text-decoration:underline}',
-    each('code') + '{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:' + tokens.surface + ';border-radius:4px;padding:1px 4px}',
-    each('pre') + '{margin:0 0 8px;padding:8px 10px;border-radius:8px;background:' + tokens.surface + ';overflow:auto}',
+    each('strong') + '{font-weight:500;color:' + tokens.strong + '}',
+    each('a') + '{color:var(--dsw-alias-link,rgb(65,118,230));font-weight:500;text-decoration:none}',
+    '@media(hover:hover){' + each('a:hover') + '{text-decoration:underline dotted;text-underline-offset:3px}}',
+    each('a:focus-visible') + '{text-decoration:underline dotted;text-underline-offset:3px}',
+    each('code') + '{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:12px;background:' + tokens.surface + ';border-radius:var(--dsw-radius-xs,4px);padding:1px 4px}',
+    each('pre') + '{margin:0 0 8px;padding:8px 10px;border-radius:var(--dsw-radius-sm,8px);background:' + tokens.surface + ';overflow:auto}',
     each('pre code') + '{background:none;padding:0}',
     each('blockquote') + '{margin:0 0 8px;padding:2px 0 2px 10px;border-left:2px solid ' + tokens.border + '}',
-    each('hr') + '{border:none;border-top:1px solid ' + tokens.border + ';margin:10px 0}',
-    each('table') + '{border-collapse:collapse;margin:0 0 8px;font-size:12px}',
-    each('th', 'td') + '{border:1px solid ' + tokens.border + ';padding:4px 8px;text-align:left}',
-    each('th') + '{font-weight:600;color:' + tokens.strong + '}',
+    each('hr') + '{border:none;border-top:.5px solid ' + tokens.border + ';margin:10px 0}',
+    each('table') + '{border-collapse:collapse;margin:0 0 8px;font-size:12px;line-height:18px}',
+    each('th', 'td') + '{border:.5px solid ' + tokens.border + ';padding:4px 8px;text-align:left}',
+    each('th') + '{font-weight:500;color:' + tokens.strong + '}',
   ].join('')
 }
 

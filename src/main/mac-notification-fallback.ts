@@ -36,18 +36,29 @@ export function installMacNotificationFallback(): void {
     const style = document.createElement('style')
     style.textContent = `
       :host{all:initial}
-      .stack{position:fixed;top:18px;right:18px;display:flex;flex-direction:column;gap:10px;
-        width:min(360px,calc(100vw - 36px));pointer-events:none;font-family:-apple-system,BlinkMacSystemFont,
-        "Segoe UI",sans-serif;color:#17181a}
-      .toast{pointer-events:auto;display:grid;grid-template-columns:1fr auto;gap:5px 12px;padding:14px 14px 13px;
-        border:1px solid rgba(15,17,21,.12);border-radius:13px;background:rgba(252,252,253,.96);
-        box-shadow:0 12px 36px rgba(15,17,21,.18);backdrop-filter:blur(18px);cursor:pointer}
-      .toast:hover{background:#fff}.title{font-size:14px;line-height:20px;font-weight:650;overflow-wrap:anywhere}
-      .body{grid-column:1/-1;font-size:13px;line-height:19px;color:#5f636b;white-space:pre-wrap;overflow-wrap:anywhere}
-      .close{grid-column:2;grid-row:1;border:0;background:transparent;color:#767b84;padding:0 2px;font-size:18px;
-        line-height:20px;cursor:pointer}.close:hover{color:#17181a}
-      @media(prefers-color-scheme:dark){.toast{color:#f3f4f6;background:rgba(37,39,43,.96);border-color:rgba(255,255,255,.13)}
-        .toast:hover{background:#2d3035}.body{color:#b5bac3}.close{color:#9da3ad}.close:hover{color:#fff}}
+      @supports (corner-shape:superellipse(1.5)){*,*::before,*::after{corner-shape:superellipse(1.5)}}
+      .stack{position:fixed;top:16px;right:16px;display:flex;flex-direction:column;gap:8px;
+        width:min(360px,calc(100vw - 32px));pointer-events:none;font-family:-apple-system,BlinkMacSystemFont,
+        "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:rgb(15,17,21)}
+      .toast{pointer-events:auto;display:grid;grid-template-columns:1fr auto;align-items:start;gap:4px 8px;padding:12px 16px;
+        border:0;border-radius:16px;background:rgba(255,255,255,.94);
+        box-shadow:0 0 0 .5px rgba(0,0,0,.16),0 3px 8px 0 rgba(0,0,0,.04),0 0 20px 0 rgba(0,0,0,.05);
+        backdrop-filter:blur(24px);cursor:pointer;transition:background .1s cubic-bezier(.4,0,.2,1)}
+      @media(hover:hover){.toast:hover{background:#fff}}
+      .title{font-size:14px;line-height:22px;font-weight:500;overflow-wrap:anywhere}
+      .body{grid-column:1/-1;font-size:13px;line-height:20px;color:rgb(97,102,107);white-space:pre-wrap;overflow-wrap:anywhere}
+      .close{grid-column:2;grid-row:1;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
+        margin:-3px -6px 0 0;border:0;border-radius:8px;background:transparent;color:rgb(173,178,184);padding:0;font-size:16px;
+        line-height:1;cursor:pointer;transition:background .1s cubic-bezier(.4,0,.2,1),color .1s cubic-bezier(.4,0,.2,1)}
+      @media(hover:hover){.close:hover{background:rgba(38,49,72,.06);color:rgb(97,102,107)}}
+      .toast:focus-visible,.close:focus-visible{outline:2px solid rgb(65,118,230);outline-offset:2px}
+      @media(prefers-color-scheme:dark){.toast{color:rgb(249,250,251);background:rgba(44,44,46,.94);
+        box-shadow:0 0 0 .5px rgba(255,255,255,.2),0 3px 8px 0 rgba(0,0,0,.12),0 0 20px 0 rgba(0,0,0,.16)}
+        @media(hover:hover){.toast:hover{background:rgb(53,54,56)}}
+        .body{color:rgb(207,211,214)}.close{color:rgb(129,133,140)}
+        @media(hover:hover){.close:hover{background:rgba(255,255,255,.08);color:rgb(207,211,214)}}
+        .toast:focus-visible,.close:focus-visible{outline-color:rgb(122,170,255)}}
+      @media(prefers-reduced-motion:reduce){*{transition:none!important}}
     `
     const stack = document.createElement('div')
     stack.className = 'stack'

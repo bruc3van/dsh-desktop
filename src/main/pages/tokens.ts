@@ -1,0 +1,71 @@
+/**
+ * Shared local design tokens for Electron-owned windows (settings, onboarding,
+ * error, gate, loading, notice, update, recovery dialogs and OAuth callback).
+ *
+ * These documents run outside the DSH Web UI, so they cannot inherit the host's
+ * runtime `--dsw-*` stylesheets. The token names and resolved light/dark values
+ * below mirror `@deepseek-ai/dsh-client-ui-theme` (`base.css`,
+ * `design-platform.css`, `gradient-shadow-text.css`, `corner-shape.css`,
+ * `focus.css`, `scrollbar.css`) so every client-owned surface matches the
+ * official DSH Web UI.
+ */
+export function hostTokensCss(): string {
+  return ':root{color-scheme:light dark;'
+    + '--dsw-font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif;'
+    + '--ds-font-family-code:"SF Mono","JetBrains Mono","Fira Code",Consolas,"Liberation Mono",Menlo,Courier,"PingFang SC","Microsoft YaHei";'
+    + '--ds-ease-in-out:cubic-bezier(0.4,0,0.2,1);'
+    + '--ds-transition-duration-fast:0.1s;--ds-transition-duration:0.2s;--ds-transition-duration-slow:0.3s;'
+    + '--dsw-radius-xs:4px;--dsw-radius-sm:8px;--dsw-radius-md:12px;--dsw-radius-lg:16px;--dsw-radius-xl:20px;--dsw-radius-panel:28px;'
+    + '--dsw-focus-ring-width:2px;'
+    + '--dsw-alias-label-primary:rgb(15,17,21);--dsw-alias-label-secondary:rgb(97,102,107);'
+    + '--dsw-alias-label-tertiary:rgb(129,133,140);--dsw-alias-label-caption:rgb(173,178,184);'
+    + '--dsw-alias-label-dimmed:rgb(225,229,238);--dsw-alias-label-on-color:#fff;--dsw-alias-label-primary-foreground:#fff;'
+    + '--dsw-alias-bg-base:#fff;--dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-layer-2:#fff;--dsw-alias-bg-layer-3:#fff;'
+    + '--dsw-alias-bg-module-platform:rgb(245,246,247);--dsw-alias-bg-skeleton:rgba(0,0,0,.04);--dsw-alias-bg-mask-1:rgba(0,0,0,.24);'
+    + '--dsw-alias-markdown-code-block:rgb(249,250,251);'
+    + '--dsw-alias-border-l1:rgba(0,0,0,.04);--dsw-alias-border-l2:rgba(0,0,0,.1);--dsw-alias-border-l3:rgba(0,0,0,.12);--dsw-alias-border-l4:rgba(0,0,0,.16);'
+    + '--dsw-alias-border-selected:rgb(173,178,184);'
+    + '--dsw-alias-settings-card-fill:var(--dsw-alias-bg-layer-2);--dsw-alias-settings-card-stroke:var(--dsw-alias-border-l4);'
+    + '--dsw-alias-interactive-bg-hover:rgba(38,49,72,.06);--dsw-alias-interactive-bg-active:rgba(38,49,72,.1);'
+    + '--dsw-alias-interactive-bg-hover-danger:rgba(236,19,19,.05);'
+    + '--dsw-specific-sidebar-nav-item-active:rgb(235,238,242);'
+    + '--dsw-alias-brand-primary:rgb(15,17,21);--dsw-alias-button-primary-fill:var(--dsw-alias-brand-primary);--dsw-alias-button-primary-hover:rgb(67,69,74);--dsw-alias-button-elevated-fill:#fff;'
+    + '--dsw-alias-state-business-primary:rgb(65,118,230);--dsw-alias-link:rgb(65,118,230);'
+    + '--dsw-alias-state-success-primary:rgb(34,197,94);'
+    + '--dsw-alias-state-warn-primary:rgb(245,158,11);--dsw-alias-state-warn-label:rgb(221,134,41);--dsw-alias-state-warn-tertiary:rgb(254,245,231);'
+    + '--dsw-alias-state-error-primary:rgb(236,19,19);'
+    + '--dsw-alias-scrollbar-bg-l1:rgb(229,229,229);--dsw-alias-scrollbar-hover-l1:rgb(212,212,212);'
+    + '--dsw-alias-scrollbar-bg-l2:rgb(229,229,229);--dsw-alias-scrollbar-hover-l2:rgb(212,212,212);'
+    + '--dsw-alias-switch-track-off:rgba(0,0,0,.12);--dsw-alias-switch-thumb:#fff;'
+    + '--dsw-elevation-stroke-color:var(--dsw-alias-border-l4);'
+    + '--dsw-shadow-lv3:0 0 1px 0 rgba(0,0,0,.2),0 0 4px 0 rgba(0,0,0,.02),0 12px 32px 0 rgba(0,0,0,.08)}'
+    + '@media(prefers-color-scheme:dark){:root{'
+    + '--dsw-alias-label-primary:rgb(249,250,251);--dsw-alias-label-secondary:rgb(207,211,214);'
+    + '--dsw-alias-label-tertiary:rgb(173,178,184);--dsw-alias-label-caption:rgb(129,133,140);'
+    + '--dsw-alias-label-dimmed:rgb(67,69,74);--dsw-alias-label-primary-foreground:rgb(15,17,21);'
+    + '--dsw-alias-bg-base:rgb(21,21,23);--dsw-alias-bg-layer-1:rgb(35,35,36);--dsw-alias-bg-layer-2:rgb(44,44,46);--dsw-alias-bg-layer-3:rgb(53,54,56);'
+    + '--dsw-alias-bg-module-platform:rgb(53,54,56);--dsw-alias-bg-skeleton:rgba(255,255,255,.08);--dsw-alias-bg-mask-1:rgba(0,0,0,.5);'
+    + '--dsw-alias-markdown-code-block:rgb(27,27,28);'
+    + '--dsw-alias-border-l1:rgba(255,255,255,.06);--dsw-alias-border-l2:rgba(255,255,255,.12);--dsw-alias-border-l3:rgba(255,255,255,.16);--dsw-alias-border-l4:rgba(255,255,255,.2);'
+    + '--dsw-alias-interactive-bg-hover:rgba(255,255,255,.08);--dsw-alias-interactive-bg-active:rgba(255,255,255,.14);'
+    + '--dsw-alias-interactive-bg-hover-danger:rgba(242,90,90,.15);'
+    + '--dsw-specific-sidebar-nav-item-active:rgb(67,69,74);'
+    + '--dsw-alias-brand-primary:rgb(249,250,251);--dsw-alias-button-primary-hover:rgb(235,238,242);--dsw-alias-button-elevated-fill:rgb(67,69,74);'
+    + '--dsw-alias-state-business-primary:rgb(122,170,255);--dsw-alias-link:rgb(122,170,255);'
+    + '--dsw-alias-state-warn-tertiary:rgb(39,36,31);--dsw-alias-state-error-primary:rgb(242,90,90);'
+    + '--dsw-alias-scrollbar-bg-l1:rgb(60,60,61);--dsw-alias-scrollbar-hover-l1:rgb(84,85,87);'
+    + '--dsw-alias-scrollbar-bg-l2:rgb(84,85,87);--dsw-alias-scrollbar-hover-l2:rgb(101,103,107);'
+    + '--dsw-alias-switch-track-off:rgba(255,255,255,.16);--dsw-alias-switch-thumb:rgb(173,178,184)}}'
+    + '@supports (corner-shape:superellipse(1.5)){*,*::before,*::after{corner-shape:superellipse(1.5)}}'
+    + 'body,body *{--dsw-elevation-stroke:0 0 0 .5px var(--dsw-elevation-stroke-color);'
+    + '--dsw-elevation-panel:var(--dsw-elevation-stroke),0 3px 8px 0 rgba(0,0,0,.03),0 0 16px 0 rgba(0,0,0,.02);'
+    + '--dsw-elevation-prominent:var(--dsw-elevation-stroke),0 3px 8px 0 rgba(0,0,0,.04),0 0 20px 0 rgba(0,0,0,.05)}'
+    + 'body{--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l1);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l1);'
+    + 'font-family:var(--dsw-font-family);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);-webkit-font-smoothing:antialiased}'
+    + ':focus-visible:not(input,textarea,select){outline:var(--dsw-focus-ring-width) solid var(--dsw-alias-state-business-primary);outline-offset:2px}'
+    + '::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:transparent}'
+    + '::-webkit-scrollbar-thumb{background:var(--dsh-scrollbar-thumb);border-radius:999px;corner-shape:round}'
+    + '@media(hover:hover){::-webkit-scrollbar-thumb:hover{background:var(--dsh-scrollbar-thumb-hover)}}'
+    + '::-webkit-scrollbar-corner{background:transparent}'
+    + '@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}'
+}

@@ -46,8 +46,10 @@ export function injectKeyHelp(): void {
     // Official secondary-text language, via the official theme variables so
     // the line follows the appearance setting (light/dark/system).
     style.textContent = '.' + KEY_HELP_CLASS + '{margin:8px 0 0;font-size:13px;line-height:20px;'
-      + 'color:var(--dsw-alias-label-secondary,#6E7480)}'
-      + '.' + KEY_HELP_CLASS + ' a{color:var(--dsw-alias-label-primary,#0F1115);text-decoration:underline;cursor:pointer}'
+      + 'color:var(--dsw-alias-label-secondary,rgb(97,102,107))}'
+      + '.' + KEY_HELP_CLASS + ' a{color:var(--dsw-alias-link,rgb(65,118,230));font-weight:500;text-decoration:none;cursor:pointer}'
+      + '@media(hover:hover){.' + KEY_HELP_CLASS + ' a:hover{text-decoration:underline dotted;text-underline-offset:3px}}'
+      + '.' + KEY_HELP_CLASS + ' a:focus-visible{text-decoration:underline dotted;text-underline-offset:3px}'
     document.head.appendChild(style)
   }
 

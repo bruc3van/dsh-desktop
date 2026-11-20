@@ -19,6 +19,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { createServer, type Server } from 'node:http'
 import { hostname as osHostname } from 'node:os'
 import { dirname, join } from 'node:path'
+import { hostTokensCss } from '../pages/tokens.ts'
 import {
   API, createDeviceProof, DEVICE_ID_HEADER, DEVICE_PROOF_HEADER, pkceChallenge, PROTOCOL_HEADER, PROTOCOL_VERSION,
   validateDesiredState, validateEnrollment, verifyDocument,
@@ -80,14 +81,14 @@ const CALLBACK_CROSS = '<path d="M8.5 8.5l7 7m0-7-7 7" fill="none" stroke="curre
 /** The page the browser lands on after the redirect back to this client. */
 const CALLBACK_HTML = (ok: boolean, title: string, detail: string, lang: string): string => {
   const text = (value: string): string => value.replace(/[<>&"]/g, '')
+  const tone = ok ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)'
   return '<!doctype html><html lang="' + text(lang) + '"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="color-scheme" content="light dark"><title>' + text(title) + ' · DSH Desktop Pro</title>'
-    + '<style>:root{--bg:#f5f5f7;--card:#fff;--text:#1d1d1f;--muted:#6e6e73;--line:rgba(0,0,0,.08);--tone:' + (ok ? '#248a3d' : '#d70015') + '}'
-    + '@media(prefers-color-scheme:dark){:root{--bg:#1c1c1e;--card:#2c2c2e;--text:#f5f5f7;--muted:#a1a1a6;--line:rgba(255,255,255,.08);--tone:' + (ok ? '#30d158' : '#ff453a') + '}}'
-    + '*{box-sizing:border-box;margin:0}body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","PingFang SC",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:grid;place-items:center;padding:24px;-webkit-font-smoothing:antialiased}'
-    + 'main{width:min(380px,100%);background:var(--card);border-radius:16px;box-shadow:0 0 0 .5px var(--line),0 12px 40px rgba(0,0,0,.08);padding:36px 32px 30px;text-align:center}'
-    + '.mark{width:52px;height:52px;border-radius:50%;margin:0 auto 18px;display:grid;place-items:center;color:var(--tone);background:color-mix(in srgb,var(--tone) 14%,transparent)}.mark svg{width:28px;height:28px}'
-    + 'h1{font-size:19px;font-weight:600;letter-spacing:-.01em}p{margin-top:8px;font-size:14px;line-height:1.55;color:var(--muted)}'
-    + 'footer{margin-top:26px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}</style>'
+    + '<style>' + hostTokensCss()
+    + '*{box-sizing:border-box;margin:0}body{min-height:100vh;display:grid;place-items:center;padding:24px}'
+    + 'main{width:min(380px,100%);background:var(--dsw-alias-settings-card-fill);border:0;border-radius:var(--dsw-radius-panel);box-shadow:var(--dsw-elevation-prominent);padding:32px 24px 24px;text-align:center}'
+    + '.mark{width:48px;height:48px;border-radius:50%;corner-shape:round;margin:0 auto 16px;display:grid;place-items:center;color:' + tone + ';background:color-mix(in srgb,' + tone + ' 12%,transparent)}.mark svg{width:24px;height:24px}'
+    + 'h1{font-size:20px;line-height:28px;font-weight:500;color:var(--dsw-alias-label-primary)}p{margin-top:8px;font-size:14px;line-height:22px;color:var(--dsw-alias-label-secondary)}'
+    + 'footer{margin-top:24px;padding-top:16px;border-top:.5px solid var(--dsw-alias-border-l2);font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}</style>'
     + '<main><div class="mark"><svg viewBox="0 0 24 24" aria-hidden="true">' + (ok ? CALLBACK_TICK : CALLBACK_CROSS) + '</svg></div>'
     + '<h1>' + text(title) + '</h1>' + (detail !== '' ? '<p>' + text(detail) + '</p>' : '') + '<footer>DSH Desktop Pro</footer></main></html>'
 }

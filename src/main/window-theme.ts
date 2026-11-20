@@ -12,7 +12,7 @@ export function createWindowTheme(options: Options) {
   const { getUpdatePromptWindow, bridgeCaller } = options
 
 
-  const WINDOW_BG_DARK = '#17181a'
+  const WINDOW_BG_DARK = '#151517'
 
   const WINDOW_BG_LIGHT = '#FFFFFF'
 

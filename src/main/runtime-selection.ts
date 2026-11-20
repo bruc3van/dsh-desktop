@@ -100,22 +100,28 @@ export function installRuntimeSelection(options: {
     event.stopImmediatePropagation()
     prompt = document.createElement('dialog')
     prompt.setAttribute('aria-label', t('未应用的来源更改', 'Unapplied source changes'))
-    prompt.style.cssText = 'margin:auto;padding:24px;border:1px solid #8886;border-radius:16px;max-width:420px;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:14px/1.6 system-ui;box-shadow:0 12px 48px #0003'
+    prompt.style.cssText = 'margin:auto;padding:24px;border:0;border-radius:var(--dsw-radius-panel,28px);max-width:380px;width:calc(100vw - 32px);background:var(--dsw-alias-bg-layer-2,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:400 14px/22px var(--dsw-font-family,system-ui);box-shadow:var(--dsw-elevation-prominent,0 0 0 .5px rgba(0,0,0,.16),0 3px 8px rgba(0,0,0,.04),0 0 20px rgba(0,0,0,.05))'
     const text = document.createElement('p')
+    text.style.cssText = 'margin:0'
     text.textContent = busy ? t('正在应用来源设置，请稍候。', 'Applying source settings. Please wait.')
       : t('来源更改尚未应用。要放弃更改吗？', 'Source changes have not been applied. Discard them?')
     prompt.appendChild(text)
+    const actions = document.createElement('div')
+    actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:20px'
+    prompt.appendChild(actions)
     const dismiss = (): void => { prompt?.remove(); prompt = undefined; apply.focus() }
-    const makeButton = (label: string, action: () => void): HTMLButtonElement => {
+    const makeButton = (label: string, action: () => void, primary = false): HTMLButtonElement => {
       const button = document.createElement('button')
       button.type = 'button'
       button.textContent = label
-      button.style.cssText = 'margin:16px 8px 0 0;padding:8px 16px;border:1px solid #8886;border-radius:24px;background:transparent;color:inherit;cursor:pointer;font:inherit'
+      button.style.cssText = primary
+        ? 'display:inline-flex;align-items:center;justify-content:center;height:36px;padding:0 14px;border:0;border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-button-primary-fill,rgb(15,17,21));color:var(--dsw-alias-label-primary-foreground,#fff);cursor:pointer;font-family:inherit;font-size:14px;line-height:22px;font-weight:500'
+        : 'display:inline-flex;align-items:center;justify-content:center;height:36px;padding:0 14px;border:0;box-shadow:inset 0 0 0 .5px var(--dsw-alias-border-l3,rgba(0,0,0,.12));border-radius:var(--dsw-radius-md,12px);background:transparent;color:inherit;cursor:pointer;font-family:inherit;font-size:14px;line-height:22px;font-weight:400'
       button.addEventListener('click', action)
-      prompt?.appendChild(button)
+      actions.appendChild(button)
       return button
     }
-    const keep = makeButton(t('继续编辑', 'Continue editing'), dismiss)
+    const keep = makeButton(t('继续编辑', 'Continue editing'), dismiss, true)
     if (!busy) makeButton(t('放弃更改', 'Discard changes'), () => {
       draft = [...baseline]
       pending()
