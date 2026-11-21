@@ -17,14 +17,14 @@ The client loads the official Web UI, and the installer includes a pinned versio
 |---|---|---|
 | Getting started | Enter your own API key | IT provides a configuration; employees sign in with their company account |
 | Models | Your own DeepSeek or other model account | The company model gateway, with each employee's own key |
-| Plugins and skills | Installed by you | Assigned by IT; people can add their own |
+| Plugins and skills | Bundled plugin market (DSH Market Pro) and curated index; install as needed | Assigned by IT; people can add their own |
 | Data directory | `~/.dsh` or the client's own directory | A separate organisation directory; a personal `~/.dsh` is never touched |
 | Deployment | None | One configuration file, or the management server (Docker Compose) |
 
 It is one installer. On a machine without an organisation configuration, the client behaves exactly as for personal use.
 
 > [!NOTE]
-> The organisation features arrived in 0.7.0 and are in beta. Until the final release the protocol between client and server may change, so upgrade both together. See the [roadmap](docs/roadmap.md) (in Chinese) for progress.
+> Organisation features are generally available starting with 0.7.0; keep the client and management server upgraded together for protocol compatibility. See the [roadmap](docs/roadmap.md) (in Chinese) for upcoming plans.
 
 ## Download
 
@@ -75,6 +75,7 @@ Start with the [enterprise deployment guide](docs/enterprise.md): try file mode 
 - It keeps running in the background after the window closes and reopens from the tray or menu bar.
 - An official Web UI already running on the machine is reused; otherwise the client starts and manages the bundled runtime. It can also connect to an address you specify.
 - On first launch it subscribes to a curated plugin index you can browse and install from on the Discover page. The client only adds the subscription; it does not install plugins for you.
+- Bundles [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro) (enabled by default in personal mode and toggleable in Desktop settings): manage plugins, skills, and 33 curated / managed MCP servers in one place, with batch updates, post-install AI security review, and in-chat AI-native plugin & MCP discovery (`/dsh-market-pro`, `/dsh-mcp-pro`, toggleable anytime in market settings).
 - It updates itself, and checks update packages against SHA-256 before installing.
 - Windows run sandboxed with context isolation, and navigation and permissions are restricted.
 
@@ -119,9 +120,8 @@ The console is available in Chinese and English. For deployment steps see the [e
 
 ## Status and roadmap
 
-- **Now**: 0.7.0 beta. No new features are added before the final release, only hardening, fixes and pilot feedback.
-- **Next beta**: Feishu (Lark), DingTalk and WeCom sign-in and directory sync (merged to the main branch, not yet released).
-- **After the final release**: more charts of configuration rollout, devices and usage; finer audit filtering and export; employees submitting the skills they write to the company skill library, for colleagues to install once reviewed.
+- **Now**: 0.7.0 general release, shipping file and server enterprise modes, SSO and Feishu (Lark)/DingTalk/WeCom directory sync, self-service organisation join, a refreshed client UI aligned with official DSH design tokens, first-run onboarding, and the bundled [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro).
+- **What comes next**: more charts of configuration rollout, devices and usage; finer audit filtering and export; employees submitting the skills they write to the company skill library, for colleagues to install once reviewed.
 
 The [roadmap](docs/roadmap.md) (in Chinese) lists what each step must meet; the [CHANGELOG](CHANGELOG.md) records what has shipped.
 
@@ -155,7 +155,7 @@ No. The client only adds the index address. Whether and what to install is your 
 ## Related projects
 
 - [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro): source of the preset index. It collects plugin repositories daily and maintains exclusion records.
-- [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro): a marketplace for curated plugins, browsing, installation, updates, and optional post-install AI security review, bundled with the installer.
+- [DSH Market Pro](https://github.com/bruc3van/dsh-market-pro): an agent-native DSH plugin and MCP marketplace with curated and full plugin catalogs, batch updates, 33 curated and managed MCP servers, skill browsing, in-chat AI discovery (`/dsh-market-pro`, `/dsh-mcp-pro`), and post-install AI security review, bundled with the installer.
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness): the upstream project for the official dsh and Web UI.
 
 ## License

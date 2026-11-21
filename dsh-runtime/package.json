@@ -14,7 +14,7 @@
     "@deepseek-ai/dsh-client-ui-session": "0.2.2-rc.5",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.5",
     "@deepseek-ai/dsh-client-ui-workspace": "0.2.2-rc.5",
-    "dsh-market-pro": "1.7.0",
+    "dsh-market-pro": "1.10.0",
     "pnpm": "11.16.0"
   },
   "optionalDependencies": {

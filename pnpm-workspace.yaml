@@ -19,7 +19,7 @@ minimumReleaseAgeExclude:
   # The bundled market is this project's own package, published from a tagged
   # GitHub Actions run; its release-day version is exempted one version at a
   # time, never by wildcard.
-  - dsh-market-pro@1.7.0
+  - dsh-market-pro@1.10.0
 
 # electron-builder 26.15.3 uses ElectronDownloadCacheMode, which was added in
 # @electron/get 3.1.0, while its published range still allows incompatible 3.0.0.
