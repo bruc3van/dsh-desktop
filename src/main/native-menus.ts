@@ -41,14 +41,17 @@ export function buildLinuxApplicationMenu({ chinese, actions }: TrayMenuOptions)
   ]
 }
 
-export function buildTrayMenu({ chinese, state, actions }: TrayMenuOptions): Electron.MenuItemConstructorOptions[] {
-  const updateLabel = state?.phase === 'available' && state.info !== null && !state.dismissed
+function updateMenuLabel(chinese: boolean, state: UpdateState | undefined): string {
+  return state?.phase === 'available' && state.info !== null && !state.dismissed
     ? (chinese ? '更新到 v' : 'Update to v') + state.info.availableVersion
     : (chinese ? '检查更新…' : 'Check for Updates…')
+}
+
+export function buildTrayMenu({ chinese, state, actions }: TrayMenuOptions): Electron.MenuItemConstructorOptions[] {
   return [
     { label: chinese ? '显示主窗口' : 'Show Window', click: actions.showWindow },
     { id: 'desktop-settings', label: chinese ? '桌面设置…' : 'Desktop settings…', click: actions.openSettings },
-    { label: updateLabel, click: actions.checkUpdates },
+    { label: updateMenuLabel(chinese, state), click: actions.checkUpdates },
     ...actions.exportDiagnostics === undefined && actions.signOut === undefined && actions.switchMode === undefined ? [] : [
       { type: 'separator' as const },
       ...actions.switchMode === undefined ? [] : [{ label: chinese ? actions.switchMode.zh : actions.switchMode.en, click: actions.switchMode.click }],
@@ -58,6 +61,18 @@ export function buildTrayMenu({ chinese, state, actions }: TrayMenuOptions): Ele
     { type: 'separator' },
     { label: chinese ? '重启客户端' : 'Restart', click: actions.restart },
     { label: chinese ? '退出' : 'Quit', click: actions.quit },
+  ]
+}
+
+/**
+ * macOS Dock context menu. Keeps the three quick actions accessible from the
+ * dock tile; macOS appends its standard Options / Hide / Quit items below.
+ */
+export function buildDockMenu({ chinese, state, actions }: TrayMenuOptions): Electron.MenuItemConstructorOptions[] {
+  return [
+    { id: 'desktop-settings', label: chinese ? '桌面设置…' : 'Desktop settings…', click: actions.openSettings },
+    { label: updateMenuLabel(chinese, state), click: actions.checkUpdates },
+    { label: chinese ? '重启客户端' : 'Restart', click: actions.restart },
   ]
 }
 

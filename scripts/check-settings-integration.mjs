@@ -182,6 +182,25 @@ try {
   const shortcutSettings = await shortcutOpened
   await shortcutSettings.waitForSelector('#versions', { state: 'attached' })
   await closeSettings(shortcutSettings)
+  if (process.platform === 'darwin') {
+    const dockLabels = await app.evaluate(({ app: electronApp }) => {
+      const menu = electronApp.dock?.getMenu()
+      return menu ? menu.items.map(item => item.label) : []
+    })
+    assert.equal(dockLabels.length, 3, 'macOS dock menu must expose three actions')
+    assert.match(dockLabels[0], /^(桌面设置…|Desktop settings…)$/)
+    assert.match(dockLabels[1], /^(检查更新…|Check for Updates…|更新到 v|Update to v)/)
+    assert.match(dockLabels[2], /^(重启客户端|Restart)$/)
+    const dockSettingsOpened = app.waitForEvent('window')
+    await app.evaluate(({ app: electronApp }) => {
+      const item = electronApp.dock?.getMenu()?.getMenuItemById('desktop-settings')
+      if (!item) throw new Error('dock settings entry missing')
+      item.click()
+    })
+    const dockSettings = await dockSettingsOpened
+    await dockSettings.waitForSelector('#versions', { state: 'attached' })
+    await closeSettings(dockSettings)
+  }
 
   // Repeated streaming mutations do not flood diagnostics.
   await page.evaluate(() => {

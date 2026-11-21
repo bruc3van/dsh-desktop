@@ -7,7 +7,7 @@ import { createDesktopIpc } from './desktop-ipc.ts'
 import { createLocaleController } from './locale-controller.ts'
 import { centeredWindowBounds, guardWindowVisibility } from './window-state.ts'
 import { createMainWindowFactory, type MainSurface } from './main-window.ts'
-import { buildApplicationMenu, buildLinuxApplicationMenu, buildTrayMenu } from './native-menus.ts'
+import { buildApplicationMenu, buildDockMenu, buildLinuxApplicationMenu, buildTrayMenu } from './native-menus.ts'
 import { createPluginRecoveryController } from './plugin-recovery-controller.ts'
 import { showConfirmationDialog } from './plugin-recovery-dialog.ts'
 import { createSettingsCommands } from './settings-commands.ts'
@@ -967,6 +967,7 @@ function navigateMainWindow(url: string, force: boolean): void {
 /** The small connection-settings window (menu → "Web UI 连接…"). */
 function openSettingsWindow(): void {
   if (settingsWindow !== null) {
+    settingsWindow.show()
     settingsWindow.focus()
     return
   }
@@ -1192,8 +1193,29 @@ const nativeMenuActions = {
     : { zh: '使用 ' + (enterprise.personalOption() ?? '') + ' 账号登录…', en: 'Sign In to ' + (enterprise.personalOption() ?? '') + '…', click: () => { void switchPersonalMode(false) } } },
 }
 
+const dockMenuActions = {
+  ...nativeMenuActions,
+  openSettings: () => {
+    app.focus({ steal: true })
+    openSettingsWindow()
+  },
+  checkUpdates: () => {
+    app.focus({ steal: true })
+    void updateController.handleManualUpdateCheck(true)
+  },
+}
+
 function trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
   return buildTrayMenu({ chinese: localeChinese(), state: desktopUpdater?.getState(), actions: nativeMenuActions })
+}
+
+function refreshDockMenu(): void {
+  if (process.platform !== 'darwin' || app.dock === undefined) return
+  app.dock.setMenu(Menu.buildFromTemplate(buildDockMenu({
+    chinese: localeChinese(),
+    state: desktopUpdater?.getState(),
+    actions: dockMenuActions,
+  })))
 }
 
 function requestRestart(): { started: boolean; error?: string } {
@@ -1269,6 +1291,7 @@ function schedulePluginCompatibilityFallback(code: number | null, signal: NodeJS
 
 
 function refreshTrayMenu(): void {
+  refreshDockMenu()
   if (tray === null) return
   const state = desktopUpdater?.getState()
   const tip = state?.phase === 'available' && state.info !== null && !state.dismissed
@@ -1784,6 +1807,7 @@ function installMenu(): void {
   Menu.setApplicationMenu(process.platform !== 'darwin' ? null : Menu.buildFromTemplate(buildApplicationMenu({
     chinese: localeChinese(), name: app.name, development: !app.isPackaged, actions: nativeMenuActions,
   })))
+  refreshDockMenu()
 }
 
 function showLocalRuntimeStartupFailure(code: number | null, signal: NodeJS.Signals | null): void {

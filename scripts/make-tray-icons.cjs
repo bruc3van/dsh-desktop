@@ -73,16 +73,18 @@ const FILLS = [
  * - iconTrayWhite: Windows fallback when an exact slot file is missing.
  * - iconMenuTemplate: the macOS menu-bar Template image (and the Linux
  *   indicator). The menu bar takes items wider than tall, and a square box
- *   would leave the whale about 10pt high beside 16pt neighbours — so it keeps
- *   the glyph's aspect at 16pt tall. Black: macOS reads only the alpha of a
+ *   would leave the whale about 10pt high beside 16pt neighbours — yet full
+ *   16pt height stretches the ~1.6:1 whale to 26pt wide, looking noticeably
+ *   larger than square/compact neighbours. 14pt tall keeps it around 22-23pt
+ *   wide for balanced optical weight. Black: macOS reads only the alpha of a
  *   Template image and paints it to suit the menu bar.
  */
 const JOBS = [
   ...FILLS.flatMap(({ prefix, fill }) => SIZES.map(size => ({ file: prefix + String(size) + '.png', fill, shape: 'square', size, scale: 1 }))),
   { file: 'iconTrayWhite.png', fill: '#ffffff', shape: 'square', size: 16, scale: 1 },
   { file: 'iconTrayWhite@2x.png', fill: '#ffffff', shape: 'square', size: 32, scale: 2 },
-  { file: 'iconMenuTemplate.png', fill: '#000000', shape: 'wide', size: 16, scale: 1 },
-  { file: 'iconMenuTemplate@2x.png', fill: '#000000', shape: 'wide', size: 32, scale: 2 },
+  { file: 'iconMenuTemplate.png', fill: '#000000', shape: 'wide', size: 14, scale: 1 },
+  { file: 'iconMenuTemplate@2x.png', fill: '#000000', shape: 'wide', size: 28, scale: 2 },
 ]
 
 function log(message) {
@@ -162,7 +164,7 @@ async function renderSizes(glyph) {
           width,
           height,
         ].join(' ')
-        return { strokeWidth, viewBox, width: Math.round(size * width / height), height: size }
+        return { strokeWidth, viewBox, width: Math.round((size / scale) * width / height) * scale, height: size }
       }
 
       const draw = (job) => new Promise((resolve, reject) => {
