@@ -225,6 +225,7 @@ process.exit(1)
   await probeOnlyFailure.locator('#error-settings').click()
   const probeOnlySettings = await settingsOpened
   try {
+    await probeOnlySettings.waitForFunction(() => typeof document.getElementById('nav-data')?.onclick === 'function', null, { timeout: 10_000 })
     await probeOnlySettings.locator('#nav-data').click()
     await probeOnlySettings.waitForSelector('#data-isolated')
     for (const id of ['data-shared', 'data-isolated']) {
